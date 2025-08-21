@@ -13,6 +13,7 @@ develop-eggs/
 dist/
 downloads/
 eggs/
+CMakeFiles/
 .eggs/
 lib/
 lib64/
@@ -25,6 +26,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
+CMakeCache.txt
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
