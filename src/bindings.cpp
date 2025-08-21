@@ -1,7 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 extern "C" {
-  int compute_inverse_distance(const double* x_3_by_n, int n, double* d_packed);
+  void compute_inverse_distance(const double* x_3_by_n, int n, double* d_packed);
 }
 
 namespace py = pybind11;
@@ -21,13 +21,12 @@ py::array_t<double> inverse_distance(py::array_t<double, py::array::c_style | py
     // NumPy will give a view; pybind11 exposes data pointer for the view.
     py::array_t<double> XT({3, n}, {buf.strides[1], buf.strides[0]}, static_cast<double*>(buf.ptr), X);
 
-    int rc = compute_inverse_distance(static_cast<const double*>(XT.request().ptr), n,
+    compute_inverse_distance(static_cast<const double*>(XT.request().ptr), n,
                                       static_cast<double*>(D.request().ptr));
-    if (rc != 0) throw std::runtime_error("compute_inverse_distance failed with code " + std::to_string(rc));
     return D;
 }
 
-PYBIND11_MODULE(kernelforge, m) {
+PYBIND11_MODULE(_kernelforge, m) {
     m.doc() = "kernelforge: Fortran kernels with C ABI and Python bindings";
     m.def("inverse_distance", &inverse_distance, "Compute packed inverse distance matrix from (N,3) coordinates");
 }
