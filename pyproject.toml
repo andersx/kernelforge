@@ -31,5 +31,3 @@ cmake.build-type = "Release"
 [tool.scikit-build.cmake.define]
 CMAKE_VERBOSE_MAKEFILE = "ON"
 CMAKE_BUILD_TYPE = "Release"
-KF_OPENMP = "ON"
-KF_LTO = "ON"

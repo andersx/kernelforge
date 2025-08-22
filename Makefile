@@ -1,5 +1,5 @@
 install:
-	pip install -e . --verbose
+	pip install -e .[test] --verbose
 
 test:
 	pytest
