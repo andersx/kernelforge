@@ -28,7 +28,7 @@ jobs:
         env:
           CIBW_BUILD: "cp311-* cp312-* cp313-*"
           CIBW_SKIP: "pp* *-musllinux_*"   # skip PyPy, musllinux if you want
-          CIBW_TEST_COMMAND: "pytest -q -k 'not slow' -x"
+          CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
           CIBW_TEST_EXTRAS: "test"
           CIBW_ENVIRONMENT: >
             OMP_NUM_THREADS=1
