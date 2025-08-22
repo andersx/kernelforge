@@ -10,6 +10,9 @@ readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Anders Christensen"}]
 requires-python = ">=3.9"
+dependencies = [
+    "numpy>=2.00",   # required at runtime
+]
 
 [tool.scikit-build]
 wheel.py-api = "py3"
