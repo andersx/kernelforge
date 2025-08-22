@@ -17,3 +17,5 @@ cmake.build-type = "Release"
 # optional: put compiled outputs under build/{tag}/ to avoid clashes
 # build-dir = "build/{wheel_tag}"
 
+[tool.scikit-build.cmake.define]
+CMAKE_VERBOSE_MAKEFILE = "ON"
