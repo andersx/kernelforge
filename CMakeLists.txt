@@ -37,7 +37,7 @@ endif()
 
 # Conservative optimization flags (portable wheels). Override via env if you want.
 if (CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM" OR CMAKE_Fortran_COMPILER_ID STREQUAL "Intel")
-  target_compile_options(kf_fortran PRIVATE -O3)
+  target_compile_options(kf_fortran PRIVATE -O3 -ipo -xHost -fp-model fast=2 -no-prec-div -fno-alias -qopenmp)
 elseif (CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
   target_compile_options(kf_fortran PRIVATE -O3 -fopenmp -march=native -mtune=native -ffast-math -ftree-vectorize)
 endif()
