@@ -8,6 +8,7 @@ extern "C" {
 /* C ABI for the Fortran routine */
 void compute_inverse_distance(const double* x_3_by_n, int n, double* d_packed);
 
+
 #ifdef __cplusplus
 }
 #endif

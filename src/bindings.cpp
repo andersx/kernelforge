@@ -2,6 +2,7 @@
 #include <pybind11/numpy.h>
 extern "C" {
   void compute_inverse_distance(const double* x_3_by_n, int n, double* d_packed);
+  void kernel_simple(const double* x, int lda, int n, double* k, int ldk, double alpha);
 }
 
 namespace py = pybind11;
@@ -26,8 +27,35 @@ py::array_t<double> inverse_distance(py::array_t<double, py::array::c_style | py
     return D;
 }
 
+py::array_t<double> kernel_simple_py(
+    py::array_t<double, py::array::forcecast | py::array::f_style> X,
+    double alpha
+) {
+    // Require (rep_size, n) in Fortran order; forcecast|f_style will copy if needed.
+    auto xb = X.request();
+    if (xb.ndim != 2) {
+        throw std::runtime_error("X must be 2D with shape (rep_size, n) in column-major (Fortran) order");
+    }
+    const int lda = static_cast<int>(xb.shape[0]);
+    const int n   = static_cast<int>(xb.shape[1]);
+
+    // Allocate K as Fortran-order (n x n): stride0 = 8, stride1 = n*8
+    auto K = py::array_t<double>({n, n}, {sizeof(double), static_cast<ssize_t>(n)*sizeof(double)});
+
+    kernel_simple(static_cast<const double*>(xb.ptr),
+                  lda, n,
+                  static_cast<double*>(K.request().ptr),
+                  /*ldk=*/n, alpha);
+
+    return K;
+}
+
 PYBIND11_MODULE(_kernelforge, m) {
     m.doc() = "kernelforge: Fortran kernels with C ABI and Python bindings";
     m.def("inverse_distance", &inverse_distance, "Compute packed inverse distance matrix from (N,3) coordinates");
+    m.def("kernel_simple", &kernel_simple_py,
+      "Compute K (upper triangle) with Gaussian-like exp(alpha * ||xi-xj||^2). "
+      "X must be shape (rep_size, n), Fortran-order.");
+
 }
 
