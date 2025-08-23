@@ -26,7 +26,10 @@ jobs:
         run: brew install gcc libomp
 
       - name: Check gfortran version
-        run: which gfortran && gfortran --version
+        if: runner.os == 'macOS'
+        run: |
+          which gfortran
+          gfortran --version
 
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.*
