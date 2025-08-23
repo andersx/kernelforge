@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04] # macos-14]
+        os: [ubuntu-22.04 macos-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +20,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"   # host Python, cibuildwheel makes all others
+
+      - name: Install gfortran (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gcc libomp
+
+      - name: Check gfortran version
+        run: which gfortran && gfortran --version
 
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.*
