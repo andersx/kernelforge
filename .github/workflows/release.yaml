@@ -39,6 +39,7 @@ jobs:
             OPENBLAS_DIR=$(python -c "import scipy_openblas32, os; print(os.path.dirname(scipy_openblas32.__file__))")
             echo "OPENBLAS_DIR=$OPENBLAS_DIR" >> $GITHUB_ENV
             echo "LD_LIBRARY_PATH=$OPENBLAS_DIR:\$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          CIBW_ENVIRONMENT_PASS_LINUX: "LD_LIBRARY_PATH OPENBLAS_DIR"
           CIBW_ENVIRONMENT_LINUX: >
             OPENBLAS_NUM_THREADS=1
             OMP_NUM_THREADS=1
