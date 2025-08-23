@@ -21,6 +21,10 @@ jobs:
         with:
           python-version: "3.12"   # host Python, cibuildwheel makes all others
 
+      - name: Clean wheelhouse and build artifacts
+        run: |
+          rm -rf dist/ build/ *.egg-info wheelhouse/
+
       - name: Install gfortran (macOS)
         if: runner.os == 'macOS'
         run: brew install gcc libomp
