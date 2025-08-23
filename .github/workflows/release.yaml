@@ -36,11 +36,19 @@ jobs:
             MKL_INTERFACE_LAYER=LP64
           CIBW_BEFORE_ALL_LINUX: >
             bash -euxo pipefail -c '
-              # manylinux2014 == CentOS 7
-              rpm -Uvh --replacepkgs https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm || true
-              yum makecache fast || true
-              yum install -y openblas-devel gcc-gfortran pkgconfig
+              OB_VER=0.3.26
+              curl -L https://github.com/xianyi/OpenBLAS/archive/refs/tags/v${OB_VER}.tar.gz | tar xz
+              cd OpenBLAS-${OB_VER}
+              # Build a static, PIC, pthreads-only OpenBLAS with CPU dispatch
+              make -j"$(nproc)" NO_SHARED=1 DYNAMIC_ARCH=1 USE_OPENMP=0 NO_AFFINITY=1 \
+                   CFLAGS="-fPIC -O3" FCFLAGS="-fPIC -O3"
+              make install PREFIX=/opt/openblas
+              ls -l /opt/openblas/lib
             '
+          CIBW_ENVIRONMENT_LINUX: >
+            KF_USE_OPENBLAS=ON
+            OPENBLAS_DIR=/opt/openblas
+            OMP_NUM_THREADS=1
         run: python -m cibuildwheel --output-dir wheelhouse
 
       - name: Build sdist
