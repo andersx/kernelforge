@@ -37,10 +37,10 @@ jobs:
             MKL_INTERFACE_LAYER=LP64
           CIBW_BEFORE_ALL_LINUX: >
             bash -euxo pipefail -c '
-            dnf -y install "dnf-command(config-manager)" || true
-            dnf config-manager --set-enabled crb || true
-            dnf -y install openblas-devel gcc-gfortran pkgconf-pkg-config
-          '
+              dnf -y install "dnf-command(config-manager)" || true
+              dnf config-manager --set-enabled crb || true
+              dnf -y install openblas-devel gcc-gfortran pkgconf-pkg-config
+            '
         run: python -m cibuildwheel --output-dir wheelhouse
 
       - name: Build sdist
