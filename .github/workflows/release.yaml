@@ -34,7 +34,7 @@ jobs:
 
       - name: Build wheels
         env:
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp311-*"
           CIBW_SKIP: "pp* *-musllinux_* cp*-manylinux_i686"
           CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
           CIBW_TEST_EXTRAS: "test"
@@ -72,7 +72,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: wheels
+          name: wheels-${{ runner.os }}
           path: wheelhouse/*
 
   publish:
