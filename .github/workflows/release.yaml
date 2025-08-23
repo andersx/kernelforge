@@ -1,5 +1,5 @@
 # .github/workflows/release.yml
-name: Build & Publish
+name: "Build & Publish"
 
 on:
   release:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04 macos-latest]
+        os: [ubuntu-22.04, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
