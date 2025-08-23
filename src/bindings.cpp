@@ -86,4 +86,3 @@ PYBIND11_MODULE(_kernelforge, m) {
       "X must be shape (rep_size, n), Fortran-order.");
 
 }
-
