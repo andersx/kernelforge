@@ -51,7 +51,7 @@ def test_kernel_blas_runs():
 
 @pytest.mark.slow
 def test_kernel_simple_time():
-    rep, n = 512, 16000
+    rep, n = 512, 32000
     rng = np.random.default_rng(0)
     X = np.asfortranarray(rng.random((rep, n)))
     alpha = -1.0 / rep
@@ -75,7 +75,7 @@ def test_kernel_simple_time():
 
 @pytest.mark.slow
 def test_kernel_blas_time():
-    rep, n = 512, 16000
+    rep, n = 512, 32000
     rng = np.random.default_rng(0)
     X = np.asfortranarray(rng.random((rep, n)))
     alpha = -1.0 / rep

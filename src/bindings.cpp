@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include <cstdlib>
 extern "C" {
   void compute_inverse_distance(const double* x_3_by_n, int n, double* d_packed);
   void kernel_symm_simple(const double* x, int lda, int n, double* k, int ldk, double alpha);
@@ -7,6 +8,19 @@ extern "C" {
 }
 
 namespace py = pybind11;
+
+
+inline double* aligned_alloc_64(size_t nelems) {
+    void* p = nullptr;
+    if (posix_memalign(&p, 64, nelems * sizeof(double)) != 0) {
+        throw std::bad_alloc();
+    }
+    return static_cast<double*>(p);
+}
+
+inline void aligned_free_64(void* p) {
+    std::free(p);
+}
 
 py::array_t<double> inverse_distance(py::array_t<double, py::array::c_style | py::array::forcecast> X) {
     auto buf = X.request();
@@ -65,7 +79,19 @@ py::array_t<double> kernel_symm_blas_py(
     const int n   = static_cast<int>(xb.shape[1]);
 
     // Allocate K as Fortran-order (n x n): stride0 = 8, stride1 = n*8
-    auto K = py::array_t<double>({n, n}, {sizeof(double), static_cast<ssize_t>(n)*sizeof(double)});
+    // auto K = py::array_t<double>({n, n}, {sizeof(double), static_cast<ssize_t>(n)*sizeof(double)});
+    auto ptr = aligned_alloc_64(static_cast<size_t>(n) * static_cast<size_t>(n));
+
+    auto capsule = py::capsule(ptr, [](void *p) {
+        aligned_free_64(p);
+    });
+    
+    auto K = py::array_t<double>(
+        {n, n},
+        {static_cast<ssize_t>(n) * sizeof(double), sizeof(double)}, // row-major
+        ptr,
+        capsule
+    );
 
     kernel_symm_blas(static_cast<const double*>(xb.ptr),
                   lda, n,
