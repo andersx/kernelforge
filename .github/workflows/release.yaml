@@ -26,7 +26,6 @@ jobs:
 
       - name: Build wheels
         env:
-          CIBW_MANYLINUX_X86_64_IMAGE: quay.io/pypa/manylinux_2_28_x86_64
           CIBW_BUILD: "cp312-*"
           CIBW_SKIP: "pp* *-musllinux_*"   # skip PyPy, musllinux if you want
           CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
@@ -37,9 +36,10 @@ jobs:
             MKL_INTERFACE_LAYER=LP64
           CIBW_BEFORE_ALL_LINUX: >
             bash -euxo pipefail -c '
-              dnf -y install "dnf-command(config-manager)" || true
-              dnf config-manager --set-enabled crb || true
-              dnf -y install openblas-devel gcc-gfortran pkgconf-pkg-config
+              # manylinux2014 == CentOS 7
+              rpm -Uvh --replacepkgs https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm || true
+              yum makecache fast || true
+              yum install -y openblas-devel gcc-gfortran pkgconfig
             '
         run: python -m cibuildwheel --output-dir wheelhouse
 
