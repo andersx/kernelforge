@@ -4,14 +4,14 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "kernelforge"
-version = "0.1.5"
-description = "Fortran kernels with C ABI and Python bindings (CMake/skbuild/pybind11)"
+version = "0.1.6"
+description = "Optimzed Kernels for ML"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Anders Christensen"}]
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=2.00",   # required at runtime
+    "numpy>=2.00",
 ]
 
 [project.optional-dependencies]
@@ -26,9 +26,6 @@ wheel.expand-macos-universal-tags = true
 cmake.build-type = "Release"
 cmake.verbose = true
 wheel.packages = ["python/kernelforge"]
-
-# optional: put compiled outputs under build/{tag}/ to avoid clashes
-# build-dir = "build/{wheel_tag}"
 
 [tool.scikit-build.cmake.define]
 CMAKE_VERBOSE_MAKEFILE = "ON"

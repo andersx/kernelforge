@@ -78,18 +78,30 @@ jobs:
         with:
           name: wheels-${{ runner.os }}
           path: wheelhouse/*
-
   publish:
     needs: build-wheels
     runs-on: ubuntu-22.04
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wheels
+          name: wheels-ubuntu-22.04
           path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-macos-latest
+          path: dist
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p dist/flat
+          find dist -name '*.whl' -exec cp {} dist/flat/ \;
+          find dist -name '*.tar.gz' -exec cp {} dist/flat/ \;
+
       - uses: pypa/gh-action-pypi-publish@v1.11.0
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: dist/flat
 
