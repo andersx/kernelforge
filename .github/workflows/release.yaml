@@ -27,7 +27,7 @@ jobs:
       - name: Build wheels
         env:
           CIBW_BUILD: "cp312-*"
-          CIBW_SKIP: "pp* *-musllinux_*"   # skip PyPy, musllinux if you want
+          CIBW_SKIP: "pp* *-musllinux_* cp*-manylinux_i686"
           CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
           CIBW_TEST_EXTRAS: "test"
           CIBW_ENVIRONMENT: >
@@ -36,6 +36,7 @@ jobs:
           CIBW_BEFORE_BUILD_LINUX: |
             curl -L https://anaconda.org/multibuild-wheels-staging/openblas-libs/v0.3.27/download/openblas-v0.3.27-manylinux2014_x86_64.tar.gz | tar xz
             cp -r usr /opt/openblas
+            ls -l /opt/openblas/local/lib/libopenblas.so
           CIBW_ENVIRONMENT_LINUX: >
             LD_LIBRARY_PATH=/opt/openblas/local/lib:$LD_LIBRARY_PATH
             CMAKE_ARGS="-DBLAS_LIBRARIES=/opt/openblas/local/lib/libopenblas.so -DBLAS_INCLUDE_DIR=/opt/openblas/local/include -DBLAS_VENDOR=OpenBLAS"
