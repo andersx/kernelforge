@@ -26,6 +26,7 @@ jobs:
 
       - name: Build wheels
         env:
+          CIBW_MANYLINUX_X86_64_IMAGE: quay.io/pypa/manylinux_2_28_x86_64
           CIBW_BUILD: "cp312-*"
           CIBW_SKIP: "pp* *-musllinux_*"   # skip PyPy, musllinux if you want
           CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
@@ -36,21 +37,10 @@ jobs:
             MKL_INTERFACE_LAYER=LP64
           CIBW_BEFORE_ALL_LINUX: >
             bash -euxo pipefail -c '
-              source /etc/os-release || true
-              if command -v yum >/dev/null 2>&1; then
-                yum install -y epel-release || true
-                yum install -y openblas-devel gcc-gfortran pkgconfig
-              elif command -v dnf >/dev/null 2>&1; then
-                dnf install -y epel-release || true
-                dnf install -y "dnf-command(config-manager)" || true
-                dnf config-manager --set-enabled crb || true   # enable powertools/CRB
-                dnf install -y openblas-devel gcc-gfortran pkgconf-pkg-config
-              elif command -v microdnf >/dev/null 2>&1; then
-                microdnf install -y openblas-devel gcc-gfortran pkgconf-pkg-config || exit 1
-              else
-                echo "No supported package manager found" >&2; exit 1
-              fi
-            '
+            dnf -y install "dnf-command(config-manager)" || true
+            dnf config-manager --set-enabled crb || true
+            dnf -y install openblas-devel gcc-gfortran pkgconf-pkg-config
+          '
         run: python -m cibuildwheel --output-dir wheelhouse
 
       - name: Build sdist
