@@ -3,3 +3,6 @@ install:
 
 test:
 	pytest
+
+environment:
+	conda env create -f environments/environment-dev.yaml

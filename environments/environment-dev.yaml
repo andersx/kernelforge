@@ -1,0 +1,29 @@
+name: kernelforge-dev
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pandas
+  - mamba
+  - numpy
+  - plotly
+  - matplotlib
+  - jupyterlab
+  - ipykernel
+  - ipywidgets
+  - nbconvert
+  - tqdm
+  - black
+  - isort
+  - scipy
+  - scikit-learn
+  - seaborn
+  - flake8
+  - mypy
+  - pre-commit
+  - pytest
+  - pytest-cov
+  - pytest-xdist
+  - pytest-timeout
