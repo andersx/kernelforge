@@ -34,8 +34,9 @@ jobs:
             OMP_NUM_THREADS=1
             MKL_THREADING_LAYER=SEQUENTIAL
             MKL_INTERFACE_LAYER=LP64
-          CIBW_BEFORE_BUILD_LINUX:  "pip install scipy-openblas32"
+          CIBW_BEFORE_BUILD_LINUX:  "python -m pip install scipy-openblas32"
           CIBW_ENVIRONMENT_LINUX: >
+            LD_LIBRARY_PATH=$(python -c 'import scipy_openblas32; import os; print(os.path.dirname(scipy_openblas32.__file__))'):$LD_LIBRARY_PATH
             OPENBLAS_NUM_THREADS=1
             OMP_NUM_THREADS=1
         run: python -m cibuildwheel --output-dir wheelhouse
