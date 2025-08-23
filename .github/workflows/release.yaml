@@ -33,19 +33,16 @@ jobs:
           CIBW_ENVIRONMENT: >
             OMP_NUM_THREADS=1
             OPENBLAS_NUM_THREADS=1
-            MKL_THREADING_LAYER=SEQUENTIAL
-            MKL_INTERFACE_LAYER=LP64
           CIBW_BEFORE_BUILD_LINUX: |
             pip install scipy-openblas32
             ls -l $(python -c "import scipy_openblas32, os; print(os.path.dirname(scipy_openblas32.__file__))")
-            OPENBLAS_DIR=$(python -c "import scipy_openblas32, os; print(os.path.dirname(scipy_openblas32.__file__))")
-            echo "CMAKE_ARGS=-DBLAS_LIBRARIES=$OPENBLAS_DIR/libopenblas.so -DBLAS_INCLUDE_DIR=$OPENBLAS_DIR" > /tmp/cmake_args.env
           CIBW_ENVIRONMENT_LINUX: |
-            LD_LIBRARY_PATH=$LD_LIBRARY_PATH
-            $(cat /tmp/cmake_args.env)
-            OPENBLAS_NUM_THREADS=1
-            OMP_NUM_THREADS=1
-          CIBW_ENVIRONMENT_PASS_LINUX: "LD_LIBRARY_PATH CMAKE_ARGS"
+            OPENBLAS_DIR=$(python -c "import scipy_openblas32, os; print(os.path.dirname(scipy_openblas32.__file__))")
+            export LD_LIBRARY_PATH=$OPENBLAS_DIR:$LD_LIBRARY_PATH
+            export CMAKE_ARGS="-DBLAS_LIBRARIES=$OPENBLAS_DIR/libopenblas.so -DBLAS_INCLUDE_DIR=$OPENBLAS_DIR"
+            export OPENBLAS_NUM_THREADS=1
+            export OMP_NUM_THREADS=1
+          CIBW_ENVIRONMENT_PASS_LINUX: "LD_LIBRARY_PATH CMAKE_ARGS OPENBLAS_NUM_THREADS OMP_NUM_THREADS"
         run: python -m cibuildwheel --output-dir wheelhouse
 
       - name: Build sdist
