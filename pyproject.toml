@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "kernelforge"
-version = "0.1.4"
+version = "0.1.5"
 description = "Fortran kernels with C ABI and Python bindings (CMake/skbuild/pybind11)"
 readme = "README.md"
 license = {text = "MIT"}
