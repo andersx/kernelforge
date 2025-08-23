@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "kernelforge"
-version = "0.1.6"
+version = "0.1.7"
 description = "Optimzed Kernels for ML"
 readme = "README.md"
 license = {text = "MIT"}
