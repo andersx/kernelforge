@@ -56,8 +56,11 @@ jobs:
             OPENBLAS_NUM_THREADS
             OMP_NUM_THREADS
           CIBW_ENVIRONMENT_MACOS: >
-            CMAKE_ARGS="-DBLAS_VENDOR=Apple" FC=gfortran-14
+            MACOSX_DEPLOYMENT_TARGET=15.0
+            CMAKE_ARGS="-DBLAS_VENDOR=Apple"
+            FC=gfortran-14
           CIBW_ENVIRONMENT_PASS_MACOS: >
+            MACOSX_DEPLOYMENT_TARGET
             CMAKE_ARGS
             FC
           CIBW_ARCHS_MACOS: arm64
