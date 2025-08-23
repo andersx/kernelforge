@@ -35,13 +35,13 @@ jobs:
             OPENBLAS_NUM_THREADS=1
           CIBW_BEFORE_BUILD_LINUX: |
             pip install scipy-openblas32
-            ls -l $(python -c "import scipy_openblas32, os; print(os.path.dirname(scipy_openblas32.__file__))")
           CIBW_ENVIRONMENT_LINUX: |
-            OPENBLAS_DIR=$(python -c "import scipy_openblas32, os; print(os.path.dirname(scipy_openblas32.__file__))")
-            export LD_LIBRARY_PATH=$OPENBLAS_DIR:$LD_LIBRARY_PATH
-            export CMAKE_ARGS="-DBLAS_LIBRARIES=$OPENBLAS_DIR/libopenblas.so -DBLAS_INCLUDE_DIR=$OPENBLAS_DIR"
-            export OPENBLAS_NUM_THREADS=1
-            export OMP_NUM_THREADS=1
+                PYVER=$(python -c "import sys; print(f'cp{sys.version_info[0]}{sys.version_info[1]}')")
+                OPENBLAS_DIR=/opt/python/${PYVER}-${PYVER}/lib/python${PYVER:2:1}.${PYVER:3:1}/site-packages/scipy_openblas32
+                export LD_LIBRARY_PATH=$OPENBLAS_DIR:$LD_LIBRARY_PATH
+                export CMAKE_ARGS="-DBLAS_LIBRARIES=$OPENBLAS_DIR/libopenblas.so -DBLAS_INCLUDE_DIR=$OPENBLAS_DIR -DBLAS_VENDOR=OpenBLAS"
+                export OPENBLAS_NUM_THREADS=1
+                export OMP_NUM_THREADS=1
           CIBW_ENVIRONMENT_PASS_LINUX: "LD_LIBRARY_PATH CMAKE_ARGS OPENBLAS_NUM_THREADS OMP_NUM_THREADS"
         run: python -m cibuildwheel --output-dir wheelhouse
 
