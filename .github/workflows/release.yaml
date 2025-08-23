@@ -54,6 +54,9 @@ jobs:
             CMAKE_ARGS
             OPENBLAS_NUM_THREADS
             OMP_NUM_THREADS
+          CIBW_ENVIRONMENT_MACOS: >
+            CMAKE_ARGS="-DBLAS_VENDOR=Apple"
+          CIBW_ARCHS_MACOS: arm64
         run: python -m cibuildwheel --output-dir wheelhouse
 
       - name: Build sdist
