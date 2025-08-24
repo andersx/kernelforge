@@ -98,6 +98,29 @@ def test_kernel_blas_time():
     off_diag = K[iu]
     assert np.all((off_diag >= 0.0) & (off_diag <= 1.0))
 
+def test_cbflas_kernel():
+
+    from kernelforge._kernels import cfkernel_symm_blas 
+
+    rep, n = 512, 32000
+    rng = np.random.default_rng(0)
+    X = rng.random((n, rep))
+    print(X.shape)
+    alpha = -1.0 / rep
+
+    start = time()
+    K = cfkernel_symm_blas(X, alpha)
+    end = time()
+    print(f"Kernel CBLAS took {end - start:.2f} seconds for {n} points.")
+    print(K[:4,:4])
+
+
+    K_test = np.zeros((4, 4))
+    for i in range(4):
+        for j in range(i):
+            K_test[i, j] = np.exp(alpha * np.sum(np.square((X[i] - X[j]))))
+    print(K_test[:4,:4] - K[:4,:4])
+
 def test_cblas_kernel():
 
     from kernelforge import ckernel_symm_blas

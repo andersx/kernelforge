@@ -146,3 +146,70 @@ void bench_dsyrk_Kinternal(py::array_t<double> X, double alpha) {
 }
 
 
+// Simple aligned alloc (POSIX, 64-byte)
+inline double* aligned_alloc_64(size_t nelems) {
+    void* p = nullptr;
+    if (posix_memalign(&p, 64, nelems * sizeof(double)) != 0)
+        throw std::bad_alloc();
+    return static_cast<double*>(p);
+}
+inline void aligned_free_64(void* p) { std::free(p); }
+
+py::array_t<double> cfkernel_symm_blas(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X,
+    double alpha
+) {
+    auto bufX = X.request();
+    if (bufX.ndim != 2)
+        throw std::runtime_error("X must be 2D");
+
+    int n        = static_cast<int>(bufX.shape[0]);
+    int rep_size = static_cast<int>(bufX.shape[1]);
+    double* Xptr = static_cast<double*>(bufX.ptr);
+
+    // Allocate aligned K (row-major)
+    size_t nelems = static_cast<size_t>(n) * static_cast<size_t>(n);
+    double* Kptr = aligned_alloc_64(nelems);
+
+    auto capsule = py::capsule(Kptr, [](void* p){ aligned_free_64(p); });
+
+    auto K = py::array_t<double>(
+ {n, n},
+        {static_cast<ssize_t>(n) * sizeof(double), sizeof(double)}, // row-major strides
+        Kptr,
+        capsule
+    );
+
+    // === Compute ===
+    double t0 = omp_get_wtime();
+
+    // SYRK in row-major (lower triangle)
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                n, rep_size, -2.0 * alpha,
+                Xptr, rep_size,
+                0.0, Kptr, n);
+
+    double t1 = omp_get_wtime();
+    std::cout << "dsyrk took " << (t1 - t0) << " seconds\n";
+
+    // Extract diagonal
+    std::vector<double> diag(n);
+    for (int i = 0; i < n; i++) {
+        diag[i] = -0.5 * Kptr[i*n + i];  // row-major diag
+    }
+
+    // Add diag + diag^T
+    std::vector<double> onevec(n, 1.0);
+    cblas_dsyr2(CblasRowMajor, CblasLower, n, 1.0,
+                onevec.data(), 1, diag.data(), 1, Kptr, n);
+
+    // Exponentiate lower triangle
+    #pragma omp parallel for schedule(guided)
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i <= j; i++) {
+            Kptr[j*n + i] = std::exp(Kptr[j*n + i]);
+        }
+    }
+
+    return K;
+}
