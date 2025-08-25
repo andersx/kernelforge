@@ -57,6 +57,18 @@ The goal is to remove pain-points of existing QML libraries
 - Simplified entrypoints that are compatible with RDKit, ASE, Scikit-learn, etc.
   - A few high-level functions that do the most common tasks efficiently and correctly
 
+## Priority list for the next months:
+
+- [x] Finish the inverse-distance kernel and its Jacobian
+- [ ] Finalize the C++ interface
+- [ ] Finish the Gaussian kernel
+- [ ] Notebook with rMD17 example
+- [ ] Finish the Jacobian and Hessian kernels
+- [ ] Notebook with rMD17 forces example
+- [ ] Add FCHL19 descriptor with derivatives + kernels
+- [ ] Finish the random Fourier features kernel and its Jacobian/Hessian
+- [ ] Notebook with rMD17 random Fourier features examples
+
 #### Todos:
 - Houskeeping:
   - [x] Pybind11 bindings and CMake build system
@@ -64,9 +76,9 @@ The goal is to remove pain-points of existing QML libraries
   - [ ] Rewrite existing kernels to C++ (no Fortran)
   - [x] Setup GHA to build PyPI wheels
   - [x] Test Linux build matrices
-  - [ ] Test MacOS build matrices
+  - [x] Test MacOS build matrices
   - [ ] Test Windows build matrices
-  - [ ] Add build for all Python version >=3.11
+  - [x] Add build for all Python version >=3.11
 - Ensure correct linking with optimized BLAS/LAPACK libraries:
   - [x] OpenBLAS (Linux) <- also used in wheels
   - [x] AMD BLIS and libflame (Linux)

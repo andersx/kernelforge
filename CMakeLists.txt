@@ -36,6 +36,19 @@ pybind11_add_module(_kernels MODULE
 
 set_target_properties(_kernels PROPERTIES OUTPUT_NAME "_kernels")
 
+# My invdist module in C++
+add_library(kf_invdist OBJECT src/invdist.cpp)
+set_property(TARGET kf_invdist PROPERTY POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(kf_invdist PRIVATE kf_common)
+
+pybind11_add_module(_invdist MODULE
+    src/invdist_bindings.cpp
+    $<TARGET_OBJECTS:kf_invdist>
+)
+
+
+set_target_properties(_invdist PROPERTIES OUTPUT_NAME "_invdist")
+
 find_package(OpenMP)
 if (OpenMP_CXX_FOUND)
   target_link_libraries(_kernels PRIVATE OpenMP::OpenMP_CXX)
@@ -68,12 +81,14 @@ endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(kf_kernels PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
+  target_compile_options(kf_invdist PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
     target_compile_options(kf_kernels PRIVATE -O3 -qopt-report=3 -qopenmp -xHost)
+    target_compile_options(kf_invdist PRIVATE -O3 -qopt-report=3 -qopenmp -xHost)
 endif()
 
 # Install the compiled extension into the Python package and the Python shim
-install(TARGETS _kernelforge _kernels
+install(TARGETS _kernelforge _kernels _invdist
   LIBRARY DESTINATION kernelforge   # Linux/macOS
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )
