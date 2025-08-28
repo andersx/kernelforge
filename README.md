@@ -60,13 +60,13 @@ The goal is to remove pain-points of existing QML libraries
 ## Priority list for the next months:
 
 - [x] Finish the inverse-distance kernel and its Jacobian
-- [ ] Finalize the C++ interface
-- [ ] Finish the Gaussian kernel
-- [ ] Notebook with rMD17 example
-- [ ] Finish the Jacobian and Hessian kernels
-- [ ] Notebook with rMD17 forces example
+- [x] Finalize the C++ interface
+- [x] Finish the Gaussian kernel
+- [x] Notebook with rMD17 example
+- [x] Finish the Jacobian and Hessian kernels
+- [x] Notebook with rMD17 forces example
 - [ ] Add FCHL19 descriptor with derivatives + kernels
-- [ ] Finish the random Fourier features kernel and its Jacobian/Hessian
+- [ ] Finish the random Fourier features kernel and its Jacobian
 - [ ] Notebook with rMD17 random Fourier features examples
 
 #### Todos:
@@ -79,30 +79,32 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Test MacOS build matrices
   - [ ] Test Windows build matrices
   - [x] Add build for all Python version >=3.11
+  - [ ] Plan structure for saving models for inference as `.npz` files
 - Ensure correct linking with optimized BLAS/LAPACK libraries:
   - [x] OpenBLAS (Linux) <- also used in wheels
-  - [x] AMD BLIS and libflame (Linux)
   - [x] MKL (Linux)
-  - [x] Accelerated (MacOS)
+  - [x] Accelerate (MacOS)
 - Add kernels:
   - [x] Gaussian kernel
-  - [ ] Jacobian/gradient kernel
+  - [x] Jacobian/gradient kernel
   - [ ] Optimized Jacobian kernel for single inference
-  - [ ] Hessian kernel
-  - [ ] GDML-like kernel
+  - [x] Hessian kernel
+  - [x] GDML-like kernel
 - Add random Fourier features kernel code
   - [ ] RFF kernel
   - [ ] RFF gradient kernel
   - [ ] RFF chunked DSYRK kernel
   - The same as above, just for Hadamard features when I find the time
 - Add standard solvers:
-  - [ ] Cholesky
+  - [x] Cholesky in-place solver
+    - [ ] L2-reg kwarg
+    - [ ] Toggle destructive vs non-destructive
+    - [ ] Toggle upper vs lower
   - [ ] QR and/or SVD for non-square matrices
 - Add moleular descriptors with derivatives:
   - [ ] Coulomb matrix
   - [ ] FCHL19 + derivatives
-  - [ ] GDML-like inverse-distance matrix + derivatives
-- [ ] Plan structure for saving models for inference as `.npz` files
+  - [x] GDML-like inverse-distance matrix + derivatives
 #### Stretch goals:
 - [ ] Plan RDKit interface
 - [ ] Plan Scikit-learn interface
