@@ -1,2 +1,2 @@
-from ._kernelforge import inverse_distance, kernel_symm_simple, kernel_symm_blas
-__all__ = ["inverse_distance", "kernel_symm_simple", "kernel_symm_blas"]
+from ._kernels import kernel_symm, kernel_asymm
+from ._invdist import inverse_distance_upper, inverse_distance_upper_and_jacobian

@@ -37,6 +37,9 @@ In this case, MKL will be autodetected by some CMake magic. If you additionally 
 CC=icx CXX=icpx FC=ifx make install
 ```
 
+In my experience, GCC/G++/GFortran with OpenBLAS is very similar to Intel API alternatives in terms of performance, perhaps even better. 
+On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the default and is very fast on M-series macs.
+
 ## Timings
 
 | Function Name | QML [s] | Kernelforge [s] |
@@ -56,6 +59,23 @@ The goal is to remove pain-points of existing QML libraries
   - No cooked F2PY/Meson build system
 - Simplified entrypoints that are compatible with RDKit, ASE, Scikit-learn, etc.
   - A few high-level functions that do the most common tasks efficiently and correctly
+- Efficient FCHL19 out-of-the-box
+  - Fast training with random Fourier features
+  - With derivatives
+    - [ ] Stretch goal: Implement sFCHL19 for even faster training/inference
+
+## Priority list for the next months:
+
+- [x] Finish the inverse-distance kernel and its Jacobian
+- [x] Finalize the C++ interface
+- [x] Finish the Gaussian kernel
+- [x] Notebook with rMD17 example
+- [x] Finish the Jacobian and Hessian kernels
+- [x] Notebook with rMD17 forces example
+- [ ] Add FCHL19 descriptor with derivatives
+- [ ] Add FCHL19 kernels with derivatives (local/elemental)
+- [ ] Finish the random Fourier features kernel and its Jacobian
+- [ ] Notebook with rMD17 random Fourier features examples
 
 #### Todos:
 - Houskeeping:
@@ -64,33 +84,42 @@ The goal is to remove pain-points of existing QML libraries
   - [ ] Rewrite existing kernels to C++ (no Fortran)
   - [x] Setup GHA to build PyPI wheels
   - [x] Test Linux build matrices
-  - [ ] Test MacOS build matrices
+  - [x] Test MacOS build matrices
   - [ ] Test Windows build matrices
-  - [ ] Add build for all Python version >=3.11
+  - [x] Add build for all Python version >=3.11
+  - [ ] Plan structure for saving models for inference as `.npz` files
 - Ensure correct linking with optimized BLAS/LAPACK libraries:
   - [x] OpenBLAS (Linux) <- also used in wheels
-  - [x] AMD BLIS and libflame (Linux)
   - [x] MKL (Linux)
-  - [x] Accelerated (MacOS)
-- Add kernels:
+  - [x] Accelerate (MacOS)
+- Add global kernels:
   - [x] Gaussian kernel
+  - [x] Jacobian/gradient kernel
+  - [ ] Optimized Jacobian kernel for single inference
+  - [x] Hessian kernel
+  - [x] GDML-like kernel
+  - [ ] Full GPR kernel
+- Add local kernels:
+  - [ ] Gaussian kernel
   - [ ] Jacobian/gradient kernel
   - [ ] Optimized Jacobian kernel for single inference
   - [ ] Hessian kernel
-  - [ ] GDML-like kernel
+  - [ ] GDML/GPR-like kernel
 - Add random Fourier features kernel code
   - [ ] RFF kernel
   - [ ] RFF gradient kernel
   - [ ] RFF chunked DSYRK kernel
   - The same as above, just for Hadamard features when I find the time
 - Add standard solvers:
-  - [ ] Cholesky
+  - [x] Cholesky in-place solver
+    - [ ] L2-reg kwarg
+    - [ ] Toggle destructive vs non-destructive
+    - [ ] Toggle upper vs lower
   - [ ] QR and/or SVD for non-square matrices
 - Add moleular descriptors with derivatives:
   - [ ] Coulomb matrix
   - [ ] FCHL19 + derivatives
-  - [ ] GDML-like inverse-distance matrix + derivatives
-- [ ] Plan structure for saving models for inference as `.npz` files
+  - [x] GDML-like inverse-distance matrix + derivatives
 #### Stretch goals:
 - [ ] Plan RDKit interface
 - [ ] Plan Scikit-learn interface

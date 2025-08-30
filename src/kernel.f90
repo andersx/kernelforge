@@ -104,5 +104,66 @@ subroutine kernel_symm_blas(X, lda, n, K, ldk, alpha) bind(C, name="kernel_symm_
 end subroutine kernel_symm_blas
 
 
+
+!subroutine fatomic_local_gradient_kernel(x1, dx1, x2, n1, nd1, n2 sigma, K)
+!
+!    implicit none
+!
+!    double precision, dimension(:,:,:), intent(in) :: x1
+!    double precision, dimension(:,:,:), intent(in) :: x2
+!
+!    double precision, dimension(:,:,:,:,:), intent(in) :: dx2
+!
+!    double precision, intent(in) :: sigma
+!
+!    double precision, dimension(nd1,n2), intent(out) :: kernel
+!
+!    integer :: i2, j1, j2
+!    integer :: xyz2
+!
+!    integer :: rep_size
+!
+!    double precision :: expd
+!    double precision :: inv_2sigma2
+!    double precision :: inv_sigma2
+!
+!    double precision, allocatable, dimension(:) :: d
+!
+!    rep_size = size(x1, dim=2)
+!    allocate(d(rep_size))
+!
+!    inv_2sigma2 = -1.0d0 / (2 * sigma**2)
+!    inv_sigma2 = -1.0d0 / (sigma**2)
+!
+!    kernel = 0.0d0
+!
+!    !$OMP PARALLEL DO PRIVATE(idx2_end,idx2_start,d,expd,idx1_start,idx1) schedule(dynamic)
+!    do a = 1, nm1
+!
+!        idx1_start = sum(n1(:a)) - n1(a) + 1
+!
+!        do b = 1, nm2
+!
+!            idx2_start = (sum(n2(:b)) - n2(b))*3 + 1
+!            idx2_end = sum(n2(:b))*3
+!
+!               ! Calculate the distance vector, and some intermediate results
+!               d(:) = x1(a,j1,:)- x2(b,j2,:)
+!               expd = inv_sigma2 * exp(sum(d**2) * inv_2sigma2)
+!
+!               ! Add the dot product to the kernel in one BLAS call
+!               call dgemv("T", rep_size, n2(b)*3, expd, sorted_derivs(:,:n2(b)*3,j2,b), &
+!                   & rep_size, d, 1, 1.0d0, kernel(idx2_start:idx2_end,idx1), 1)
+!
+!       enddo
+!    enddo
+!    !$OMP END PARALLEL do
+!
+!    deallocate(sorted_derivs)
+!    deallocate(d)
+!
+!end subroutine fatomic_local_gradient_kernel
+
+
 end module kernelforge_mod
 
