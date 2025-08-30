@@ -246,18 +246,17 @@ void gaussian_jacobian_batch(
 static inline void row_axpy(std::size_t n, double alpha, const double* x, double* y) {
     for (std::size_t i = 0; i < n; ++i) y[i] += alpha * x[i];
 }
+// If using MKL and you want local control of threads around level-1/2 ops:
+// #include <mkl.h>
 
-
-
-// Drop-in replacement: computes V1X2_all = J1_hat @ X2^T once
 void rbf_hessian_full_tiled_gemm(
-    const double* X1,  const double* dX1,
-    const double* X2,  const double* dX2,
+    const double* __restrict X1,  const double* __restrict dX1,
+    const double* __restrict X2,  const double* __restrict dX2,
     std::size_t N1, std::size_t N2,
     std::size_t M,  std::size_t D1, std::size_t D2,
     double sigma,
-    std::size_t /*tile_B*/,
-    double* H_out)
+    std::size_t tile_B,                   // now used
+    double* __restrict H_out)
 {
     if (!X1 || !dX1 || !X2 || !dX2 || !H_out) throw std::invalid_argument("null pointer");
     if (N1==0 || N2==0 || M==0 || D1==0 || D2==0) throw std::invalid_argument("empty dimension");
@@ -271,18 +270,26 @@ void rbf_hessian_full_tiled_gemm(
 
     // 1) Distances → C = K/s^2 and C4 = K/s^4
     std::vector<double> n1(N1), n2(N2);
+
+    #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
-        const double* x = X1 + a*M;
-        double s = 0.0; for (std::size_t i = 0; i < M; ++i) s += x[i]*x[i];
+        const double* __restrict x = X1 + a*M;
+        double s = 0.0;
+        #pragma omp simd reduction(+:s)
+        for (std::size_t i = 0; i < M; ++i) s += x[i]*x[i];
         n1[a] = s;
     }
+
+    #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
-        const double* x = X2 + b*M;
-        double s = 0.0; for (std::size_t i = 0; i < M; ++i) s += x[i]*x[i];
+        const double* __restrict x = X2 + b*M;
+        double s = 0.0;
+        #pragma omp simd reduction(+:s)
+        for (std::size_t i = 0; i < M; ++i) s += x[i]*x[i];
         n2[b] = s;
     }
 
-    // S = X1 @ X2^T  (N1 x N2)
+    // S = X1 @ X2^T  (N1 x N2)  ← let BLAS thread this
     std::vector<double> S(N1 * N2);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 (int)N1, (int)N2, (int)M,
@@ -292,6 +299,7 @@ void rbf_hessian_full_tiled_gemm(
 
     // C, C4
     std::vector<double> C(N1 * N2), C4(N1 * N2);
+    #pragma omp parallel for collapse(2) schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
         for (std::size_t b = 0; b < N2; ++b) {
             const double sq = n1[a] + n2[b] - 2.0 * S[a*N2 + b];
@@ -303,38 +311,41 @@ void rbf_hessian_full_tiled_gemm(
 
     // 2) Pack J1_hat (N1*D1 x M),  J2_all_cat (M x N2*D2)
     std::vector<double> J1_hat(big_rows * M);
+    #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
-        const double* J1 = dX1 + (a*M)*D1; // (M x D1)
+        const double* __restrict J1 = dX1 + (a*M)*D1; // (M x D1)
         for (std::size_t dj = 0; dj < D1; ++dj) {
-            double* row = J1_hat.data() + (a*D1 + dj) * M;
+            double* __restrict row = J1_hat.data() + (a*D1 + dj) * M;
+            // transpose column dj of (M x D1) → row of length M
+            #pragma omp simd
             for (std::size_t i = 0; i < M; ++i)
                 row[i] = J1[i*D1 + dj];
         }
     }
 
     std::vector<double> J2_all_cat(M * big_cols);
+    // Parallelize outer over b to keep writes mostly contiguous per thread
+    #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
-        const double* J2 = dX2 + (b*M)*D2; // (M x D2)
+        const double* __restrict J2 = dX2 + (b*M)*D2; // (M x D2)
         for (std::size_t i = 0; i < M; ++i) {
             std::memcpy(J2_all_cat.data() + i*big_cols + b*D2,
                         J2 + i*D2,
                         D2 * sizeof(double));
         }
     }
-    const int lda_J1 = (int)M;
-    const int ldb_J2cat = (int)big_cols;
-    const int ldc_H = (int)big_cols;
+    const int lda_J1   = (int)M;
+    const int ldb_J2cat= (int)big_cols;
+    const int ldc_H    = (int)big_cols;
 
-    // 3) Base Gram for ALL blocks once: H_out = J1_hat @ J2_all_cat
+    // 3) Base Gram for ALL blocks once: H_out = J1_hat @ J2_all_cat  (threaded BLAS)
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                 (int)big_rows, (int)big_cols, (int)M,
                 1.0, J1_hat.data(), lda_J1,
                      J2_all_cat.data(), ldb_J2cat,
                 0.0, H_out, ldc_H);
 
-    // 4) Projection tables: V1X2_all and V2X1_all
-    //    V1X2_all = J1_hat @ X2^T  (N1*D1 x N2)
-    //    V2X1_all = (J2_all_cat)^T @ X1^T  (N2*D2 x N1) using Trans,Trans (no extra pack)
+    // 4) Projection tables: V1X2_all and V2X1_all  (threaded BLAS)
     std::vector<double> V1X2_all(big_rows * N2);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 (int)big_rows, (int)N2, (int)M,
@@ -345,69 +356,251 @@ void rbf_hessian_full_tiled_gemm(
     std::vector<double> V2X1_all(big_cols * N1);
     cblas_dgemm(CblasRowMajor, CblasTrans, CblasTrans,
                 (int)big_cols, (int)N1, (int)M,
-                1.0, J2_all_cat.data(), (int)big_cols, // A^T is (big_cols x M)
-                     X1,               (int)M,        // B^T is (M x N1)
+                1.0, J2_all_cat.data(), (int)big_cols,
+                     X1,               (int)M,
                 0.0, V2X1_all.data(), (int)N1);
 
-    // Optionally free J1_hat to reduce peak (uncomment if needed):
-    // { std::vector<double>().swap(J1_hat); }
-
-    // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b
+    // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b  (parallelize outer loops)
     std::vector<double> U1(N1 * D1), U2(N2 * D2);
+
+    #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
-        const double* x1 = X1 + a*M;
-        const double* J1 = dX1 + (a*M)*D1;
+        const double* __restrict x1 = X1 + a*M;
+        const double* __restrict J1 = dX1 + (a*M)*D1;
         cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D1,
                     1.0, J1, (int)D1, x1, 1, 0.0, U1.data() + a*D1, 1);
     }
+
+    #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
-        const double* x2 = X2 + b*M;
-        const double* J2 = dX2 + (b*M)*D2;
+        const double* __restrict x2 = X2 + b*M;
+        const double* __restrict J2 = dX2 + (b*M)*D2;
         cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D2,
                     1.0, J2, (int)D2, x2, 1, 0.0, U2.data() + b*D2, 1);
     }
 
-    // 6) Per-block: scale Gram by C[a,b], then rank-1 correction via DGER
-    std::vector<double> v1(D1), v2(D2);
+    // 6) Per-block: scale Gram by C[a,b], then rank-1 correction via GER
+    if (tile_B == 0) tile_B = std::min<std::size_t>(64, N2);  // reasonable default
 
-    for (std::size_t a = 0; a < N1; ++a) {
-        const double* U1a = U1.data() + a*D1;
-        const double* V1X2_a = V1X2_all.data() + (a*D1) * N2; // (D1 x N2), row-major
+    // If you can, make L1/L2 BLAS single-threaded here to avoid oversubscription:
+    // int saved = mkl_get_max_threads();
+    // mkl_set_num_threads_local(1);
 
-        for (std::size_t b = 0; b < N2; ++b) {
-            const double cab  = C [a*N2 + b];
-            const double c4ab = C4[a*N2 + b];
+    #pragma omp parallel
+    {
+        std::vector<double> v1(D1), v2(D2);  // private buffers per thread
 
-            // Submatrix H(a,b): top-left pointer
-            double* Hblk = H_out + (a*D1) * big_cols + b*D2;
+        #pragma omp for schedule(static)
+        for (std::size_t a = 0; a < N1; ++a) {
 
-            // Scale Gram block by cab (row-wise dscal)
-            for (std::size_t i = 0; i < D1; ++i) {
-                cblas_dscal((int)D2, cab, Hblk + i*big_cols, 1);
+            const double* __restrict U1a   = U1.data() + a*D1;
+            const double* __restrict V1X2a = V1X2_all.data() + (a*D1) * N2; // (D1 x N2), row-major
+
+            for (std::size_t b0 = 0; b0 < N2; b0 += tile_B) {
+                const std::size_t bend = std::min(N2, b0 + tile_B);
+
+                for (std::size_t b = b0; b < bend; ++b) {
+                    const double cab  = C [a*N2 + b];
+                    const double c4ab = C4[a*N2 + b];
+
+                    double* __restrict Hblk = H_out + (a*D1) * big_cols + b*D2;
+
+                    // Scale Gram block by cab: D1 rows × D2 cols within the big row-major matrix
+                    for (std::size_t i = 0; i < D1; ++i) {
+                        cblas_dscal((int)D2, cab, Hblk + i*big_cols, 1);
+                    }
+
+                    // v1 = U1[a] - V1X2_all[aD1:(a+1)D1, b]
+                    #pragma omp simd
+                    for (std::size_t i = 0; i < D1; ++i) {
+                        v1[i] = U1a[i] - V1X2a[i*N2 + b];
+                    }
+
+                    // v2 = V2X1_all[bD2:(b+1)D2, a] - U2[b]
+                    const double* __restrict U2b     = U2.data() + b*D2;
+                    const double* __restrict V2X1col = V2X1_all.data() + (b*D2) * N1 + a; // column 'a' in row-major
+                    #pragma omp simd
+                    for (std::size_t j = 0; j < D2; ++j) {
+                        v2[j] = V2X1col[j*N1] - U2b[j];
+                    }
+
+                    // Rank-1 correction: H(a,b) -= c4ab * v1 v2^T  (Level-2 BLAS)
+                    // Probably single-threaded
+                    cblas_dger(CblasRowMajor,
+                               (int)D1, (int)D2,
+                               -c4ab,
+                               v1.data(), 1,
+                               v2.data(), 1,
+                               Hblk, (int)big_cols);
+                }
             }
-
-            // v1 = U1[a] - V1X2_all[aD1:(a+1)D1, b]
-            for (std::size_t i = 0; i < D1; ++i) {
-                v1[i] = U1a[i] - V1X2_a[i*N2 + b];
-            }
-
-            // v2 = V2X1_all[bD2:(b+1)D2, a] - U2[b]
-            const double* U2b = U2.data() + b*D2;
-            const double* V2X1_bcol = V2X1_all.data() + (b*D2) * N1 + a; // column 'a' inside row-major
-            for (std::size_t j = 0; j < D2; ++j) {
-                v2[j] = V2X1_bcol[j*N1] - U2b[j];
-            }
-
-            // Rank-1 correction: H(a,b) -= c4ab * v1 v2^T
-            cblas_dger(CblasRowMajor,
-                       (int)D1, (int)D2,
-                       -c4ab,
-                       v1.data(), 1,
-                       v2.data(), 1,
-                       Hblk, (int)big_cols);
         }
     }
+
+    // mkl_set_num_threads_local(saved);
 }
+
+
+
+// Drop-in replacement: computes V1X2_all = J1_hat @ X2^T once
+// void rbf_hessian_full_tiled_gemm(
+//     const double* X1,  const double* dX1,
+//     const double* X2,  const double* dX2,
+//     std::size_t N1, std::size_t N2,
+//     std::size_t M,  std::size_t D1, std::size_t D2,
+//     double sigma,
+//     std::size_t /*tile_B*/,
+//     double* H_out)
+// {
+//     if (!X1 || !dX1 || !X2 || !dX2 || !H_out) throw std::invalid_argument("null pointer");
+//     if (N1==0 || N2==0 || M==0 || D1==0 || D2==0) throw std::invalid_argument("empty dimension");
+//     if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
+// 
+//     const std::size_t big_rows = N1 * D1;
+//     const std::size_t big_cols = N2 * D2;
+// 
+//     const double inv_s2 = 1.0 / (sigma * sigma);
+//     const double inv_s4 = inv_s2 * inv_s2;
+// 
+//     // 1) Distances → C = K/s^2 and C4 = K/s^4
+//     std::vector<double> n1(N1), n2(N2);
+//     for (std::size_t a = 0; a < N1; ++a) {
+//         const double* x = X1 + a*M;
+//         double s = 0.0; for (std::size_t i = 0; i < M; ++i) s += x[i]*x[i];
+//         n1[a] = s;
+//     }
+//     for (std::size_t b = 0; b < N2; ++b) {
+//         const double* x = X2 + b*M;
+//         double s = 0.0; for (std::size_t i = 0; i < M; ++i) s += x[i]*x[i];
+//         n2[b] = s;
+//     }
+// 
+//     // S = X1 @ X2^T  (N1 x N2)
+//     std::vector<double> S(N1 * N2);
+//     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+//                 (int)N1, (int)N2, (int)M,
+//                 1.0, X1, (int)M,
+//                      X2, (int)M,
+//                 0.0, S.data(), (int)N2);
+// 
+//     // C, C4
+//     std::vector<double> C(N1 * N2), C4(N1 * N2);
+//     for (std::size_t a = 0; a < N1; ++a) {
+//         for (std::size_t b = 0; b < N2; ++b) {
+//             const double sq = n1[a] + n2[b] - 2.0 * S[a*N2 + b];
+//             const double k  = std::exp(-0.5 * inv_s2 * sq);
+//             C [a*N2 + b] = k * inv_s2;
+//             C4[a*N2 + b] = k * inv_s4;
+//         }
+//     }
+// 
+//     // 2) Pack J1_hat (N1*D1 x M),  J2_all_cat (M x N2*D2)
+//     std::vector<double> J1_hat(big_rows * M);
+//     for (std::size_t a = 0; a < N1; ++a) {
+//         const double* J1 = dX1 + (a*M)*D1; // (M x D1)
+//         for (std::size_t dj = 0; dj < D1; ++dj) {
+//             double* row = J1_hat.data() + (a*D1 + dj) * M;
+//             for (std::size_t i = 0; i < M; ++i)
+//                 row[i] = J1[i*D1 + dj];
+//         }
+//     }
+// 
+//     std::vector<double> J2_all_cat(M * big_cols);
+//     for (std::size_t b = 0; b < N2; ++b) {
+//         const double* J2 = dX2 + (b*M)*D2; // (M x D2)
+//         for (std::size_t i = 0; i < M; ++i) {
+//             std::memcpy(J2_all_cat.data() + i*big_cols + b*D2,
+//                         J2 + i*D2,
+//                         D2 * sizeof(double));
+//         }
+//     }
+//     const int lda_J1 = (int)M;
+//     const int ldb_J2cat = (int)big_cols;
+//     const int ldc_H = (int)big_cols;
+// 
+//     // 3) Base Gram for ALL blocks once: H_out = J1_hat @ J2_all_cat
+//     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+//                 (int)big_rows, (int)big_cols, (int)M,
+//                 1.0, J1_hat.data(), lda_J1,
+//                      J2_all_cat.data(), ldb_J2cat,
+//                 0.0, H_out, ldc_H);
+// 
+//     // 4) Projection tables: V1X2_all and V2X1_all
+//     //    V1X2_all = J1_hat @ X2^T  (N1*D1 x N2)
+//     //    V2X1_all = (J2_all_cat)^T @ X1^T  (N2*D2 x N1) using Trans,Trans (no extra pack)
+//     std::vector<double> V1X2_all(big_rows * N2);
+//     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+//                 (int)big_rows, (int)N2, (int)M,
+//                 1.0, J1_hat.data(), (int)M,
+//                      X2,             (int)M,
+//                 0.0, V1X2_all.data(), (int)N2);
+// 
+//     std::vector<double> V2X1_all(big_cols * N1);
+//     cblas_dgemm(CblasRowMajor, CblasTrans, CblasTrans,
+//                 (int)big_cols, (int)N1, (int)M,
+//                 1.0, J2_all_cat.data(), (int)big_cols, // A^T is (big_cols x M)
+//                      X1,               (int)M,        // B^T is (M x N1)
+//                 0.0, V2X1_all.data(), (int)N1);
+// 
+//     // Optionally free J1_hat to reduce peak (uncomment if needed):
+//     // { std::vector<double>().swap(J1_hat); }
+// 
+//     // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b
+//     std::vector<double> U1(N1 * D1), U2(N2 * D2);
+//     for (std::size_t a = 0; a < N1; ++a) {
+//         const double* x1 = X1 + a*M;
+//         const double* J1 = dX1 + (a*M)*D1;
+//         cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D1,
+//                     1.0, J1, (int)D1, x1, 1, 0.0, U1.data() + a*D1, 1);
+//     }
+//     for (std::size_t b = 0; b < N2; ++b) {
+//         const double* x2 = X2 + b*M;
+//         const double* J2 = dX2 + (b*M)*D2;
+//         cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D2,
+//                     1.0, J2, (int)D2, x2, 1, 0.0, U2.data() + b*D2, 1);
+//     }
+// 
+//     // 6) Per-block: scale Gram by C[a,b], then rank-1 correction via DGER
+//     std::vector<double> v1(D1), v2(D2);
+// 
+//     for (std::size_t a = 0; a < N1; ++a) {
+//         const double* U1a = U1.data() + a*D1;
+//         const double* V1X2_a = V1X2_all.data() + (a*D1) * N2; // (D1 x N2), row-major
+// 
+//         for (std::size_t b = 0; b < N2; ++b) {
+//             const double cab  = C [a*N2 + b];
+//             const double c4ab = C4[a*N2 + b];
+// 
+//             // Submatrix H(a,b): top-left pointer
+//             double* Hblk = H_out + (a*D1) * big_cols + b*D2;
+// 
+//             // Scale Gram block by cab (row-wise dscal)
+//             for (std::size_t i = 0; i < D1; ++i) {
+//                 cblas_dscal((int)D2, cab, Hblk + i*big_cols, 1);
+//             }
+// 
+//             // v1 = U1[a] - V1X2_all[aD1:(a+1)D1, b]
+//             for (std::size_t i = 0; i < D1; ++i) {
+//                 v1[i] = U1a[i] - V1X2_a[i*N2 + b];
+//             }
+// 
+//             // v2 = V2X1_all[bD2:(b+1)D2, a] - U2[b]
+//             const double* U2b = U2.data() + b*D2;
+//             const double* V2X1_bcol = V2X1_all.data() + (b*D2) * N1 + a; // column 'a' inside row-major
+//             for (std::size_t j = 0; j < D2; ++j) {
+//                 v2[j] = V2X1_bcol[j*N1] - U2b[j];
+//             }
+// 
+//             // Rank-1 correction: H(a,b) -= c4ab * v1 v2^T
+//             cblas_dger(CblasRowMajor,
+//                        (int)D1, (int)D2,
+//                        -c4ab,
+//                        v1.data(), 1,
+//                        v2.data(), 1,
+//                        Hblk, (int)big_cols);
+//         }
+//     }
+// }
 // void rbf_hessian_full_tiled_gemm(
 //     const double* X1,  const double* dX1,
 //     const double* X2,  const double* dX2,
@@ -950,3 +1143,168 @@ std::vector<double> solve_cholesky(double* K, const double* y, int n) {
 
     return alpha;
 }
+
+// Symmetric (training) RBF Hessian kernel, Gaussian.
+// X: (N, M) row-major          – descriptor vectors
+// dX: (N, M, D) row-major      – Jacobians wrt descriptor coords (M x D) per sample
+// Output H_out: (N*D, N*D) row-major, symmetric
+void rbf_hessian_full_tiled_gemm_sym_fast(
+// Symmetric (training) RBF Hessian, Gaussian kernel.
+// Assumes: X2==X1 (same set), dX2==dX1, N1==N2, D1==D2.
+// Builds only the lower triangle and mirrors to upper.
+// void rbf_hessian_full_tiled_gemm_symmetric(
+    const double* __restrict X1,  const double* __restrict dX1,
+    std::size_t N1, 
+    std::size_t M,  std::size_t D1,
+    double sigma,
+    std::size_t tile_B,
+    double* __restrict H_out)
+{
+    if (!X1 || !dX1 || !H_out) throw std::invalid_argument("null pointer");
+    if (N1==0 || M==0 || D1==0 ) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
+
+    const std::size_t N   = N1;
+    const std::size_t D   = D1;
+    const std::size_t BIG = N * D;
+
+    const double inv_s2 = 1.0 / (sigma * sigma);
+    const double inv_s4 = inv_s2 * inv_s2;
+
+    // Zero output once (we'll fill lower and mirror to upper at the end)
+    // std::fill(H_out, H_out + BIG*BIG, 0.0);
+
+    // 1) Distances → C = K/s^2 and C4 = K/s^4
+    std::vector<double> n(N);
+    #pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N; ++a) {
+        const double* __restrict x = X1 + a*M;
+        double s = 0.0;
+        #pragma omp simd reduction(+:s)
+        for (std::size_t i = 0; i < M; ++i) s += x[i]*x[i];
+        n[a] = s;
+    }
+
+    // S = X1 @ X1^T (lower) via DSYRK, then mirror to upper for convenient reads
+    std::vector<double> S(N * N, 0.0);
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                (int)N, (int)M,
+                1.0, X1, (int)M,
+                0.0, S.data(), (int)N);
+    #pragma omp parallel for collapse(2)
+    for (std::size_t i = 0; i < N; ++i)
+        for (std::size_t j = i+1; j < N; ++j)
+            S[i*N + j] = S[j*N + i];
+
+    std::vector<double> C(N * N), C4(N * N);
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (std::size_t a = 0; a < N; ++a) {
+        for (std::size_t b = 0; b < N; ++b) {
+            const double sq = n[a] + n[b] - 2.0 * S[a*N + b];
+            const double k  = std::exp(-0.5 * inv_s2 * sq);
+            C [a*N + b] = k * inv_s2;
+            C4[a*N + b] = k * inv_s4;
+        }
+    }
+
+    // 2) Pack J_hat (N*D x M) from dX1 (N,M,D): row i=(a*D+dj) is column dj of (M x D)
+    std::vector<double> J_hat(BIG * M);
+    #pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N; ++a) {
+        const double* __restrict J = dX1 + (a*M)*D; // (M x D)
+        for (std::size_t dj = 0; dj < D; ++dj) {
+            double* __restrict row = J_hat.data() + (a*D + dj) * M;
+            #pragma omp simd
+            for (std::size_t i = 0; i < M; ++i)
+                row[i] = J[i*D + dj];
+        }
+    }
+
+    // 3) Base Gram only lower: H_out := J_hat @ J_hat^T  via DSYRK (lower)
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                (int)BIG, (int)M,
+                1.0, J_hat.data(), (int)M,
+                0.0, H_out, (int)BIG);
+
+    // 4) Projection table V = J_hat @ X1^T  (BIG x N)
+    std::vector<double> V(BIG * N);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                (int)BIG, (int)N, (int)M,
+                1.0, J_hat.data(), (int)M,
+                     X1,            (int)M,
+                0.0, V.data(),     (int)N);
+
+    // 5) Self projections: U[a] = J_a^T x_a  (N x D)
+    std::vector<double> U(N * D);
+    #pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N; ++a) {
+        const double* __restrict x  = X1 + a*M;
+        const double* __restrict Ja = dX1 + (a*M)*D;  // (M x D)
+        double* __restrict Ua       = U.data() + a*D;
+        cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D,
+                    1.0, Ja, (int)D, x, 1, 0.0, Ua, 1);
+    }
+
+    // 6) Per-block (lower triangle only): scale Gram by C[a,b], then rank-1 correction via GER
+    if (tile_B == 0) tile_B = std::min<std::size_t>(64, N);  // sane default tile width
+
+    #pragma omp parallel
+    {
+        std::vector<double> v1(D), v2(D);  // private buffers
+
+        #pragma omp for schedule(static)
+        for (std::size_t a = 0; a < N; ++a) {
+
+            const double* __restrict Ua   = U.data() + a*D;
+            const double* __restrict Va   = V.data() + (a*D) * N; // (D x N), row-major
+
+            for (std::size_t b0 = 0; b0 < a+1; b0 += tile_B) {
+                const std::size_t bend = std::min<std::size_t>(a+1, b0 + tile_B);
+
+                for (std::size_t b = b0; b < bend; ++b) {
+                    const double cab  = C [a*N + b];
+                    const double c4ab = C4[a*N + b];
+
+                    // H(a,b) submatrix top-left
+                    double* __restrict Hblk = H_out + (a*D) * BIG + b*D;
+
+                    // Scale Gram block by cab (row by row)
+                    for (std::size_t i = 0; i < D; ++i) {
+                        cblas_dscal((int)D, cab, Hblk + i*BIG, 1);
+                    }
+
+                    // v1 = U[a] - V[aD:(a+1)D, b]
+                    #pragma omp simd
+                    for (std::size_t i = 0; i < D; ++i) {
+                        v1[i] = Ua[i] - Va[i*N + b];
+                    }
+
+                    // v2 = V[bD:(b+1)D, a] - U[b]
+                    const double* __restrict Ub = U.data() + b*D;
+                    const double* __restrict Vb = V.data() + (b*D) * N;
+                    #pragma omp simd
+                    for (std::size_t j = 0; j < D; ++j) {
+                        v2[j] = Vb[j*N + a] - Ub[j];
+                    }
+
+                    // Rank-1 correction: H(a,b) -= c4ab * v1 v2^T
+                    cblas_dger(CblasRowMajor,
+                               (int)D, (int)D,
+                               -c4ab,
+                               v1.data(), 1,
+                               v2.data(), 1,
+                               Hblk, (int)BIG);
+                }
+            }
+        }
+    }
+
+    // // 7) Mirror lower → upper
+    // for (std::size_t i = 0; i < BIG; ++i) {
+    //     const double* __restrict src = H_out + i*BIG;
+    //     for (std::size_t j = 0; j < i; ++j) {
+    //         H_out[j*BIG + i] = src[j];
+    //     }
+    // }
+}
+

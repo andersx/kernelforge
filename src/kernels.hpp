@@ -43,4 +43,13 @@ void rbf_hessian_full_tiled_gemm(
     std::size_t tile_B,
     double* H_out);
 
+void rbf_hessian_full_tiled_gemm_sym_fast(
+    const double* __restrict X,      // (N x M), row-major
+    const double* __restrict dX,     // per-sample Jacobians, (N blocks) of (M x D), row-major
+    std::size_t N, std::size_t M, std::size_t D,
+    double sigma,
+    std::size_t tile_B,
+    double* __restrict H_out);       // (N*D x N*D), row-major
+
+
 std::vector<double> solve_cholesky(double* K, const double* y, int n);

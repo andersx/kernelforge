@@ -37,6 +37,9 @@ In this case, MKL will be autodetected by some CMake magic. If you additionally 
 CC=icx CXX=icpx FC=ifx make install
 ```
 
+In my experience, GCC/G++/GFortran with OpenBLAS is very similar to Intel API alternatives in terms of performance, perhaps even better. 
+On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the default and is very fast on M-series macs.
+
 ## Timings
 
 | Function Name | QML [s] | Kernelforge [s] |
@@ -56,6 +59,10 @@ The goal is to remove pain-points of existing QML libraries
   - No cooked F2PY/Meson build system
 - Simplified entrypoints that are compatible with RDKit, ASE, Scikit-learn, etc.
   - A few high-level functions that do the most common tasks efficiently and correctly
+- Efficient FCHL19 out-of-the-box
+  - Fast training with random Fourier features
+  - With derivatives
+    - [ ] Stretch goal: Implement sFCHL19 for even faster training/inference
 
 ## Priority list for the next months:
 
@@ -65,7 +72,8 @@ The goal is to remove pain-points of existing QML libraries
 - [x] Notebook with rMD17 example
 - [x] Finish the Jacobian and Hessian kernels
 - [x] Notebook with rMD17 forces example
-- [ ] Add FCHL19 descriptor with derivatives + kernels
+- [ ] Add FCHL19 descriptor with derivatives
+- [ ] Add FCHL19 kernels with derivatives (local/elemental)
 - [ ] Finish the random Fourier features kernel and its Jacobian
 - [ ] Notebook with rMD17 random Fourier features examples
 
@@ -84,12 +92,19 @@ The goal is to remove pain-points of existing QML libraries
   - [x] OpenBLAS (Linux) <- also used in wheels
   - [x] MKL (Linux)
   - [x] Accelerate (MacOS)
-- Add kernels:
+- Add global kernels:
   - [x] Gaussian kernel
   - [x] Jacobian/gradient kernel
   - [ ] Optimized Jacobian kernel for single inference
   - [x] Hessian kernel
   - [x] GDML-like kernel
+  - [ ] Full GPR kernel
+- Add local kernels:
+  - [ ] Gaussian kernel
+  - [ ] Jacobian/gradient kernel
+  - [ ] Optimized Jacobian kernel for single inference
+  - [ ] Hessian kernel
+  - [ ] GDML/GPR-like kernel
 - Add random Fourier features kernel code
   - [ ] RFF kernel
   - [ ] RFF gradient kernel

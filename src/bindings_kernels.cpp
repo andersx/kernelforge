@@ -241,6 +241,69 @@ py::array_t<double> solve_cholesky_py(
 }
 
 
+static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    double sigma,
+    py::object tile_B_obj /* int or None */
+) {
+    if (X.ndim()  != 2) throw std::invalid_argument("X must be 2D (N,M).");
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
+
+    const std::size_t N = static_cast<std::size_t>(X.shape(0));
+    const std::size_t M = static_cast<std::size_t>(X.shape(1));
+    if (static_cast<std::size_t>(dX.shape(0)) != N)
+        throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N).");
+    if (static_cast<std::size_t>(dX.shape(1)) != M)
+        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (M).");
+
+    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    if (D == 0) throw std::invalid_argument("D must be > 0.");
+
+    // tile_B: default 0 means "auto"
+    std::size_t tile_B = 0;
+    if (!tile_B_obj.is_none()) {
+        long tb = tile_B_obj.cast<long>();
+        if (tb < 0) throw std::invalid_argument("tile_B must be >= 0 (0 means auto).");
+        tile_B = static_cast<std::size_t>(tb);
+    }
+
+    // Number of elements in symmetric Hessian
+    const std::size_t BIG = N * D;
+    const std::size_t nelems = BIG * BIG;
+
+    // Allocate aligned memory for the result
+    double* Hptr = aligned_alloc_64(nelems);
+
+    // Capsule to free the memory when Python GC runs
+    auto capsule = py::capsule(Hptr, [](void* p){ aligned_free_64(p); });
+
+    // Wrap into NumPy array (BIG x BIG)
+    py::array_t<double> H(
+        { static_cast<py::ssize_t>(BIG), static_cast<py::ssize_t>(BIG) },
+        { static_cast<py::ssize_t>(BIG * sizeof(double)),  // row stride
+          static_cast<py::ssize_t>(sizeof(double)) },      // col stride
+        Hptr,
+        capsule
+    );
+
+    // Raw pointers
+    const double* Xp  = X.unchecked<2>().data(0,0);
+    const double* dXp = dX.unchecked<3>().data(0,0,0);
+
+    // Call the C++ core
+    rbf_hessian_full_tiled_gemm_sym_fast(
+        Xp, dXp,
+        N, M, D,
+        sigma, tile_B,
+        Hptr
+    );
+
+    return H;
+}
+
+
 PYBIND11_MODULE(_kernels, m) {
     m.doc() = "Symmetric Gaussian kernel via BLAS (row-major), with 64-byte aligned output buffer.";
     m.def("kernel_symm", &kernel_symm_py,
@@ -258,6 +321,10 @@ PYBIND11_MODULE(_kernels, m) {
           "Compute the full mixed Hessian with DGEMM tiling.\n"
           "Shapes: X1(N1,M), dX1(N1,M,D1), X2(N2,M), dX2(N2,M,D2) -> H((N1*D1),(N2*D2)).\n"
           "tile_B: refs per tile (0 = auto).");
+    m.def("rbf_hessian_full_tiled_gemm_sym", &rbf_hessian_full_tiled_gemm_sym_py,
+          py::arg("X"), py::arg("dX"),
+          py::arg("sigma"), py::arg("tile_B") = py::none(),
+          "Compute symmetric RBF Hessian kernel (training version).");
      m.def("solve_cholesky", &solve_cholesky_py,
           "Solve Kx=y using Cholesky factorization.\n"
           "- K is overwritten with factorization\n"
