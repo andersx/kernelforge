@@ -144,4 +144,18 @@ void fgdml_kernel(
     double* kernel_out               // (naq2, naq1) row-major
 );
 
+
+void fgdml_kernel_symmetric_lower(
+    const std::vector<double>& x,    // (nm, max_atoms, rep_size)
+    const std::vector<double>& dx,   // (nm, max_atoms, rep_size, 3*max_atoms)
+    const std::vector<int>&    q,    // (nm, max_atoms)
+    const std::vector<int>&    n,    // (nm)
+    int nm,
+    int max_atoms,
+    int rep_size,
+    int naq,                          // must be 3 * sum_m n[m]
+    double sigma,
+    double* kernel_out                // (naq, naq) row-major
+);
+
 } // namespace fchl19

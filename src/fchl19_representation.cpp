@@ -1092,6 +1092,15 @@ static inline size_t base_dx2(int b, int i2, int nm2, int max_atoms2, int rep) {
     return ( (static_cast<size_t>(b) * max_atoms2 + i2) * rep ) * (3 * static_cast<size_t>(max_atoms2) );
 }
 
+// Symmetric helpers
+static inline size_t idx_x(int m, int j, int k, int nm, int max_atoms, int rep) {
+    return ((size_t)m * max_atoms + j) * rep + (size_t)k;
+}
+static inline size_t base_dx(int m, int j, int nm, int max_atoms, int rep) {
+    return (((size_t)m * max_atoms + j) * rep) * (3 * (size_t)max_atoms);
+}
+
+
 void fatomic_local_gradient_kernel(
     const std::vector<double>& x1,   // (nm1, max_atoms1, rep)
     const std::vector<double>& x2,   // (nm2, max_atoms2, rep)
@@ -1277,7 +1286,6 @@ void fatomic_local_gradient_kernel(
 // #########################
 // # FCHL19 HESSIAN KERNEL #
 // #########################
-// Fortran-style FGDML Hessian with identical BLAS sequence (SYR → SYMM → GEMM), row-major.
 void fgdml_kernel(
     const std::vector<double>& x1,   // (nm1, max_atoms1, rep_size)
     const std::vector<double>& x2,   // (nm2, max_atoms2, rep_size)
@@ -1487,6 +1495,227 @@ void fgdml_kernel(
                 }
             } // i2
         } // a
+    } // b
+}
+
+
+void fgdml_kernel_symmetric_lower(
+    const std::vector<double>& x,    // (nm, max_atoms, rep_size)
+    const std::vector<double>& dx,   // (nm, max_atoms, rep_size, 3*max_atoms)
+    const std::vector<int>&    q,    // (nm, max_atoms)
+    const std::vector<int>&    n,    // (nm)
+    int nm,
+    int max_atoms,
+    int rep_size,
+    int naq,                          // must be 3 * sum_m n[m]
+    double sigma,
+    double* kernel_out                // (naq, naq) row-major
+) {
+    // ---- validation ----
+    if (nm<=0 || max_atoms<=0 || rep_size<=0) throw std::invalid_argument("dims must be positive");
+    if (!std::isfinite(sigma) || sigma<=0.0)   throw std::invalid_argument("sigma must be > 0");
+    if (!kernel_out)                            throw std::invalid_argument("kernel_out is null");
+
+    const size_t xN  = (size_t)nm * max_atoms * rep_size;
+    const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
+    const size_t qN  = (size_t)nm * max_atoms;
+
+    if (x.size()!=xN)   throw std::invalid_argument("x size mismatch");
+    if (dx.size()!=dxN) throw std::invalid_argument("dx size mismatch");
+    if (q.size()!=qN)   throw std::invalid_argument("q size mismatch");
+    if ((int)n.size()!=nm) throw std::invalid_argument("n size mismatch");
+
+    // Offsets in derivative axis (3 * active atoms per molecule)
+    std::vector<int> offs(nm);
+    int sum = 0;
+    for (int m = 0; m < nm; ++m) {
+        offs[m] = sum;
+        sum += 3 * std::max(0, std::min(n[m], max_atoms));
+    }
+    if (naq != sum) throw std::invalid_argument("naq != 3*sum(n)");
+
+    // Zero only lower triangle (optional: zero all for simplicity)
+    std::fill(kernel_out, kernel_out + (size_t)naq * naq, 0.0);
+
+    // Scalars
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma4  = -1.0 / (      sigma * sigma * sigma * sigma); // < 0
+    const double sigma2_neg  = - (sigma * sigma);                            // < 0
+
+    // Label -> indices per molecule
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_idx(nm);
+    for (int a = 0; a < nm; ++a) {
+        const int na = std::max(0, std::min(n[a], max_atoms));
+        auto& M = lab_to_idx[a];
+        M.reserve(64);
+        for (int i1 = 0; i1 < na; ++i1) {
+            M[q[(size_t)a * max_atoms + i1]].push_back(i1);
+        }
+    }
+
+    // Scratch memory budget per thread
+    constexpr size_t BYTES_BUDGET = 2ull * 1024ull * 1024ull;
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int b = 0; b < nm; ++b) {
+        const int nb = std::max(0, std::min(n[b], max_atoms));
+        if (nb == 0) continue;
+
+        const int ncols_b = 3 * nb;
+        const int lda_b   = 3 * max_atoms;
+        const int row_off = offs[b];
+
+        // worst-case ncols_a across all 'a' is 3*max_atoms
+        const int ncols_max = 3 * max_atoms;
+
+        // Choose tile width T within budget:
+        // bytes ≈ 8 * [ T*(rep + ncols_b + ncols_max) + rep*ncols_max ] + small
+        size_t denom = (size_t)rep_size + (size_t)ncols_b + (size_t)ncols_max;
+        size_t bytes_fixed = 8ull * (size_t)rep_size * (size_t)ncols_max; // S_sum
+        size_t bytes_left  = (BYTES_BUDGET > bytes_fixed) ? (BYTES_BUDGET - bytes_fixed) : (size_t)1024;
+        int T = (int)std::max<size_t>(16, std::min<size_t>(512, bytes_left / (8ull * denom)));
+        const int LDT = T;
+
+        // Thread-local aligned scratch
+        double* D      = alloc_aligned((size_t)rep_size * LDT);        // (rep x T)
+        double* W      = alloc_aligned((size_t)ncols_b   * LDT);       // (ncols_b x T)
+        double* V      = alloc_aligned((size_t)ncols_max * LDT);       // (ncols_a x T in first rows)
+        double* S_sum  = alloc_aligned((size_t)rep_size * ncols_max);  // (rep x ncols_a)
+        double* xbv    = alloc_aligned((size_t)rep_size);              // x(b,i2,:)
+
+        std::vector<double> sign(T);
+        std::vector<double> expdiag(T);
+
+        for (int a = 0; a <= b; ++a) {  // lower triangle only
+            const int na = std::max(0, std::min(n[a], max_atoms));
+            if (na == 0) continue;
+
+            const int ncols_a = 3 * na;
+            const int col_off = offs[a];
+            const int lda_a   = 3 * max_atoms;
+
+            // Destination block
+            double* Kba = &kernel_out[(size_t)row_off * naq + col_off];
+
+            // For diagonal block, accumulate into a small temp (ncols_b x ncols_a), then scatter lower
+            std::vector<double> Cdiag;
+            double* Cdst = Kba;
+            if (a == b) {
+                Cdiag.assign((size_t)ncols_b * ncols_a, 0.0);
+                Cdst = Cdiag.data(); // accumulate full square, scatter lower later
+            }
+
+            const auto& lab_a = lab_to_idx[a];
+            const auto& lab_b = lab_to_idx[b];
+
+            // loop atoms j2 in molecule b
+            for (int j2 = 0; j2 < nb; ++j2) {
+                const int lbl = q[(size_t)b * max_atoms + j2];
+                auto it_a = lab_a.find(lbl);
+                if (it_a == lab_a.end() || it_a->second.empty()) continue;
+                const auto& i1_list = it_a->second;
+
+                // SD_b and x_b slice (for j2)
+                const double* SD_b = &dx[ base_dx(b, j2, nm, max_atoms, rep_size) ];
+                for (int k = 0; k < rep_size; ++k)
+                    xbv[k] = x[idx_x(b, j2, k, nm, max_atoms, rep_size)];
+
+                // Process i1 in tiles
+                for (size_t t0 = 0; t0 < i1_list.size(); t0 += T) {
+                    const int Tcur = (int)std::min<size_t>(T, i1_list.size() - t0);
+
+                    // Build D (rep x Tcur): columns d = x(a,i1,:) - x(b,j2,:)
+                    for (int t = 0; t < Tcur; ++t) {
+                        const int i1 = i1_list[t0 + t];
+                        double* dcol = &D[(size_t)0 * LDT + t];
+                        double l2 = 0.0;
+                        for (int k = 0; k < rep_size; ++k) {
+                            const double diff = x[idx_x(a, i1, k, nm, max_atoms, rep_size)] - xbv[k];
+                            dcol[(size_t)k * LDT] = diff;
+                            l2 += diff * diff;
+                        }
+                        const double eb = std::exp(l2 * inv_2sigma2);
+                        const double e1 = inv_sigma4 * eb;  // may be negative
+                        sign[t]    = (e1 >= 0.0) ? 1.0 : -1.0;
+                        const double s = std::sqrt(std::abs(e1));
+                        expdiag[t] = sigma2_neg * e1;
+
+                        if (s != 1.0) {
+                            for (int k = 0; k < rep_size; ++k)
+                                dcol[(size_t)k * LDT] *= s;
+                        }
+                    }
+
+                    // W = SD_b^T * D   (ncols_b x Tcur)
+                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                ncols_b, Tcur, rep_size,
+                                1.0, SD_b, lda_b, D, LDT,
+                                0.0, W,    LDT);
+
+                    // V columns: v_t = SD_a(i1)^T * D[:,t], apply sign[t]
+                    for (int t = 0; t < Tcur; ++t) {
+                        const int i1 = i1_list[t0 + t];
+                        const double* SD_a = &dx[ base_dx(a, i1, nm, max_atoms, rep_size) ];
+
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    rep_size, ncols_a,
+                                    1.0, SD_a, lda_a,
+                                    &D[(size_t)0 * LDT + t], LDT,
+                                    0.0, &V[(size_t)0 * LDT + t], LDT);
+
+                        if (sign[t] < 0.0)
+                            cblas_dscal(ncols_a, -1.0, &V[(size_t)0 * LDT + t], LDT);
+                    }
+
+                    // Rank-1 batch: Cdst += W * V^T
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                ncols_b, ncols_a, Tcur,
+                                1.0, W, LDT, V, LDT,
+                                1.0, Cdst, (a==b ? ncols_a : naq));
+
+                    // Static term: S_sum = sum_t expdiag[t] * SD_a(i1)
+                    for (int k = 0; k < rep_size; ++k) {
+                        double* row = &S_sum[(size_t)k * ncols_max];
+                        std::fill(row, row + ncols_a, 0.0);
+                    }
+                    for (int t = 0; t < Tcur; ++t) {
+                        const int i1 = i1_list[t0 + t];
+                        const double w = expdiag[t];
+                        if (w == 0.0) continue;
+                        const double* SD_a = &dx[ base_dx(a, i1, nm, max_atoms, rep_size) ];
+                        for (int k = 0; k < rep_size; ++k) {
+                            const double* srow = SD_a + (size_t)k * (3 * max_atoms);
+                            double*       trow = &S_sum[(size_t)k * ncols_max];
+                            cblas_daxpy(ncols_a, w, srow, 1, trow, 1);
+                        }
+                    }
+                    // Cdst += SD_b^T * S_sum
+                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                ncols_b, ncols_a, rep_size,
+                                1.0, SD_b, lda_b,
+                                S_sum, ncols_max,
+                                1.0, Cdst, (a==b ? ncols_a : naq));
+                } // tile
+            } // j2
+
+            // Scatter diagonal block's lower triangle only
+            if (a == b) {
+                for (int r = 0; r < ncols_b; ++r) {
+                    double* kout = Kba + (size_t)r * naq;
+                    const double* crow = Cdiag.data() + (size_t)r * ncols_a;
+                    const int cmax = std::min(r, ncols_a - 1);
+                    cblas_daxpy(cmax + 1, 1.0, crow, 1, kout, 1); // add columns 0..cmax
+                }
+            }
+        } // a
+
+        free_aligned(D);
+        free_aligned(W);
+        free_aligned(V);
+        free_aligned(S_sum);
+        free_aligned(xbv);
     } // b
 }
 
