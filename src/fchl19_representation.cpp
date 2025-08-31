@@ -985,7 +985,7 @@ static inline PackedLabelSym pack_label_block_sym_T(
 //   double* alloc_aligned(size_t n);  // aligned, uninitialized; free with std::free
 
 //  ###########################################
-//  # FCHL19 KERNEL ASYMMETRIC IMPLEMENTATION #
+//  # FCHL19 KERNEL SYMMETRIC IMPLEMENTATION #
 //  ###########################################
 
 void flocal_kernel_symmetric(
@@ -1004,7 +1004,8 @@ void flocal_kernel_symmetric(
     if (!kernel) throw std::invalid_argument("kernel_out is null");
 
     
-    std::fill(kernel, kernel + static_cast<size_t>(nm) * (nm+1)/2, 0.0);
+    // std::fill(kernel, kernel + static_cast<size_t>(nm) * (nm+1)/2, 0.0);
+    std::fill(kernel, kernel + (size_t)nm * nm, 0.0);
     if (!(std::isfinite(sigma)) || sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
 
     const double inv_sigma2 = -1.0 / (2.0 * sigma * sigma);
