@@ -25,6 +25,9 @@ static inline double* alloc_aligned(size_t n, size_t alignment = 64) {
     return reinterpret_cast<double*>(ptr);
 }
 
+static inline void free_aligned(void* p) {
+    std::free(p);
+}
 
 // Compute the expected representation size so the caller doesn't have to.
 std::size_t compute_rep_size(size_t nelements, size_t nbasis2, size_t nbasis3, size_t nabasis) {
@@ -1100,7 +1103,8 @@ void fatomic_local_gradient_kernel(
     double sigma,
     double* kernel_out              // (nm1, naq2)
 ) {
-    // --- basic validation ---
+
+    // --- validation (unchanged) ---
     if (nm1<=0 || nm2<=0 || max_atoms1<=0 || max_atoms2<=0 || rep_size<=0)
         throw std::invalid_argument("All dims must be positive.");
     if (!std::isfinite(sigma) || sigma <= 0.0)
@@ -1108,101 +1112,162 @@ void fatomic_local_gradient_kernel(
     if (!kernel_out)
         throw std::invalid_argument("kernel_out is null.");
 
-    const size_t x1N = static_cast<size_t>(nm1) * max_atoms1 * rep_size;
-    const size_t x2N = static_cast<size_t>(nm2) * max_atoms2 * rep_size;
-    const size_t dXN = static_cast<size_t>(nm2) * max_atoms2 * rep_size * (3 * static_cast<size_t>(max_atoms2));
-    const size_t q1N = static_cast<size_t>(nm1) * max_atoms1;
-    const size_t q2N = static_cast<size_t>(nm2) * max_atoms2;
+    const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
+    const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t dXN = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
+    const size_t q1N = (size_t)nm1 * max_atoms1;
+    const size_t q2N = (size_t)nm2 * max_atoms2;
 
     if (x1.size() != x1N || x2.size() != x2N) throw std::invalid_argument("x1/x2 size mismatch.");
     if (dX2.size() != dXN) throw std::invalid_argument("dX2 size mismatch.");
     if (q1.size() != q1N || q2.size() != q2N) throw std::invalid_argument("q1/q2 size mismatch.");
     if ((int)n1.size() != nm1 || (int)n2.size() != nm2) throw std::invalid_argument("n1/n2 size mismatch.");
 
-    // compute naq2_ref and per-molecule b offsets into the derivative axis
-    std::vector<int> offs2(nm2);
+    // per-b offsets and ncols (3 * n2[b])
+    std::vector<int> offs2(nm2), ncols_b(nm2);
     int acc = 0;
     for (int b = 0; b < nm2; ++b) {
-        offs2[b] = acc;
-        acc += 3 * std::max(0, std::min(n2[b], max_atoms2));
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        offs2[b]  = acc;
+        ncols_b[b]= 3 * nb;
+        acc      += ncols_b[b];
     }
-    const int naq2_ref = acc;
-    if (naq2 != naq2_ref)
-        throw std::invalid_argument("naq2 != 3*sum(n2)");
+    if (naq2 != acc) throw std::invalid_argument("naq2 != 3*sum(n2)");
 
     // zero output
-    std::fill(kernel_out, kernel_out + static_cast<size_t>(nm1) * naq2, 0.0);
+    std::fill(kernel_out, kernel_out + (size_t)nm1 * naq2, 0.0);
 
     const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
     const double inv_sigma2  = -1.0 / (      sigma * sigma);
 
-    // temp distance vector d (reused)
-    std::vector<double> d(rep_size);
-
-    // --- main loops (mirrors Fortran structure) ---
-    // Parallelism: outer over 'a' (molecules in set-1)
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic) private(d)
-    #endif
+    // ------------------------------------------------------------
+    // Build per-label list of (a, j1) only for valid j1 < n1[a]
+    // ------------------------------------------------------------
+    std::unordered_map<int, std::vector<std::pair<int,int>>> lj1;
+    lj1.reserve(128);
     for (int a = 0; a < nm1; ++a) {
-
-        d.resize(rep_size);               // ensure capacity for this thread
         const int na = std::max(0, std::min(n1[a], max_atoms1));
-
-        // loop atoms in molecule a
         for (int j1 = 0; j1 < na; ++j1) {
+            const int lbl = q1[(size_t)a * max_atoms1 + j1]; // q1(a,j1)
+            lj1[lbl].emplace_back(a, j1);
+        }
+    }
 
-            const int q1_label = q1[idx_q1(a, j1, nm1, max_atoms1)];
+    // Heuristics for batching
+    constexpr int BATCH_T      = 512; // try 256..1024; tune for your machine
+    constexpr int T_MIN_GEMM   = 8;   // below this, GEMV often wins
+    const     int LDB          = BATCH_T; // row-major leading dimension for D (rep x T)
+    const     int LDC          = BATCH_T; // row-major leading dimension for H (ncols x T)
 
-            // loop molecules in set 2
-            for (int b = 0; b < nm2; ++b) {
-                const int nb = std::max(0, std::min(n2[b], max_atoms2));
-                if (nb == 0) continue;
+    // ------------------------------------------------------------
+    // Parallelize over b: each thread owns a disjoint column block
+    // ------------------------------------------------------------
+    #pragma omp parallel default(none) shared(x1,x2,dX2,q1,q2,n1,n2, \
+                                              nm1,nm2,max_atoms1,max_atoms2,rep_size,naq2, \
+                                              kernel_out, lj1, offs2, ncols_b, inv_2sigma2, inv_sigma2)
+    {
+        // thread-local scratch (aligned, reused)
+        double* D_scaled = alloc_aligned((size_t)rep_size * LDB);              // (rep_size x LDB)
+        double* H        = alloc_aligned((size_t)(3*max_atoms2) * LDC);        // (max ncols x LDC)
 
-                const int out_offset = offs2[b];           // start column in derivative axis for molecule b
-                const int ncols      = 3 * nb;             // length of the block for molecule b
-                const int lda_rowmaj = 3 * max_atoms2;     // leading dimension for row-major submatrix of dX2
+        #pragma omp for schedule(dynamic)
+        for (int b = 0; b < nm2; ++b) {
+            const int nb    = ncols_b[b] / 3;
+            const int ncols = ncols_b[b];
+            if (nb == 0) continue;
 
-                // for each atom j2 in molecule b
-                for (int j2 = 0; j2 < nb; ++j2) {
+            const int out_offset = offs2[b];
+            const int lda_rowmaj = 3 * max_atoms2;
 
-                    if (q1_label != q2[idx_q2(b, j2, nm2, max_atoms2)]) continue;
+            for (int j2 = 0; j2 < nb; ++j2) {
+                const int label = q2[(size_t)b * max_atoms2 + j2];
+                auto it = lj1.find(label);
+                if (it == lj1.end() || it->second.empty()) continue;
 
-                    // d = x1(a,j1,:) - x2(b,j2,:)
-                    double l2 = 0.0;
-                    for (int k = 0; k < rep_size; ++k) {
-                        const double diff = x1[idx_x1(a, j1, k, nm1, max_atoms1, rep_size)]
-                                          - x2[idx_x2(b, j2, k, nm2, max_atoms2, rep_size)];
-                        d[k] = diff;
-                        l2  += diff * diff;
+                const auto& aj1_list = it->second;
+
+                // dX2 slice for (b,j2): A = dX2(b, j2, :, 0:ncols)
+                const double* A = &dX2[ base_dx2(b, j2, nm2, max_atoms2, rep_size) ];
+
+                // Process (a,j1) in tiles
+                for (size_t t0 = 0; t0 < aj1_list.size(); t0 += BATCH_T) {
+                    const int T = (int)std::min<size_t>(BATCH_T, aj1_list.size() - t0);
+
+                    if (T < T_MIN_GEMM) {
+                        // ---- fallback: original GEMV path for tiny batches ----
+                        for (int t = 0; t < T; ++t) {
+                            const int a  = aj1_list[t0 + t].first;
+                            const int j1 = aj1_list[t0 + t].second;
+
+                            // d, l2
+                            double l2 = 0.0;
+                            // We reuse column t in D_scaled as a temporary buffer for d (no extra alloc)
+                            double* dcol = &D_scaled[(size_t)0 * LDB + t]; // start; access [k*LDB + t]
+                            for (int k = 0; k < rep_size; ++k) {
+                                const double diff =
+                                    x1[((size_t)a * max_atoms1 + j1) * rep_size + k] -
+                                    x2[((size_t)b * max_atoms2 + j2) * rep_size + k];
+                                dcol[(size_t)k * LDB] = diff; // place at k*LDB + t
+                                l2 += diff * diff;
+                            }
+                            const double alpha = std::exp(l2 * inv_2sigma2) * inv_sigma2;
+
+                            cblas_dgemv(CblasRowMajor, CblasTrans,
+                                        rep_size, ncols, alpha,
+                                        A, lda_rowmaj,
+                                        /*x:*/ dcol, LDB,   // stride LDB steps the same column
+                                        1.0,
+                                        &kernel_out[(size_t)a * naq2 + out_offset], 1);
+                        }
+                        continue;
                     }
 
-                    // expd = inv_sigma2 * exp(sum(d^2) * inv_2sigma2)
-                    const double alpha = std::exp(l2 * inv_2sigma2) * inv_sigma2;
+                    // ---- batched DGEMM path ----
+                    // 1) Build D_scaled (rep_size x T): column t is alpha_t * d_t
+                    for (int t = 0; t < T; ++t) {
+                        const int a  = aj1_list[t0 + t].first;
+                        const int j1 = aj1_list[t0 + t].second;
 
-                    // A = dX2(b, i2=j2, :, 0 : ncols-1), row-major contiguous with lda = 3*max_atoms2
-                    const double* A = &dX2[ base_dx2(b, j2, nm2, max_atoms2, rep_size) ];
+                        double l2 = 0.0;
+                        for (int k = 0; k < rep_size; ++k) {
+                            const double diff =
+                                x1[((size_t)a * max_atoms1 + j1) * rep_size + k] -
+                                x2[((size_t)b * max_atoms2 + j2) * rep_size + k];
+                            D_scaled[(size_t)k * LDB + t] = diff; // D[k,t]
+                            l2 += diff * diff;
+                        }
+                        const double alpha_t = std::exp(l2 * inv_2sigma2) * inv_sigma2;
+                        for (int k = 0; k < rep_size; ++k) {
+                            D_scaled[(size_t)k * LDB + t] *= alpha_t;
+                        }
+                    }
 
-                    // y += alpha * A^T * d
-                    // RowMajor: A is (m=rep_size, n=ncols), lda = lda_rowmaj (>= ncols)
-                    cblas_dgemv(
-                        CblasRowMajor,
-                        CblasTrans,
-                        rep_size,          // m
-                        ncols,             // n
-                        alpha,             // alpha
-                        A,
-                        lda_rowmaj,        // lda (number of cols in storage)
-                        d.data(),
-                        1,
-                        1.0,               // beta (accumulate)
-                        &kernel_out[ static_cast<size_t>(a) * naq2 + out_offset ],
-                        1
-                    );
-                } // j2
-            } // b
-        } // j1
-    } // a
+                    // 2) GEMM: H = A^T (ncols x rep) * D_scaled (rep x T)  -> H (ncols x T)
+                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                ncols, T, rep_size,
+                                1.0,
+                                A, lda_rowmaj,
+                                D_scaled, LDB,
+                                0.0,
+                                H, LDC);
+
+                    // 3) Scatter-add columns of H into kernel_out[a, out_offset : out_offset+ncols]
+                    for (int t = 0; t < T; ++t) {
+                        const int a  = aj1_list[t0 + t].first;
+                        double* kout = &kernel_out[(size_t)a * naq2 + out_offset];
+                        const double* hcol = &H[(size_t)t]; // H[r,t] at H[r*LDC + t]
+                        // contiguous add
+                        for (int r = 0; r < ncols; ++r) {
+                            kout[r] += hcol[(size_t)r * LDC];
+                        }
+                    }
+                } // tiles
+            } // j2
+        } // omp for
+
+        free_aligned(D_scaled);
+        free_aligned(H);
+    } // omp parallel
 }
 
 } // namespace fchl19 

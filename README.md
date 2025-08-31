@@ -42,11 +42,12 @@ On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the defa
 
 ## Timings
 
-| Function Name | QML [s] | Kernelforge [s] |
+| Benchmark | QML [s] | Kernelforge [s] |
 |:---------------|------------:|--------------------:|
 | Upper triangle Gaussian kernel (16K x 16K) | 1.82 | 0.64 |
-| FCHL19 Local Gaussian kernel (10K x 10K) | 76.81 | 18.15 |
-| Kernel Jacobian |  |  |
+| 1K FCHL19 descriptors (1K) | ? |  |
+| FCHL19 Local Gaussian scalar kernel (10K x 10K) | 76.81 | 18.15 |
+| FCHL19 Local Gaussian gradient Kernel (1K x 2700K | 32.54 | 1.52 |
 | Kernel Hessian |  |  |
 
 ## TODO list
