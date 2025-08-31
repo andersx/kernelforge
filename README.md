@@ -44,7 +44,8 @@ On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the defa
 
 | Function Name | QML [s] | Kernelforge [s] |
 |:---------------|------------:|--------------------:|
-| Upper triangle Gaussian kernel 16K x 16K| 1.82 | 0.64 |
+| Upper triangle Gaussian kernel (16K x 16K) | 1.82 | 0.64 |
+| FCHL19 Local Gaussian kernel (10K x 10K) | 76.81 | 18.15 |
 | Kernel Jacobian |  |  |
 | Kernel Hessian |  |  |
 
@@ -67,13 +68,20 @@ The goal is to remove pain-points of existing QML libraries
 ## Priority list for the next months:
 
 - [x] Finish the inverse-distance kernel and its Jacobian
-- [x] Finalize the C++ interface
+- [x] Make Pybind11 interface 
+  - [ ] Finalize the C++ interface
+  - [ ] Finalize the legacy Fortran interface (will be removed in the future)
 - [x] Finish the Gaussian kernel
 - [x] Notebook with rMD17 example
 - [x] Finish the Jacobian and Hessian kernels
 - [x] Notebook with rMD17 forces example
-- [ ] Add FCHL19 descriptor with derivatives
-- [ ] Add FCHL19 kernels with derivatives (local/elemental)
+- FCHL19 support:
+  - [x] Add FCHL19 descriptors
+  - [x] Add FCHL19 kernels (local/elemental)
+  - [x] Add FCHL19 descriptor with derivatives
+  - [x] Add FCHL19 kernel Jacobian 
+  - [ ] Add FCHL19 kernel Hessian (GDML-style)
+  - [ ] Add FCHL19 full GPR kernel 
 - [ ] Finish the random Fourier features kernel and its Jacobian
 - [ ] Notebook with rMD17 random Fourier features examples
 

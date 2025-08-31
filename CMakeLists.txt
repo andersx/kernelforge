@@ -46,15 +46,28 @@ pybind11_add_module(_invdist MODULE
     $<TARGET_OBJECTS:kf_invdist>
 )
 
-
 set_target_properties(_invdist PROPERTIES OUTPUT_NAME "_invdist")
+
+# My fchl19 module in C++
+add_library(kf_fchl19 OBJECT src/fchl19_representation.cpp)
+set_property(TARGET kf_fchl19 PROPERTY POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(kf_fchl19 PRIVATE kf_common)
+
+pybind11_add_module(_fchl19 MODULE
+    src/bindings_fchl19.cpp
+    $<TARGET_OBJECTS:kf_fchl19>
+)
+
+set_target_properties(_fchl19 PROPERTIES OUTPUT_NAME "_fchl19")
 
 find_package(OpenMP)
 if (OpenMP_CXX_FOUND)
   target_link_libraries(_kernels PRIVATE OpenMP::OpenMP_CXX)
+  target_link_libraries(_fchl19 PRIVATE OpenMP::OpenMP_CXX)
 endif()
 if (OpenMP_Fortran_FOUND)
   target_link_libraries(_kernelforge PRIVATE OpenMP::OpenMP_Fortran)
+  target_link_libraries(_fchl19 PRIVATE OpenMP::OpenMP_Fortran)
 endif()
 
 # Optional BLAS/LAPACK backends (enable later if needed)
@@ -62,6 +75,7 @@ if(APPLE)
   find_library(ACCELERATE Accelerate REQUIRED)
   target_link_libraries(_kernelforge PRIVATE ${ACCELERATE})
   target_link_libraries(_kernels PRIVATE ${ACCELERATE})
+  target_link_libraries(_fchl19 PRIVATE BLAS::BLAS)
 elseif(WIN32)
   find_package(MKL CONFIG REQUIRED)
   target_link_libraries(_kernelforge PRIVATE MKL::MKL)
@@ -70,6 +84,7 @@ else()
   find_package(BLAS REQUIRED)
   target_link_libraries(_kernelforge PRIVATE BLAS::BLAS)
   target_link_libraries(_kernels PRIVATE BLAS::BLAS)
+  target_link_libraries(_fchl19 PRIVATE BLAS::BLAS)
 endif()
 
 # Conservative optimization flags (portable wheels). Override via env if you want.
@@ -82,13 +97,15 @@ endif()
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(kf_kernels PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
   target_compile_options(kf_invdist PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
+  target_compile_options(kf_fchl19 PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
-    target_compile_options(kf_kernels PRIVATE -O3 -qopt-report=3 -qopenmp -xHost)
-    target_compile_options(kf_invdist PRIVATE -O3 -qopt-report=3 -qopenmp -xHost)
+    target_compile_options(kf_kernels PRIVATE -Ofast -qopenmp -mtune=native -xHost)
+    target_compile_options(kf_invdist PRIVATE -Ofast -qopenmp -mtune=native -xHost)
+    target_compile_options(kf_fchl19 PRIVATE -Ofast -qopenmp -mtune=native -xHost)
 endif()
 
 # Install the compiled extension into the Python package and the Python shim
-install(TARGETS _kernelforge _kernels _invdist
+install(TARGETS _kernelforge _kernels _invdist _fchl19
   LIBRARY DESTINATION kernelforge   # Linux/macOS
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )
