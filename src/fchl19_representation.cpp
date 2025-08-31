@@ -1083,6 +1083,10 @@ static inline size_t idx_q1(int a, int j1, int nm1, int max_atoms1) {
 static inline size_t idx_q2(int b, int j2, int nm2, int max_atoms2) {
     return static_cast<size_t>(b) * max_atoms2 + j2;
 }
+// dx1: (nm1, max_atoms1, rep, 3*max_atoms1)
+static inline size_t base_dx1(int a, int i1, int nm1, int max_atoms1, int rep) {
+    return (((size_t)a * max_atoms1 + i1) * rep) * (3 * (size_t)max_atoms1);
+}
 // dX2: (nm2, max_atoms2, rep, 3*max_atoms2)
 static inline size_t base_dx2(int b, int i2, int nm2, int max_atoms2, int rep) {
     return ( (static_cast<size_t>(b) * max_atoms2 + i2) * rep ) * (3 * static_cast<size_t>(max_atoms2) );
@@ -1269,6 +1273,223 @@ void fatomic_local_gradient_kernel(
         free_aligned(H);
     } // omp parallel
 }
+
+// #########################
+// # FCHL19 HESSIAN KERNEL #
+// #########################
+// Fortran-style FGDML Hessian with identical BLAS sequence (SYR → SYMM → GEMM), row-major.
+void fgdml_kernel(
+    const std::vector<double>& x1,   // (nm1, max_atoms1, rep_size)
+    const std::vector<double>& x2,   // (nm2, max_atoms2, rep_size)
+    const std::vector<double>& dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double>& dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const std::vector<int>&    q1,   // (nm1, max_atoms1)
+    const std::vector<int>&    q2,   // (nm2, max_atoms2)
+    const std::vector<int>&    n1,   // (nm1)
+    const std::vector<int>&    n2,   // (nm2)
+    int nm1, int nm2,
+    int max_atoms1, int max_atoms2,
+    int rep_size,
+    int naq1,                        // must be 3 * sum_a n1[a]
+    int naq2,                        // must be 3 * sum_b n2[b]
+    double sigma,
+    double* kernel_out               // (naq2, naq1), row-major => idx = row * naq1 + col
+) {
+    // ---- validation ----
+    if (nm1<=0 || nm2<=0 || max_atoms1<=0 || max_atoms2<=0 || rep_size<=0)
+        throw std::invalid_argument("All dims must be positive.");
+    if (!std::isfinite(sigma) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be positive and finite.");
+    if (!kernel_out) throw std::invalid_argument("kernel_out is null.");
+
+    const size_t x1N  = (size_t)nm1 * max_atoms1 * rep_size;
+    const size_t x2N  = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t dx1N = (size_t)nm1 * max_atoms1 * rep_size * (3 * (size_t)max_atoms1);
+    const size_t dx2N = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
+    const size_t q1N  = (size_t)nm1 * max_atoms1;
+    const size_t q2N  = (size_t)nm2 * max_atoms2;
+
+    if (x1.size()!=x1N || x2.size()!=x2N) throw std::invalid_argument("x1/x2 size mismatch.");
+    if (dx1.size()!=dx1N || dx2.size()!=dx2N) throw std::invalid_argument("dx1/dx2 size mismatch.");
+    if (q1.size()!=q1N || q2.size()!=q2N)     throw std::invalid_argument("q1/q2 size mismatch.");
+    if ((int)n1.size()!=nm1 || (int)n2.size()!=nm2) throw std::invalid_argument("n1/n2 size mismatch.");
+
+    // column offsets (set-1) and row offsets (set-2)
+    std::vector<int> offs1(nm1), offs2(nm2);
+    int sum1 = 0;
+    for (int a = 0; a < nm1; ++a) {
+        offs1[a] = sum1;
+        sum1 += 3 * std::max(0, std::min(n1[a], max_atoms1));
+    }
+    int sum2 = 0;
+    for (int b = 0; b < nm2; ++b) {
+        offs2[b] = sum2;
+        sum2 += 3 * std::max(0, std::min(n2[b], max_atoms2));
+    }
+    if (naq1 != sum1) throw std::invalid_argument("naq1 != 3*sum(n1)");
+    if (naq2 != sum2) throw std::invalid_argument("naq2 != 3*sum(n2)");
+
+    // zero output
+    std::fill(kernel_out, kernel_out + (size_t)naq2 * naq1, 0.0);
+
+    // scalars
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma4  = -1.0 / (      sigma * sigma * sigma * sigma); // (< 0)
+    const double sigma2_neg  = - (sigma * sigma);                            // (< 0)
+
+    // ----------------------------------------------------------------
+    // Precompute, for each molecule a in set-1, a map: label -> list of i1
+    // ----------------------------------------------------------------
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_i1(nm1);
+    for (int a = 0; a < nm1; ++a) {
+        const int na = std::max(0, std::min(n1[a], max_atoms1));
+        auto& m = lab_to_i1[a];
+        m.reserve(64);
+        for (int i1 = 0; i1 < na; ++i1) {
+            m[q1[(size_t)a * max_atoms1 + i1]].push_back(i1);
+        }
+    }
+
+    // ---- batching parameters (tune) ----
+    constexpr int T_MAX    = 512;         // columns per tile for rank-1 batching
+    const int     LDT      = T_MAX;       // row-major leading dimension for column tiles
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int b = 0; b < nm2; ++b) {
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        if (nb == 0) continue;
+        const int ncols_b   = 3 * nb;               // rows in K block for this b
+        const int lda2      = 3 * max_atoms2;
+        const int row_off   = offs2[b];
+
+        // thread-local scratch
+        std::vector<double> d(rep_size);
+        std::vector<double> Wtile((size_t)ncols_b * LDT); // stores columns: sqrt(expd)*w
+        std::vector<double> Vtile((size_t)(3*max_atoms1) * LDT); // over-alloc; we only use first ncols_a rows
+        std::vector<double> S1_sum; // allocated per (a) when known
+
+        for (int a = 0; a < nm1; ++a) {
+            const int na = std::max(0, std::min(n1[a], max_atoms1));
+            if (na == 0) continue;
+            const int ncols_a = 3 * na;            // cols in K block for this a
+            const int col_off = offs1[a];
+            const int lda1    = 3 * max_atoms1;
+            if ((int)S1_sum.size() < rep_size * ncols_a) S1_sum.resize((size_t)rep_size * ncols_a);
+
+            // K block pointer (rows for b, cols for a)
+            double* Kba = &kernel_out[(size_t)row_off * naq1 + col_off];
+
+            // access map label->i1 once
+            const auto& label_i1 = lab_to_i1[a];
+
+            // loop atoms i2 in molecule b
+            for (int i2 = 0; i2 < nb; ++i2) {
+                const int label = q2[(size_t)b * max_atoms2 + i2];
+                auto it = label_i1.find(label);
+                if (it == label_i1.end()) continue;
+                const auto& i1_list = it->second;
+                if (i1_list.empty()) continue;
+
+                // SD2 slice for (b,i2)
+                const double* SD2 = &dx2[ base_dx2(b, i2, nm2, max_atoms2, rep_size) ];
+
+                // ------ STATIC TERM: Kba += SD2^T * (sum_i1 expdiag * SD1_i1) ------
+                std::fill(S1_sum.begin(), S1_sum.begin() + (size_t)rep_size * ncols_a, 0.0);
+                for (int i1 : i1_list) {
+                    // distance d = x1(a,i1,:) - x2(b,i2,:)
+                    double l2 = 0.0;
+                    for (int k = 0; k < rep_size; ++k) {
+                        const double diff =
+                            x1[idx_x1(a, i1, k, nm1, max_atoms1, rep_size)] -
+                            x2[idx_x2(b, i2, k, nm2, max_atoms2, rep_size)];
+                        d[k] = diff;
+                        l2  += diff * diff;
+                    }
+                    const double exp_base = std::exp(l2 * inv_2sigma2);
+                    const double expd     = inv_sigma4 * exp_base;     // (<0)
+                    const double expdiag  = sigma2_neg * expd;         // (>0)
+
+                    // S1_sum += expdiag * SD1(a,i1)
+                    const double* SD1 = &dx1[ base_dx1(a, i1, nm1, max_atoms1, rep_size) ];
+                    // row-major axpy over matrix: rep_size x ncols_a
+                    for (int k = 0; k < rep_size; ++k) {
+                        const double* srow = SD1 + (size_t)k * (3 * max_atoms1);
+                        double*       trow = S1_sum.data() + (size_t)k * ncols_a;
+                        // trow[0:ncols_a] += expdiag * srow[0:ncols_a]
+                        cblas_daxpy(ncols_a, expdiag, srow, 1, trow, 1);
+                    }
+                }
+                // One GEMM for the whole static term of this (a,b,i2)
+                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            ncols_b, ncols_a, rep_size,
+                            1.0,
+                            SD2,    lda2,        // SD2^T  via Trans
+                            S1_sum.data(), ncols_a,
+                            1.0,
+                            Kba,    naq1);
+
+                // ------ RANK-1 TERM: sum_i1 expd * (SD2^T d) (SD1^T d)^T ------
+                // Batch across i1: build W' and V' columns, each scaled by sqrt(expd)
+                for (size_t t0 = 0; t0 < i1_list.size(); t0 += T_MAX) {
+                    const int T = (int)std::min<size_t>(T_MAX, i1_list.size() - t0);
+
+                    // build columns
+                    for (int t = 0; t < T; ++t) {
+                        const int i1 = i1_list[t0 + t];
+                        // d and l2
+                        double l2 = 0.0;
+                        for (int k = 0; k < rep_size; ++k) {
+                            const double diff =
+                                x1[idx_x1(a, i1, k, nm1, max_atoms1, rep_size)] -
+                                x2[idx_x2(b, i2, k, nm2, max_atoms2, rep_size)];
+                            d[k] = diff;
+                            l2  += diff * diff;
+                        }
+                        const double exp_base = std::exp(l2 * inv_2sigma2);
+                        double expd = inv_sigma4 * exp_base;  // can be negative
+                        if (expd < 0.0) expd = -expd;         // sqrt needs non-neg; sign handled via V later
+                        const double s = std::sqrt(expd);
+
+                        // w = SD2^T d  -> put into Wtile[:, t]
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    rep_size, ncols_b,
+                                    s,                  // alpha = sqrt(|expd|)
+                                    SD2, lda2,
+                                    d.data(), 1,
+                                    0.0,
+                                    &Wtile[(size_t)t], LDT);  // write with stride LDT
+
+                        // v = SD1^T d  -> put into Vtile[:ncols_a, t]
+                        const double* SD1 = &dx1[ base_dx1(a, i1, nm1, max_atoms1, rep_size) ];
+                        double alpha_v = s;
+                        // If original expd was negative, carry the sign on V
+                        if (inv_sigma4 * exp_base < 0.0) alpha_v = -alpha_v;
+
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    rep_size, ncols_a,
+                                    alpha_v,
+                                    SD1, lda1,
+                                    d.data(), 1,
+                                    0.0,
+                                    &Vtile[(size_t)t], LDT);
+                    }
+
+                    // One GEMM for T rank-1s: Kba += Wtile * Vtile^T
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                ncols_b, ncols_a, T,
+                                1.0,
+                                Wtile.data(), LDT,    // (ncols_b x T)
+                                Vtile.data(), LDT,    // (ncols_a x T) as columns ⇒ Trans gives T x ncols_a
+                                1.0,
+                                Kba, naq1);
+                }
+            } // i2
+        } // a
+    } // b
+}
+
 
 } // namespace fchl19 
 

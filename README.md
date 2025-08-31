@@ -48,8 +48,8 @@ On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the defa
 | 1K FCHL19 descriptors (1K) | ? | 0.43 |
 | 1K FCHL19 descriptors+jacobian (1K) | ? | 0.62 |
 | FCHL19 Local Gaussian scalar kernel (10K x 10K) | 76.81 | 18.15 |
-| FCHL19 Local Gaussian gradient Kernel (1K x 2700K) | 32.54 | 1.52 |
-| Kernel Hessian |  |  |
+| FCHL19 Local Gaussian gradient kernel (1K x 2700K) | 32.54 | 1.52 |
+| FCHL19 Local Gaussian Hessian kernel (5400K x 5400K) | 29.68 | 2.05 |
 
 ## TODO list
 
@@ -82,7 +82,7 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Add FCHL19 kernels (local/elemental)
   - [x] Add FCHL19 descriptor with derivatives
   - [x] Add FCHL19 kernel Jacobian 
-  - [ ] Add FCHL19 kernel Hessian (GDML-style)
+  - [x] Add FCHL19 kernel Hessian (GDML-style)
   - [ ] Add FCHL19 full GPR kernel 
 - [ ] Finish the random Fourier features kernel and its Jacobian
 - [ ] Notebook with rMD17 random Fourier features examples

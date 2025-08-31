@@ -126,4 +126,22 @@ void fatomic_local_gradient_kernel(
     double* kernel_out               // (nm1, naq2) row-major
 );
 
+void fgdml_kernel(
+    const std::vector<double>& x1,   // (nm1, max_atoms1, rep_size)
+    const std::vector<double>& x2,   // (nm2, max_atoms2, rep_size)
+    const std::vector<double>& dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double>& dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const std::vector<int>&    q1,   // (nm1, max_atoms1)
+    const std::vector<int>&    q2,   // (nm2, max_atoms2)
+    const std::vector<int>&    n1,   // (nm1)
+    const std::vector<int>&    n2,   // (nm2)
+    int nm1, int nm2,
+    int max_atoms1, int max_atoms2,
+    int rep_size,
+    int naq1,                        // must equal 3 * sum_a n1[a]
+    int naq2,                        // must equal 3 * sum_b n2[b]
+    double sigma,
+    double* kernel_out               // (naq2, naq1) row-major
+);
+
 } // namespace fchl19

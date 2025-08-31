@@ -485,10 +485,146 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     return K;
 }
 
+static py::array_t<double> fgdml_kernel_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> x1,   // (nm1, max_atoms1, rep)
+    py::array_t<double, py::array::c_style | py::array::forcecast> x2,   // (nm2, max_atoms2, rep)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dx1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dx2,  // (nm2, max_atoms2, rep, 3*max_atoms2)
+    py::array_t<int,    py::array::c_style | py::array::forcecast> q1,   // (nm1, max_atoms1)
+    py::array_t<int,    py::array::c_style | py::array::forcecast> q2,   // (nm2, max_atoms2)
+    py::array_t<int,    py::array::c_style | py::array::forcecast> n1,   // (nm1,)
+    py::array_t<int,    py::array::c_style | py::array::forcecast> n2,   // (nm2,)
+    double sigma
+) {
+    // ---- shape checks ----
+    if (x1.ndim()!=3 || x2.ndim()!=3 || dx1.ndim()!=4 || dx2.ndim()!=4 ||
+        q1.ndim()!=2 || q2.ndim()!=2 || n1.ndim()!=1 || n2.ndim()!=1) {
+        throw std::invalid_argument(
+            "Expected: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
+            "dx1(nm1,max_atoms1,rep,3*max_atoms1), dx2(nm2,max_atoms2,rep,3*max_atoms2), "
+            "q1(nm1,max_atoms1), q2(nm2,max_atoms2), n1(nm1), n2(nm2).");
+    }
+
+    const int nm1        = static_cast<int>(x1.shape(0));
+    const int max_atoms1 = static_cast<int>(x1.shape(1));
+    const int rep        = static_cast<int>(x1.shape(2));
+
+    const int nm2        = static_cast<int>(x2.shape(0));
+    const int max_atoms2 = static_cast<int>(x2.shape(1));
+
+    if (x2.shape(2) != rep)                      throw std::invalid_argument("x2 rep mismatch.");
+    if (dx1.shape(0)!=nm1 || dx1.shape(1)!=max_atoms1 || dx1.shape(2)!=rep || dx1.shape(3)!=3*max_atoms1)
+        throw std::invalid_argument("dx1 shape mismatch.");
+    if (dx2.shape(0)!=nm2 || dx2.shape(1)!=max_atoms2 || dx2.shape(2)!=rep || dx2.shape(3)!=3*max_atoms2)
+        throw std::invalid_argument("dx2 shape mismatch.");
+    if (q1.shape(0)!=nm1 || q1.shape(1)!=max_atoms1) throw std::invalid_argument("q1 shape mismatch.");
+    if (q2.shape(0)!=nm2 || q2.shape(1)!=max_atoms2) throw std::invalid_argument("q2 shape mismatch.");
+    if (n1.shape(0)!=nm1) throw std::invalid_argument("n1 length mismatch.");
+    if (n2.shape(0)!=nm2) throw std::invalid_argument("n2 length mismatch.");
+
+    // ---- flatten to std::vector (C-contiguous guaranteed by c_style|forcecast) ----
+    const std::size_t x1N  = (std::size_t)nm1 * max_atoms1 * rep;
+    const std::size_t x2N  = (std::size_t)nm2 * max_atoms2 * rep;
+    const std::size_t dx1N = (std::size_t)nm1 * max_atoms1 * rep * (3 * (std::size_t)max_atoms1);
+    const std::size_t dx2N = (std::size_t)nm2 * max_atoms2 * rep * (3 * (std::size_t)max_atoms2);
+    const std::size_t q1N  = (std::size_t)nm1 * max_atoms1;
+    const std::size_t q2N  = (std::size_t)nm2 * max_atoms2;
+
+    std::vector<double> x1v(x1N), x2v(x2N), dx1v(dx1N), dx2v(dx2N);
+    std::vector<int>    q1v(q1N), q2v(q2N), n1v(nm1), n2v(nm2);
+
+    std::copy_n(x1.data(),  x1N,  x1v.begin());
+    std::copy_n(x2.data(),  x2N,  x2v.begin());
+    std::copy_n(dx1.data(), dx1N, dx1v.begin());
+    std::copy_n(dx2.data(), dx2N, dx2v.begin());
+    std::copy_n(q1.data(),  q1N,  q1v.begin());
+    std::copy_n(q2.data(),  q2N,  q2v.begin());
+    std::copy_n(n1.data(),  (std::size_t)nm1, n1v.begin());
+    std::copy_n(n2.data(),  (std::size_t)nm2, n2v.begin());
+
+    // ---- compute naq1 = 3*sum_a min(max(n1[a],0), max_atoms1), naq2 analogously ----
+    long long naq1_ll = 0, naq2_ll = 0;
+    for (int a = 0; a < nm1; ++a) {
+        int na = n1v[a]; if (na < 0) na = 0; if (na > max_atoms1) na = max_atoms1;
+        naq1_ll += 3ll * na;
+    }
+    for (int b = 0; b < nm2; ++b) {
+        int nb = n2v[b]; if (nb < 0) nb = 0; if (nb > max_atoms2) nb = max_atoms2;
+        naq2_ll += 3ll * nb;
+    }
+    if (naq1_ll < 0 || naq2_ll < 0) throw std::overflow_error("naq1/naq2 negative?");
+    if (naq1_ll > std::numeric_limits<py::ssize_t>::max() ||
+        naq2_ll > std::numeric_limits<py::ssize_t>::max())
+        throw std::overflow_error("naq1/naq2 too large.");
+    const int naq1 = static_cast<int>(naq1_ll);
+    const int naq2 = static_cast<int>(naq2_ll);
+
+    // If any side has zero derivatives, return an empty shaped array
+    if (naq1 == 0 || naq2 == 0) {
+        py::array_t<double> K(
+            py::array::ShapeContainer{ (py::ssize_t)naq2, (py::ssize_t)naq1 },
+            py::array::StridesContainer{ (py::ssize_t)(naq1 * sizeof(double)), (py::ssize_t)sizeof(double) }
+        );
+        return K; // NumPy owns a small empty buffer
+    }
+
+    // ---- aligned output allocation (naq2 x naq1), row-major ----
+    double* Kptr = aligned_alloc_64((std::size_t)naq2 * naq1);
+    auto capsule = py::capsule(Kptr, [](void* p){ aligned_free_64(p); });
+
+    py::array_t<double> K(
+        /*shape*/   py::array::ShapeContainer{ (py::ssize_t)naq2, (py::ssize_t)naq1 },
+        /*strides*/ py::array::StridesContainer{
+            (py::ssize_t)(naq1 * sizeof(double)),
+            (py::ssize_t)sizeof(double)
+        },
+        /*ptr*/     Kptr,
+        /*base*/    capsule
+    );
+
+    // ---- call C++ (release GIL) ----
+    {
+        py::gil_scoped_release release;
+        fchl19::fgdml_kernel(
+            x1v, x2v, dx1v, dx2v, q1v, q2v, n1v, n2v,
+            nm1, nm2, max_atoms1, max_atoms2, rep,
+            naq1, naq2, sigma,
+            Kptr
+        );
+    }
+
+    return K;
+}
+
+
+
 
 PYBIND11_MODULE(_fchl19, m) {
     m.doc() = "Pybind11 bindings for FCHL-like ACSF generator";
         m.doc() = "FCHL19 local kernel (C++/pybind11)";
+        m.def("fgdml_kernel", &fgdml_kernel_py,
+          py::arg("x1"), py::arg("x2"),
+          py::arg("dx1"), py::arg("dx2"),
+          py::arg("q1"), py::arg("q2"),
+          py::arg("n1"), py::arg("n2"),
+          py::arg("sigma"),
+          R"(Compute the FGDML Hessian kernel.
+
+Args:
+  x1:  (nm1, max_atoms1, rep)
+  x2:  (nm2, max_atoms2, rep)
+  dx1: (nm1, max_atoms1, rep, 3*max_atoms1)
+  dx2: (nm2, max_atoms2, rep, 3*max_atoms2)
+  q1:  (nm1, max_atoms1)
+  q2:  (nm2, max_atoms2)
+  n1:  (nm1,)
+  n2:  (nm2,)
+  sigma: positive float
+
+Returns:
+  K: (naq2, naq1) row-major, where
+     naq1 = 3 * sum(n1), naq2 = 3 * sum(n2)
+)");
 
     m.def("fatomic_local_gradient_kernel", &fatomic_local_gradient_kernel_py,
           py::arg("x1"), py::arg("x2"), py::arg("dX2"),
