@@ -45,9 +45,10 @@ On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the defa
 | Benchmark | QML [s] | Kernelforge [s] |
 |:---------------|------------:|--------------------:|
 | Upper triangle Gaussian kernel (16K x 16K) | 1.82 | 0.64 |
-| 1K FCHL19 descriptors (1K) | ? |  |
+| 1K FCHL19 descriptors (1K) | ? | 0.43 |
+| 1K FCHL19 descriptors+jacobian (1K) | ? | 0.62 |
 | FCHL19 Local Gaussian scalar kernel (10K x 10K) | 76.81 | 18.15 |
-| FCHL19 Local Gaussian gradient Kernel (1K x 2700K | 32.54 | 1.52 |
+| FCHL19 Local Gaussian gradient Kernel (1K x 2700K) | 32.54 | 1.52 |
 | Kernel Hessian |  |  |
 
 ## TODO list
