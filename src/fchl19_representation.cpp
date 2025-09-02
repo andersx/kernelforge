@@ -1,7 +1,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cblas.h>
+#if defined(__APPLE__)
+  #include <Accelerate/Accelerate.h>
+#else
+  #include <cblas.h>
+#endif
 #include <cstddef>
 #include <cstdint>
 #include <limits>

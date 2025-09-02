@@ -1,6 +1,20 @@
 cmake_minimum_required(VERSION 3.18)
 project(kernelforge LANGUAGES C CXX Fortran)
 
+if(APPLE)
+  set(DISABLE_NATIVE_FLAGS TRUE)
+  # Target macOS 14+, this is required for "new lapack" in Accelerate
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "" FORCE)
+  add_compile_definitions(ACCELERATE_NEW_LAPACK)
+
+  set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+
+endif()
+
+# Position-independent code for all targets (nice for Python extensions)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+
 # Python + pybind11
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
@@ -75,11 +89,12 @@ if(APPLE)
   find_library(ACCELERATE Accelerate REQUIRED)
   target_link_libraries(_kernelforge PRIVATE ${ACCELERATE})
   target_link_libraries(_kernels PRIVATE ${ACCELERATE})
-  target_link_libraries(_fchl19 PRIVATE BLAS::BLAS)
+  target_link_libraries(_fchl19 PRIVATE ${ACCELERATE})
 elseif(WIN32)
   find_package(MKL CONFIG REQUIRED)
   target_link_libraries(_kernelforge PRIVATE MKL::MKL)
   target_link_libraries(_kernels PRIVATE MKL::MKL)
+  target_link_libraries(_fchl19 PRIVATE MKL::MKL)
 else()
   find_package(BLAS REQUIRED)
   target_link_libraries(_kernelforge PRIVATE BLAS::BLAS)
@@ -91,13 +106,13 @@ endif()
 if (CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM" OR CMAKE_Fortran_COMPILER_ID STREQUAL "Intel")
   target_compile_options(kf_fortran PRIVATE -O3 -ipo -xHost -fp-model fast=2 -no-prec-div -fno-alias -qopenmp)
 elseif (CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-  target_compile_options(kf_fortran PRIVATE -O3 -fopenmp -mcpu=native -mtune=native -ffast-math -ftree-vectorize)
+  target_compile_options(kf_fortran PRIVATE -O3 -fopenmp -mcpu=native -ffast-math -mtune=native -ftree-vectorize)
 endif()
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(kf_kernels PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
-  target_compile_options(kf_invdist PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
-  target_compile_options(kf_fchl19 PRIVATE -O3 -march=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
+  target_compile_options(kf_kernels PRIVATE -O3 -mcpu=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
+  target_compile_options(kf_invdist PRIVATE -O3 -mcpu=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
+  target_compile_options(kf_fchl19 PRIVATE -O3 -mcpu=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
     target_compile_options(kf_kernels PRIVATE -Ofast -qopenmp -mtune=native -xHost)
     target_compile_options(kf_invdist PRIVATE -Ofast -qopenmp -mtune=native -xHost)
