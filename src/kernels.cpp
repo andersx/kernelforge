@@ -1,25 +1,27 @@
-#include <cblas.h>
+#include <algorithm>
 #include <cmath>
+#include <cstring>   // std::memcpy
 #include <omp.h>
 #include <iostream>
 #include <vector>
-
-#include <cblas.h>
-#include <vector>
-#include <cmath>
 #include <stdexcept>
-#include <algorithm>
-#include <cstring>   // std::memcpy
 
+#if defined(__APPLE__)
+  #include <Accelerate/Accelerate.h>   // brings in clapack.h too
+  #define LAPACK_CHAR_ARG char
+#else
+  #include <cblas.h>
+  #define LAPACK_CHAR_ARG const char
 // Fortran LAPACK declarations
 extern "C" {
-    void dpotrf_(const char* uplo, const int* n, double* a,
+    void dpotrf_(LAPACK_CHAR_ARG* uplo, const int* n, double* a,
                  const int* lda, int* info);
 
-    void dpotrs_(const char* uplo, const int* n, const int* nrhs,
+    void dpotrs_(LAPACK_CHAR_ARG* uplo, const int* n, const int* nrhs,
                  const double* a, const int* lda, double* b,
                  const int* ldb, int* info);
 }
+#endif
 
 void kernel_symm(
     const double* Xptr,
@@ -1118,7 +1120,7 @@ void rbf_hessian_full_tiled_gemm(
 // }
 
 std::vector<double> solve_cholesky(double* K, const double* y, int n) {
-    const char uplo = 'U';
+    LAPACK_CHAR_ARG uplo = 'U';
     int info;
     int nrhs = 1;
 
