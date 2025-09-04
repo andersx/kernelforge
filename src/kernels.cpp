@@ -36,7 +36,6 @@ void kernel_symm(
                 Xptr, rep_size,
                 0.0, Kptr, n);
     double t1 = omp_get_wtime();
-    std::cout << "dsyrk took " << (t1 - t0) << " seconds\n";
 
     // 2) diag = -0.5 * diag(K)
     std::vector<double> diag(n);
@@ -100,7 +99,6 @@ void kernel_asymm(const double* X1,
                 gemm_beta,
                 K,  static_cast<int>(n2));  // C
     double t1 = omp_get_wtime();
-    std::cout << "dgemm took " << (t1 - t0) << " seconds\n";
 
     // 2) Rowwise self norms
     std::vector<double> nrm1(n1), nrm2(n2);

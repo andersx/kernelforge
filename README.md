@@ -1,6 +1,6 @@
 # KernelForge - Optimized Lernels for ML
 
-I really only care about writing optimized kernel code, so this project will be completed as I find additional time... XD 
+I really only care about writing optimized kernel code, so this project will be completed as I find additional time... XD
 
 I'm reviving this project to finish an old project using random Fourier features for kernel ML.
 
@@ -37,10 +37,18 @@ In this case, MKL will be autodetected by some CMake magic. If you additionally 
 CC=icx CXX=icpx FC=ifx make install
 ```
 
-In my experience, GCC/G++/GFortran with OpenBLAS is very similar to Intel API alternatives in terms of performance, perhaps even better. 
+In my experience, GCC/G++/GFortran with OpenBLAS is very similar to Intel API alternatives in terms of performance, perhaps even better.
 On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the default and is very fast on M-series macs.
 
 ## Timings
+I've rewritten a few of the kernels from the original QML code completely in C++.
+There are performance gains in most cases.
+These are primarily due to better use of BLAS routines for calculating, for example, Gramian sub-matrices with chunked DGEMM/DSYRK calls, etc.
+In the gradient and Hessian matrices there are also some algorithmic improvement and pre-computed terms.
+Memory usage might be a bit higher, but this could be optimized with more fine-graind chunking if needed.
+More is coming as I find the time ...
+
+Some speedups vs the original QML code are shown below:
 
 | Benchmark | QML [s] | Kernelforge [s] |
 |:---------------|------------:|--------------------:|
@@ -54,25 +62,26 @@ On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the defa
 ## TODO list
 
 The goal is to remove pain-points of existing QML libraries
-- Improved use of BLAS/LAPACK routines
 - Removal of Fortran dependencies
   - No Fortran-ordered arrays
   - No Fortran compilers needed
 - Simplified build system
-  - No cooked F2PY/Meson build system
+  - No cooked F2PY/Meson build system, just CMake and Pybind11
+- Improved use of BLAS routines, with built-in chunking to avoid memory explosions
+- Better use of pre-computed terms for single-point inference/MD kernels
+- Low overhead with Pybind11 shims and better aligned memory?
 - Simplified entrypoints that are compatible with RDKit, ASE, Scikit-learn, etc.
   - A few high-level functions that do the most common tasks efficiently and correctly
 - Efficient FCHL19 out-of-the-box
   - Fast training with random Fourier features
   - With derivatives
-    - [ ] Stretch goal: Implement sFCHL19 for even faster training/inference
+
 
 ## Priority list for the next months:
 
 - [x] Finish the inverse-distance kernel and its Jacobian
-- [x] Make Pybind11 interface 
+- [x] Make Pybind11 interface
   - [ ] Finalize the C++ interface
-  - [ ] Finalize the legacy Fortran interface (will be removed in the future)
 - [x] Finish the Gaussian kernel
 - [x] Notebook with rMD17 example
 - [x] Finish the Jacobian and Hessian kernels
@@ -81,11 +90,11 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Add FCHL19 descriptors
   - [x] Add FCHL19 kernels (local/elemental)
   - [x] Add FCHL19 descriptor with derivatives
-  - [x] Add FCHL19 kernel Jacobian 
+  - [x] Add FCHL19 kernel Jacobian
   - [x] Add FCHL19 kernel Hessian (GDML-style)
-  - [ ] Add FCHL19 full GPR kernel 
 - [ ] Finish the random Fourier features kernel and its Jacobian
 - [ ] Notebook with rMD17 random Fourier features examples
+- [ ] Remove the legacy Fortran interface - but keep it for now for testing
 
 #### Todos:
 - Houskeeping:
@@ -110,25 +119,41 @@ The goal is to remove pain-points of existing QML libraries
   - [x] GDML-like kernel
   - [ ] Full GPR kernel
 - Add local kernels:
-  - [ ] Gaussian kernel
-  - [ ] Jacobian/gradient kernel
-  - [ ] Optimized Jacobian kernel for single inference
-  - [ ] Hessian kernel
-  - [ ] GDML/GPR-like kernel
-- Add random Fourier features kernel code
+  - [x] Gaussian kernel
+  - [x] Jacobian/gradient kernel
+  - [x] Optimized Jacobian kernel for single inference
+  - [x] Hessian kernel (GDML-style)
+  - [ ] Full GPR kernel
+  - [ ] Optimized GPR kernel with pre-computed terms for single inference/MD
+- Add random Fourier features kernel code:
+  - [ ] Fourier-basis sampler
   - [ ] RFF kernel
   - [ ] RFF gradient kernel
   - [ ] RFF chunked DSYRK kernel
-  - The same as above, just for Hadamard features when I find the time
+  - [ ] Optimized RFF gradient kernel for single inference/MD
+  - The same as above, just for Hadamard features when I find the time?
+- GDML and sGDML kernels:
+  - [x] Inverse-distance matrix descriptor
+  - [ ] Packed Jacobian for inverse-distance matrix
+  - [x] GDML kernel (brute-force implemented)
+  - [ ] sGDML kernel (brute-force implemented)
+  - [ ] Full GPR kernel
+  - [ ] Optimized GPR kernel with pre-computed terms for single inference/MD
+- FCHL18 support:
+  - [ ] Complete rewrite of FCHL18 analytical scalar kernel in C++
+  - [ ] Stretch goal 1: Add new analytical FCHL18 kernel Jacobian
+  - [ ] Stretch goal 2: Add new analytical FCHL18 kernel Hessian (+GPR/GDML-style)
+  - [ ] Stretch goal 3: Attempt to optimize hyperparameters and cut-off functions
 - Add standard solvers:
   - [x] Cholesky in-place solver
     - [ ] L2-reg kwarg
     - [ ] Toggle destructive vs non-destructive
     - [ ] Toggle upper vs lower
   - [ ] QR and/or SVD for non-square matrices
+  - [ ] LU solver?
 - Add moleular descriptors with derivatives:
-  - [ ] Coulomb matrix
-  - [ ] FCHL19 + derivatives
+  - [ ] Coulomb matrix + misc variants without derivatives
+  - [x] FCHL19 + derivatives
   - [x] GDML-like inverse-distance matrix + derivatives
 #### Stretch goals:
 - [ ] Plan RDKit interface

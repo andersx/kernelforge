@@ -817,8 +817,8 @@ static inline PackedLabel pack_label_block_T(
 void flocal_kernel(
     const std::vector<double>& x1,   // (nm1, max_atoms1, rep_size)
     const std::vector<double>& x2,   // (nm2, max_atoms2, rep_size)
-    const std::vector<int>&    q1,   // (nm1, max_atoms1)   <-- CHANGED
-    const std::vector<int>&    q2,   // (nm2, max_atoms2)   <-- CHANGED
+    const std::vector<int>&    q1,   // (nm1, max_atoms1)
+    const std::vector<int>&    q2,   // (nm2, max_atoms2)
     const std::vector<int>&    n1,   // (nm1)
     const std::vector<int>&    n2,   // (nm2)
     int nm1,
@@ -827,9 +827,8 @@ void flocal_kernel(
     int max_atoms2,
     int rep_size,
     double sigma,
-    double* kernel      // (nm1, nm2)  <-- CHANGED
+    double* kernel
 ) {
-    // (keep your existing validations, but update size checks for q1/q2 and kernel)
     // if ((int)kernel.size() != nm1 * nm2) kernel.assign((std::size_t)nm1 * nm2, 0.0);
     // else std::fill(kernel.begin(), kernel.end(), 0.0);
     if (!kernel) throw std::invalid_argument("kernel_out is null");
@@ -903,6 +902,7 @@ void flocal_kernel(
         std::free(G);
     }
 }
+
 
 //  ###################################
 //  # FCHL19 SYMMETRIC KERNEL HELPERS #
