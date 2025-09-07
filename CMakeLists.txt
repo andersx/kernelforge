@@ -1,128 +1,114 @@
 cmake_minimum_required(VERSION 3.18)
-project(kernelforge LANGUAGES C CXX Fortran)
+project(kernelforge LANGUAGES C CXX)
 
+# Platform tweaks
 if(APPLE)
   set(DISABLE_NATIVE_FLAGS TRUE)
-  # Target macOS 14+, this is required for "new lapack" in Accelerate
+  # Required for "new lapack" in Accelerate
   set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "" FORCE)
   add_compile_definitions(ACCELERATE_NEW_LAPACK)
-
   set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
-
 endif()
 
-# Position-independent code for all targets (nice for Python extensions)
+# Position-independent code for all targets (helps for Python extensions)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-
-# Python + pybind11
+# Dependencies
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
+find_package(OpenMP REQUIRED) # optional
 
-# Create a common interface target for kernels that need pybind11 headers
+# BLAS/LAPACK choice (one of Accelerate, MKL, or generic BLAS)
+if(APPLE)
+  find_library(ACCELERATE Accelerate REQUIRED)
+elseif(WIN32)
+  find_package(MKL CONFIG REQUIRED)
+else()
+  find_package(BLAS REQUIRED)
+endif()
+
+# Common interface for headers from Python/pybind11
 add_library(kf_common INTERFACE)
 target_link_libraries(kf_common INTERFACE pybind11::headers Python::Module)
 
-# Fortran kernels as an object library (for linking into the Python module)
-add_library(kf_fortran OBJECT src/kernel.f90)
-set_property(TARGET kf_fortran PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(kf_fortran PRIVATE kf_common)
+# ---- Small helpers to avoid repetition --------------------------------------
+# Track created modules/objlibs so we can link things in one go later
+set(_KF_ALL_MODULES "")
+set(_KF_ALL_OBJLIBS "")
 
-# Build the Python extension module via pybind11 and link the Fortran objects
-pybind11_add_module(_kernelforge MODULE
-    src/bindings.cpp
-    $<TARGET_OBJECTS:kf_fortran>
-)
+# Create a C++ object library + pybind11 module pair:
+#   kf_add_cpp_module(<base> <obj_src> <binding_src>)
+#   -> object lib: kf_<base>
+#   -> module target: _<base>
+function(kf_add_cpp_module base obj_src bind_src)
+  set(obj kf_${base})
+  add_library(${obj} OBJECT ${obj_src})
+  target_link_libraries(${obj} PRIVATE kf_common)
+  target_link_libraries(${obj} PRIVATE OpenMP::OpenMP_CXX) # <-- compile flags propagate
 
-# Ensure the built filename is exactly "_kernelforge.*"
-set_target_properties(_kernelforge PROPERTIES OUTPUT_NAME "_kernelforge")
+  pybind11_add_module(_${base} MODULE
+    ${bind_src}
+    $<TARGET_OBJECTS:${obj}>
+  )
+  set_target_properties(_${base} PROPERTIES OUTPUT_NAME "_${base}")
+  target_link_libraries(_${base} PRIVATE OpenMP::OpenMP_CXX) # <-- link flags
 
-# C++ kernel implementation (your new code)
-add_library(kf_kernels OBJECT src/kernels.cpp)
-set_property(TARGET kf_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(kf_kernels PRIVATE kf_common)
+  list(APPEND _KF_ALL_MODULES _${base})
+  list(APPEND _KF_ALL_OBJLIBS ${obj})
+  set(_KF_ALL_MODULES "${_KF_ALL_MODULES}" PARENT_SCOPE)
+  set(_KF_ALL_OBJLIBS "${_KF_ALL_OBJLIBS}" PARENT_SCOPE)
+endfunction()
 
-# Build the Python extension module via pybind11 and link the Fortran objects
-pybind11_add_module(_kernels MODULE
-    src/bindings_kernels.cpp
-    $<TARGET_OBJECTS:kf_kernels>
-)
+# Portable optimization; native tuning is opt-in
+option(KF_USE_NATIVE "Enable -march/-mcpu=native style flags" OFF)
 
-set_target_properties(_kernels PROPERTIES OUTPUT_NAME "_kernels")
+function(kf_apply_cxx_flags tgt)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${tgt} PRIVATE
+      -O3 -ffast-math -ftree-vectorize -fopenmp
+      $<$<BOOL:${KF_USE_NATIVE}>:-mcpu=native -mtune=native>
+    )
+  elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
+    target_compile_options(${tgt} PRIVATE
+      -O3 -ffast-math
+      $<$<BOOL:${KF_USE_NATIVE}>:-xHost -mtune=native>
+    )
+  endif()
+endfunction()
 
-# My invdist module in C++
-add_library(kf_invdist OBJECT src/invdist.cpp)
-set_property(TARGET kf_invdist PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(kf_invdist PRIVATE kf_common)
+# ---- C++ modules -------------------------------------------------------------
+kf_add_cpp_module(kernels  src/kernels.cpp                src/bindings_kernels.cpp)
+kf_add_cpp_module(invdist  src/invdist.cpp                src/invdist_bindings.cpp)
+kf_add_cpp_module(fchl19   src/fchl19_representation.cpp  src/bindings_fchl19.cpp)
+kf_add_cpp_module(cholesky src/cholesky.cpp               src/bindings_cholesky.cpp)
 
-pybind11_add_module(_invdist MODULE
-    src/invdist_bindings.cpp
-    $<TARGET_OBJECTS:kf_invdist>
-)
+# Apply C++ flags to the object libs (not to the module targets)
+foreach(obj ${_KF_ALL_OBJLIBS})
+  kf_apply_cxx_flags(${obj})
+endforeach()
 
-set_target_properties(_invdist PROPERTIES OUTPUT_NAME "_invdist")
-
-# My fchl19 module in C++
-add_library(kf_fchl19 OBJECT src/fchl19_representation.cpp)
-set_property(TARGET kf_fchl19 PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(kf_fchl19 PRIVATE kf_common)
-
-pybind11_add_module(_fchl19 MODULE
-    src/bindings_fchl19.cpp
-    $<TARGET_OBJECTS:kf_fchl19>
-)
-
-set_target_properties(_fchl19 PROPERTIES OUTPUT_NAME "_fchl19")
-
-find_package(OpenMP)
+# ---- OpenMP (C++) ------------------------------------------------------------
 if (OpenMP_CXX_FOUND)
+  target_link_libraries(_cholesky PRIVATE OpenMP::OpenMP_CXX)
   target_link_libraries(_kernels PRIVATE OpenMP::OpenMP_CXX)
   target_link_libraries(_fchl19 PRIVATE OpenMP::OpenMP_CXX)
-endif()
-if (OpenMP_Fortran_FOUND)
-  target_link_libraries(_kernelforge PRIVATE OpenMP::OpenMP_Fortran)
-  target_link_libraries(_fchl19 PRIVATE OpenMP::OpenMP_Fortran)
+  target_link_libraries(_invdist PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
-# Optional BLAS/LAPACK backends (enable later if needed)
-if(APPLE)
-  find_library(ACCELERATE Accelerate REQUIRED)
-  target_link_libraries(_kernelforge PRIVATE ${ACCELERATE})
-  target_link_libraries(_kernels PRIVATE ${ACCELERATE})
-  target_link_libraries(_fchl19 PRIVATE ${ACCELERATE})
-elseif(WIN32)
-  find_package(MKL CONFIG REQUIRED)
-  target_link_libraries(_kernelforge PRIVATE MKL::MKL)
-  target_link_libraries(_kernels PRIVATE MKL::MKL)
-  target_link_libraries(_fchl19 PRIVATE MKL::MKL)
-else()
-  find_package(BLAS REQUIRED)
-  target_link_libraries(_kernelforge PRIVATE BLAS::BLAS)
-  target_link_libraries(_kernels PRIVATE BLAS::BLAS)
-  target_link_libraries(_fchl19 PRIVATE BLAS::BLAS)
-endif()
+# ---- BLAS/LAPACK backend selection (link all modules) -----------------------
+foreach(m ${_KF_ALL_MODULES})
+  if(APPLE)
+    target_link_libraries(${m} PRIVATE ${ACCELERATE})
+  elseif(WIN32)
+    target_link_libraries(${m} PRIVATE MKL::MKL)
+  else()
+    target_link_libraries(${m} PRIVATE BLAS::BLAS)
+  endif()
+endforeach()
 
-# Conservative optimization flags (portable wheels). Override via env if you want.
-if (CMAKE_Fortran_COMPILER_ID STREQUAL "IntelLLVM" OR CMAKE_Fortran_COMPILER_ID STREQUAL "Intel")
-  target_compile_options(kf_fortran PRIVATE -O3 -ipo -xHost -fp-model fast=2 -no-prec-div -fno-alias -qopenmp)
-elseif (CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-  target_compile_options(kf_fortran PRIVATE -O3 -fopenmp -mcpu=native -ffast-math -mtune=native -ftree-vectorize)
-endif()
-
-if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(kf_kernels PRIVATE -O3 -mcpu=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
-  target_compile_options(kf_invdist PRIVATE -O3 -mcpu=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
-  target_compile_options(kf_fchl19 PRIVATE -O3 -mcpu=native -ffast-math -fopenmp -mtune=native -ftree-vectorize)
-elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
-    target_compile_options(kf_kernels PRIVATE -Ofast -qopenmp -mtune=native -xHost)
-    target_compile_options(kf_invdist PRIVATE -Ofast -qopenmp -mtune=native -xHost)
-    target_compile_options(kf_fchl19 PRIVATE -Ofast -qopenmp -mtune=native -xHost)
-endif()
-
-# Install the compiled extension into the Python package and the Python shim
-install(TARGETS _kernelforge _kernels _invdist _fchl19
+# ---- Install ----------------------------------------------------------------
+install(TARGETS _kernels _invdist _fchl19 _cholesky
   LIBRARY DESTINATION kernelforge   # Linux/macOS
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )
 install(FILES python/kernelforge/__init__.py DESTINATION kernelforge)
-

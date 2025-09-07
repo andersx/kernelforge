@@ -10,12 +10,16 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <pybind11/pybind11.h>
+#include <pybind11/numpy.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <chrono>
 #include <vector>
 #include <omp.h>
 #include <iostream>
+#include "aligned_alloc64.hpp"
 #include "fchl19_representation.hpp"
 
 namespace fchl19 {
@@ -831,82 +835,118 @@ void flocal_kernel(
     int max_atoms2,
     int rep_size,
     double sigma,
-    double* kernel
+    double* kernel                 // (nm1, nm2), row-major: kernel[a*nm2 + b]
 ) {
-    // if ((int)kernel.size() != nm1 * nm2) kernel.assign((std::size_t)nm1 * nm2, 0.0);
-    // else std::fill(kernel.begin(), kernel.end(), 0.0);
     if (!kernel) throw std::invalid_argument("kernel_out is null");
+    if (!(std::isfinite(sigma)) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be > 0");
 
-    std::fill(kernel, kernel + static_cast<size_t>(nm1) * nm2, 0.0);
-
+    // Zero K (full rectangular matrix)
+    std::memset(kernel, 0, sizeof(double) * (size_t)nm1 * nm2);
 
     const double inv_sigma2 = -1.0 / (2.0 * sigma * sigma);
 
-    // 1) Labels with new q layout
+    // Gather labels shared by the two sets
     std::vector<int> labels;
     collect_distinct_labels_T(q1, nm1, max_atoms1, n1,
                               q2, nm2, max_atoms2, n2,
                               labels);
     if (labels.empty()) return;
 
+    // ---- Tunable tile size ----
+    const int B = 8192; // try 1024–4096; 8192 if you have RAM (B×B doubles scratch)
+
     for (int label : labels) {
-        // 2) Pack with new q layout
-        PackedLabel pk = pack_label_block_T(label,
-                                            x1, nm1, max_atoms1, rep_size,
-                                            x2, nm2, max_atoms2,
-                                            q1, q2, n1, n2);
+        // Pack rows/cols for this label
+        auto pk = pack_label_block_T(label,
+                                     x1, nm1, max_atoms1, rep_size,
+                                     x2, nm2, max_atoms2,
+                                     q1, q2, n1, n2);
         const int R = pk.R, S = pk.S;
         if (R == 0 || S == 0) continue;
 
-        // 2a) G = -2 * A * B^T  (R x S)
-        double* G = alloc_aligned((std::size_t)R * S);   // your aligned, uninitialized allocator
+        const int nblkR = (R + B - 1) / B;
+        const int nblkS = (S + B - 1) / B;
 
-        cblas_dgemm(
-            CblasRowMajor, CblasNoTrans, CblasTrans,
-            R, S, rep_size,
-            -2.0,                // so l2 = rn + col_n2[j] + Gij
-            pk.A.data(), rep_size,
-            pk.B.data(), rep_size,
-            0.0,
-            G, S
-        );
-
-        // 2b) Accumulate into kernel[a,b] (nm1, nm2)
-        #pragma omp parallel for collapse(2) schedule(guided)
+        // Bucket molecule rows/cols by block id to avoid inner-range checks
+        std::vector<std::vector<std::vector<int>>> bucketsR(nm1, std::vector<std::vector<int>>(nblkR));
+        std::vector<std::vector<std::vector<int>>> bucketsS(nm2, std::vector<std::vector<int>>(nblkS));
         for (int a = 0; a < nm1; ++a) {
-            for (int b = 0; b < nm2; ++b) {
-                const auto& rows_a = pk.rows_per_mol1[a];
-                const auto& cols_b = pk.cols_per_mol2[b];
-                if (rows_a.empty() || cols_b.empty()) continue;
-
-                double kab = 0.0;
-                for (int ii : rows_a) {
-                    const double rn = pk.row_n2[ii];
-                    const double* __restrict Grow = G + (std::size_t)ii * S;
-                    // simple unroll for cols_b
-                    int t = 0, colsN = (int)cols_b.size();
-                    for (; t + 3 < colsN; t += 4) {
-                        const int j0 = cols_b[t+0], j1 = cols_b[t+1];
-                        const int j2 = cols_b[t+2], j3 = cols_b[t+3];
-                        kab += std::exp((rn + pk.col_n2[j0] + Grow[j0]) * inv_sigma2)
-                             + std::exp((rn + pk.col_n2[j1] + Grow[j1]) * inv_sigma2)
-                             + std::exp((rn + pk.col_n2[j2] + Grow[j2]) * inv_sigma2)
-                             + std::exp((rn + pk.col_n2[j3] + Grow[j3]) * inv_sigma2);
-                    }
-                    for (; t < colsN; ++t) {
-                        const int j = cols_b[t];
-                        kab += std::exp((rn + pk.col_n2[j] + Grow[j]) * inv_sigma2);
-                    }
-                }
-                // ROW-MAJOR (nm1, nm2): stride-1 as b increments inside inner loop
-                kernel[(std::size_t)a * nm2 + b] += kab;
-            }
+            for (int gi : pk.rows_per_mol1[a]) bucketsR[a][gi / B].push_back(gi);
+        }
+        for (int b = 0; b < nm2; ++b) {
+            for (int gj : pk.cols_per_mol2[b]) bucketsS[b][gj / B].push_back(gj);
         }
 
-        std::free(G);
-    }
-}
+        // Reusable aligned scratch tile (B×B), written anew per dgemm call
+        double* Cblk = alloc_aligned((size_t)B * B);
+        if (!Cblk) throw std::bad_alloc();
 
+        // ---- Tile over (rows, cols) ----
+        for (int i0 = 0; i0 < R; i0 += B) {
+            const int ib = std::min(B, R - i0);
+            const double* Ai0 = &pk.A[(size_t)i0 * rep_size];
+            const int bi = i0 / B;
+
+            for (int j0 = 0; j0 < S; j0 += B) {
+                const int jb = std::min(B, S - j0);
+                const double* Bj0 = &pk.B[(size_t)j0 * rep_size];
+                const int bj = j0 / B;
+
+                // Cblk(ib×jb) = -2 * Ai0(ib×rep) * Bj0(jb×rep)^T
+                // RowMajor: M=ib, N=jb, K=rep_size, lda=rep_size, ldb=rep_size, ldc=jb
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            ib, jb, rep_size,
+                            -2.0, Ai0, rep_size, Bj0, rep_size,
+                             0.0, Cblk, jb);
+
+                // Accumulate this tile into K
+                #pragma omp parallel for schedule(guided)
+                for (int a = 0; a < nm1; ++a) {
+                    const auto& Ia = bucketsR[a][bi];
+                    if (Ia.empty()) continue;
+
+                    for (int b = 0; b < nm2; ++b) {
+                        const auto& Jb = bucketsS[b][bj];
+                        if (Jb.empty()) continue;
+
+                        double kab = 0.0;
+
+                        for (int gi : Ia) {
+                            const int li = gi - i0;                  // 0..ib-1
+                            const double rn = pk.row_n2[gi];
+                            const double* __restrict Grow = Cblk + (size_t)li * jb;
+
+                            // Unroll over columns in this block
+                            const int mJ = (int)Jb.size();
+                            int t = 0;
+                            for (; t + 3 < mJ; t += 4) {
+                                const int j0g = Jb[t+0], j1g = Jb[t+1];
+                                const int j2g = Jb[t+2], j3g = Jb[t+3];
+                                const int l0 = j0g - j0, l1 = j1g - j0;
+                                const int l2 = j2g - j0, l3 = j3g - j0;
+
+                                kab += std::exp((rn + pk.col_n2[j0g] + Grow[l0]) * inv_sigma2)
+                                     + std::exp((rn + pk.col_n2[j1g] + Grow[l1]) * inv_sigma2)
+                                     + std::exp((rn + pk.col_n2[j2g] + Grow[l2]) * inv_sigma2)
+                                     + std::exp((rn + pk.col_n2[j3g] + Grow[l3]) * inv_sigma2);
+                            }
+                            for (; t < mJ; ++t) {
+                                const int jg = Jb[t];
+                                kab += std::exp((rn + pk.col_n2[jg] + Grow[jg - j0]) * inv_sigma2);
+                            }
+                        }
+
+                        // Row-major (nm1, nm2): stride-1 across 'b'
+                        kernel[(size_t)a * nm2 + b] += kab;
+                    }
+                }
+            } // j0
+        }     // i0
+
+        std::free(Cblk);
+    } // labels
+}
 
 //  ###################################
 //  # FCHL19 SYMMETRIC KERNEL HELPERS #
@@ -988,10 +1028,166 @@ static inline PackedLabelSym pack_label_block_sym_T(
 // assume you already have:
 //   double* alloc_aligned(size_t n);  // aligned, uninitialized; free with std::free
 
+
+//  #######################################
+//  # FCHL19 KERNEL PACKED IMPLEMENTATION #
+//  #######################################
+
+// Map (i,j) with 0-based indices and i <= j to linear 0-based RFP index.
+// Matches your Fortran rfp_index (TRANSR='N', UPLO='U').
+static inline size_t rfp_index_upper_N(int n, int i, int j) {
+    // Preconditions: 0 <= i <= j < n
+    // if (i > j) std::swap(i, j);
+    const int k = n / 2;                       // floor(n/2)
+    const int stride = (n % 2 == 0) ? (n + 1)  : n;  // even->n+1, odd->n
+
+    // "top" zone if j >= k  (same as your Fortran)
+    // top:   idx = (j-k)*stride + i
+    // bottom:idx = i*stride + j + k + 1
+    if (j >= k) {
+        return (size_t)(j - k) * (size_t)stride + (size_t)i;
+    } else {
+        return (size_t)i * (size_t)stride + (size_t)(j + k + 1);
+    }
+}
+
+
+// Tiled, memory-bounded version that writes **directly to RFP** (TRANSR='N', UPLO='U')
+void flocal_kernel_symmetric_rfp(
+    const std::vector<double>& x,   // (nm, max_atoms, rep_size)
+    const std::vector<int>&    q,   // (nm, max_atoms)
+    const std::vector<int>&    n,   // (nm)
+    int nm,
+    int max_atoms,
+    int rep_size,
+    double sigma,
+    double* arf                 // length nt = nm*(nm+1)/2, output RFP (TRANSR='N', UPLO='U')
+) {
+    if (!arf) throw std::invalid_argument("arf (RFP output) is null");
+    if (!(std::isfinite(sigma)) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be > 0");
+
+    // Zero the RFP vector
+    const size_t nt = (size_t)nm * (nm + 1ull) / 2ull;
+    std::memset(arf, 0, nt * sizeof(double));
+
+    const double inv_sigma2 = -1.0 / (2.0 * sigma * sigma);
+
+    // Collect labels
+    std::vector<int> labels;
+    collect_distinct_labels_single_T(q, nm, max_atoms, n, labels);
+    if (labels.empty()) return;
+
+    // Tile size (tune as before)
+    const int B = 8192;
+
+    for (int label : labels) {
+        // Pack per-label rows (same as your symmetric path)
+        PackedLabelSym pk = pack_label_block_sym_T(label, x, nm, max_atoms, rep_size, q, n);
+        const int R = pk.R;
+        if (R == 0) continue;
+
+        const int num_blocks = (R + B - 1) / B;
+
+        // Bucket molecule rows by block id to avoid inner checks
+        std::vector<std::vector<std::vector<int>>> buckets(nm, std::vector<std::vector<int>>(num_blocks));
+        for (int a = 0; a < nm; ++a) {
+            const auto& rows = pk.rows_per_mol[a];
+            for (int gi : rows) buckets[a][gi / B].push_back(gi);
+        }
+
+        // Scratch tile
+        double* Cblk = alloc_aligned((size_t)B * B);
+        if (!Cblk) throw std::bad_alloc();
+
+        for (int i0 = 0; i0 < R; i0 += B) {
+            const int ib = std::min(B, R - i0);
+            const double* Ai0 = &pk.A[(size_t)i0 * rep_size];
+            const int bi = i0 / B;
+
+            // ----- Diagonal tile: DSYRK → upper-tri in Cblk (LDC = ib) -----
+            cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
+                        ib, rep_size, -2.0, Ai0, rep_size, 0.0, Cblk, ib);
+
+            #pragma omp parallel for schedule(guided)
+            for (int a = 0; a < nm; ++a) {
+                const auto& Ia = buckets[a][bi];
+                if (Ia.empty()) continue;
+
+                for (int b = a; b < nm; ++b) {
+                    const auto& Ib = buckets[b][bi];
+                    if (Ib.empty()) continue;
+
+                    double kab = 0.0;
+                    for (int gi : Ia) {
+                        const int li = gi - i0;           // [0..ib)
+                        const double rn_i = pk.row_n2[gi];
+                        for (int gj : Ib) {
+                            const int lj = gj - i0;       // [0..ib)
+                            const int r = (li <= lj) ? li : lj;
+                            const int c = (li <= lj) ? lj : li;
+                            const double cij = Cblk[(size_t)r * ib + c];
+                            const double l2  = rn_i + pk.row_n2[gj] + cij;
+                            kab += std::exp(l2 * inv_sigma2);
+                        }
+                    }
+                    // Write once to RFP (a<=b)
+                    const size_t idx = rfp_index_upper_N(nm, a, b);
+                    arf[idx] += kab;
+                }
+            }
+
+            // ----- Off-diagonal rectangles: DGEMM (ib × jb) -----
+            for (int j0 = i0 + B; j0 < R; j0 += B) {
+                const int jb = std::min(B, R - j0);
+                const double* Aj0 = &pk.A[(size_t)j0 * rep_size];
+                const int bj = j0 / B;
+
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            ib, jb, rep_size, -2.0, Ai0, rep_size, Aj0, rep_size,
+                            0.0, Cblk, jb);
+
+                #pragma omp parallel for schedule(guided)
+                for (int a = 0; a < nm; ++a) {
+                    const auto& Ia = buckets[a][bi];
+                    if (Ia.empty()) continue;
+
+                    for (int b = a; b < nm; ++b) {
+                        const auto& Jb = buckets[b][bj];
+                        if (Jb.empty()) continue;
+
+                        double kab = 0.0;
+                        for (int gi : Ia) {
+                            const int li = gi - i0;       // [0..ib)
+                            const double rn_i = pk.row_n2[gi];
+                            for (int gj : Jb) {
+                                const int lj = gj - j0;   // [0..jb)
+                                const double cij = Cblk[(size_t)li * jb + lj];
+                                const double l2  = rn_i + pk.row_n2[gj] + cij;
+                                kab += std::exp(l2 * inv_sigma2);
+                            }
+                        }
+                        // Self-kernel cross-block pairs counted twice
+                        if (a == b) kab *= 2.0;
+
+                        const size_t idx = rfp_index_upper_N(nm, a, b);
+                        arf[idx] += kab;
+                    }
+                }
+            } // j0
+        }     // i0
+
+        std::free(Cblk);
+    } // labels
+}
+
+
 //  ###########################################
 //  # FCHL19 KERNEL SYMMETRIC IMPLEMENTATION #
 //  ###########################################
 
+
+// Tiled, memory-bounded version: only allocates a B×B scratch tile.
 void flocal_kernel_symmetric(
     const std::vector<double>& x,   // (nm, max_atoms, rep_size)
     const std::vector<int>&    q,   // (nm, max_atoms)
@@ -1000,78 +1196,137 @@ void flocal_kernel_symmetric(
     int max_atoms,
     int rep_size,
     double sigma,
-    double* kernel     // (nm, nm), row-major: kernel[a*nm + b]
+    double* kernel                 // (nm, nm), row-major: kernel[a*nm + b]
 ) {
-    // minimal shape checks (adapt as needed)
-    // if ((int)kernel.size() != nm * nm) kernel.assign((std::size_t)nm * nm, 0.0);
-    // else std::fill(kernel.begin(), kernel.end(), 0.0);
     if (!kernel) throw std::invalid_argument("kernel_out is null");
+    if (!(std::isfinite(sigma)) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be > 0");
 
-    
-    // std::fill(kernel, kernel + static_cast<size_t>(nm) * (nm+1)/2, 0.0);
-    std::fill(kernel, kernel + (size_t)nm * nm, 0.0);
-    if (!(std::isfinite(sigma)) || sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    // Zero once (full matrix; cheap and simple). If you only ever write the lower
+    // triangle, you can halve this by zeroing rows up to i inclusive.
+    // std::memset(kernel, 0, sizeof(double) * (size_t)nm * nm);
+    auto start = std::chrono::high_resolution_clock::now();
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < (size_t)nm * nm; ++i) {
+        kernel[i] = 0.0;
+    }
+    // cblas_dscal((int64_t)nm * nm, 0.0, kernel, 1);
+    auto stop = std::chrono::high_resolution_clock::now();
+    // Compute duration in milliseconds
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+    pybind11::print("Fill took", duration.count(), "ms");
 
     const double inv_sigma2 = -1.0 / (2.0 * sigma * sigma);
 
-    // labels
+
     std::vector<int> labels;
     collect_distinct_labels_single_T(q, nm, max_atoms, n, labels);
     if (labels.empty()) return;
 
+    const int B = 8192; // tile size; tune 512–2048
+
     for (int label : labels) {
-        // pack once per label
         PackedLabelSym pk = pack_label_block_sym_T(label, x, nm, max_atoms, rep_size, q, n);
         const int R = pk.R;
         if (R == 0) continue;
 
-        // C = -2 * A * A^T (upper triangle)
-        double* C = alloc_aligned((std::size_t)R * R);
-        cblas_dsyrk(
-            CblasRowMajor,
-            CblasUpper,
-            CblasNoTrans,
-            R,
-            rep_size,
-            -2.0,               // so l2 = rn[i] + rn[j] + Cij
-            pk.A.data(),
-            rep_size,
-            0.0,
-            C,
-            R
-        );
+        const int num_blocks = (R + B - 1) / B;
 
-        // accumulate: simple inner loops, fill only upper (a<=b) then mirror
-        #pragma omp parallel for schedule(guided)
+        // bucket molecule rows by block id
+        std::vector<std::vector<std::vector<int>>> buckets(nm, std::vector<std::vector<int>>(num_blocks));
         for (int a = 0; a < nm; ++a) {
-            const auto& rows_a = pk.rows_per_mol[a];
-            if (rows_a.empty()) continue;
-
-            for (int b = a; b < nm; ++b) {
-                const auto& rows_b = pk.rows_per_mol[b];
-                if (rows_b.empty()) continue;
-
-                double kab = 0.0;
-                for (int ii : rows_a) {
-                    const double rn = pk.row_n2[ii];
-                    for (int jj : rows_b) {
-                        // read upper triangle (mirror if needed)
-                        const double cij = (jj >= ii)
-                            ? C[(std::size_t)ii * R + jj]
-                            : C[(std::size_t)jj * R + ii];
-                        const double l2 = rn + pk.row_n2[jj] + cij;
-                        kab += std::exp(l2 * inv_sigma2);
-                    }
-                }
-
-                // kernel[(std::size_t)a * nm + b] += kab;
-                // if (b != a)
-                    kernel[(std::size_t)b * nm + a] += kab;
-            }
+            const auto& rows = pk.rows_per_mol[a];
+            for (int gi : rows) buckets[a][gi / B].push_back(gi);
         }
 
-        std::free(C);
-    }
+        // ---- aligned scratch tile (reused for all tiles of this label) ----
+        double* Cblk = alloc_aligned((size_t)B * B);
+        if (!Cblk) throw std::bad_alloc();
+
+        for (int i0 = 0; i0 < R; i0 += B) {
+            const int ib = std::min(B, R - i0);
+            const double* Ai0 = &pk.A[(size_t)i0 * rep_size];
+            const int bi = i0 / B;
+
+            // Diagonal tile: DSYRK produces upper-tri in Cblk with LDC=ib
+            cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
+                        ib, rep_size,
+                        -2.0, Ai0, rep_size,
+                         0.0,  Cblk, ib);
+
+            #pragma omp parallel for schedule(guided)
+            for (int a = 0; a < nm; ++a) {
+                const auto& Ia = buckets[a][bi];
+                if (Ia.empty()) continue;
+
+                for (int b = a; b < nm; ++b) {
+                    const auto& Ib = buckets[b][bi];
+                    if (Ib.empty()) continue;
+
+                    double kab = 0.0;
+                    for (int gi : Ia) {
+                        const int li = gi - i0;           // [0..ib)
+                        const double rn_i = pk.row_n2[gi];
+                        for (int gj : Ib) {
+                            const int lj = gj - i0;       // [0..ib)
+                            // index with LDC = ib (upper-tri)
+                            const int r = (li <= lj) ? li : lj;
+                            const int c = (li <= lj) ? lj : li;
+                            const double cij = Cblk[(size_t)r * ib + c];
+                            const double l2  = rn_i + pk.row_n2[gj] + cij;
+                            kab += std::exp(l2 * inv_sigma2);
+                        }
+                    }
+                    kernel[(size_t)a * nm + b] += kab;
+                    if (b != a) kernel[(size_t)b * nm + a] += kab;
+                }
+            }
+
+            // Off-diagonal rectangles: DGEMM to Cblk (LDC=jb)
+            for (int j0 = i0 + B; j0 < R; j0 += B) {
+                const int jb = std::min(B, R - j0);
+                const double* Aj0 = &pk.A[(size_t)j0 * rep_size];
+                const int bj = j0 / B;
+
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            ib, jb, rep_size,
+                            -2.0, Ai0, rep_size, Aj0, rep_size,
+                             0.0,  Cblk, jb);
+
+                #pragma omp parallel for schedule(guided)
+                for (int a = 0; a < nm; ++a) {
+                    const auto& Ia = buckets[a][bi];
+                    if (Ia.empty()) continue;
+
+                    for (int b = a; b < nm; ++b) {
+                        const auto& Jb = buckets[b][bj];
+                        if (Jb.empty()) continue;
+
+                        double kab = 0.0;
+                        for (int gi : Ia) {
+                            const int li = gi - i0;       // [0..ib)
+                            const double rn_i = pk.row_n2[gi];
+                            for (int gj : Jb) {
+                                const int lj = gj - j0;   // [0..jb)
+                                // index with LDC = jb (full rectangle)
+                                const double cij = Cblk[(size_t)li * jb + lj];
+                                const double l2  = rn_i + pk.row_n2[gj] + cij;
+                                kab += std::exp(l2 * inv_sigma2);
+                            }
+                        }
+                        // count cross-block self-pairs twice to match full (i,j)+(j,i)
+                        if (a == b) kab *= 2.0;
+
+                        kernel[(size_t)a * nm + b] += kab;
+                        if (b != a) kernel[(size_t)b * nm + a] += kab;
+                    }
+                }
+            } // j0
+        }     // i0
+
+        std::free(Cblk);
+    } // labels
+
 }
 
 
@@ -1725,5 +1980,5 @@ void fgdml_kernel_symmetric_lower(
 }
 
 
-} // namespace fchl19 
+} // namespace fchl19
 

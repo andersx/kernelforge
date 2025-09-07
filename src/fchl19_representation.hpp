@@ -99,6 +99,18 @@ void flocal_kernel(
     // std::vector<double>& kernel
 );
 
+void flocal_kernel_symmetric_rfp(
+    const std::vector<double>& x,
+    const std::vector<int>&    q,
+    const std::vector<int>&    n,
+    int nm,
+    int max_atoms,
+    int rep_size,
+    double sigma,
+    double* arf 
+);
+
+
 void flocal_kernel_symmetric(
     const std::vector<double>& x,
     const std::vector<int>&    q,

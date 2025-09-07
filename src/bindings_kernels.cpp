@@ -215,32 +215,6 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_py(
 }
 
 
-// Python wrapper: K is overwritten, y is preserved, alpha is returned
-py::array_t<double> solve_cholesky_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> K_in,
-    py::array_t<double, py::array::c_style | py::array::forcecast> y_in
-) {
-    py::buffer_info Kbuf = K_in.request();
-    py::buffer_info ybuf = y_in.request();
-
-    int n = Kbuf.shape[0];
-    if (Kbuf.ndim != 2 || Kbuf.shape[0] != Kbuf.shape[1]) {
-        throw std::runtime_error("Kernel matrix must be square");
-    }
-    if (ybuf.ndim != 1 || ybuf.shape[0] != n) {
-        throw std::runtime_error("Label vector length must match kernel size");
-    }
-
-    double* K = static_cast<double*>(Kbuf.ptr);
-    const double* y = static_cast<double*>(ybuf.ptr);
-
-    auto alpha_vec = solve_cholesky(K, y, n);
-
-    // Return as NumPy array
-    return py::array_t<double>(alpha_vec.size(), alpha_vec.data());
-}
-
-
 static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
     py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
@@ -325,11 +299,6 @@ PYBIND11_MODULE(_kernels, m) {
           py::arg("X"), py::arg("dX"),
           py::arg("sigma"), py::arg("tile_B") = py::none(),
           "Compute symmetric RBF Hessian kernel (training version).");
-     m.def("solve_cholesky", &solve_cholesky_py,
-          "Solve Kx=y using Cholesky factorization.\n"
-          "- K is overwritten with factorization\n"
-          "- y is preserved\n"
-          "- alpha is returned");
 }
 
 

@@ -1119,31 +1119,6 @@ void rbf_hessian_full_tiled_gemm(
 //     } // for a
 // }
 
-std::vector<double> solve_cholesky(double* K, const double* y, int n) {
-    LAPACK_CHAR_ARG uplo = 'U';
-    int info;
-    int nrhs = 1;
-
-    // Copy y -> alpha (solution will be stored here)
-    std::vector<double> alpha(y, y + n);
-
-    // Factorize (in-place on K)
-    dpotrf_(&uplo, &n, K, &n, &info);
-    if (info != 0) {
-        throw std::runtime_error("Cholesky decomposition failed, info=" +
-                                 std::to_string(info));
-    }
-
-    // Solve (alpha is overwritten with solution)
-    dpotrs_(&uplo, &n, &nrhs, K, &n, alpha.data(), &n, &info);
-    if (info != 0) {
-        throw std::runtime_error("Cholesky solve failed, info=" +
-                                 std::to_string(info));
-    }
-
-    return alpha;
-}
-
 // Symmetric (training) RBF Hessian kernel, Gaussian.
 // X: (N, M) row-major          – descriptor vectors
 // dX: (N, M, D) row-major      – Jacobians wrt descriptor coords (M x D) per sample

@@ -683,6 +683,61 @@ static py::array_t<double> fgdml_kernel_symm_py(
 }
 
 
+// RFP-output (TRANSR='N', UPLO='U'): returns a 1-D array of length nm*(nm+1)/2
+static py::array_t<double> flocal_kernel_symm_rfp_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> x1,
+    py::array_t<int,    py::array::c_style | py::array::forcecast> q1,
+    py::array_t<int,    py::array::c_style | py::array::forcecast> n1,
+    double sigma
+) {
+    // Expect shapes: x1(nm, max_atoms, rep), q1(nm, max_atoms), n1(nm)
+    if (x1.ndim() != 3 || q1.ndim() != 2 || n1.ndim() != 1) {
+        throw std::invalid_argument("Expect x1(nm,max_atoms,rep), q1(nm,max_atoms), n1(nm).");
+    }
+
+    const int nm        = static_cast<int>(x1.shape(0));
+    const int max_atoms = static_cast<int>(x1.shape(1));
+    const int rep_size  = static_cast<int>(x1.shape(2));
+
+    // Cross-check shapes
+    if (q1.shape(0) != nm || q1.shape(1) != max_atoms)
+        throw std::invalid_argument("q1 shape mismatch.");
+    if (n1.shape(0) != nm)
+        throw std::invalid_argument("n1 length mismatch.");
+
+    // Flatten into std::vector
+    const size_t xN = (size_t)nm * (size_t)max_atoms * (size_t)rep_size;
+    const size_t qN = (size_t)nm * (size_t)max_atoms;
+
+    std::vector<double> xv(xN);
+    std::vector<int>    qv(qN), nv(nm);
+
+    std::copy_n(x1.data(), xN, xv.begin());
+    std::copy_n(q1.data(), qN, qv.begin());
+    std::copy_n(n1.data(), (size_t)nm, nv.begin());
+
+    // Allocate aligned RFP output: nt = nm*(nm+1)/2
+    const size_t nt = (size_t)nm * (nm + 1ull) / 2ull;
+    double* arf_ptr = aligned_alloc_64(nt);
+    if (!arf_ptr) throw std::bad_alloc();
+
+    auto capsule = py::capsule(arf_ptr, [](void* p){ aligned_free_64(p); });
+
+    // Call kernel (fills arf_ptr in TRANSR='N', UPLO='U')
+    fchl19::flocal_kernel_symmetric_rfp(
+        xv, qv, nv, nm, max_atoms, rep_size, sigma, arf_ptr
+    );
+
+    // Return as 1-D C-contiguous array without extra copies
+    return py::array_t<double>(
+        { (py::ssize_t)nt },
+        { (py::ssize_t)sizeof(double) },
+        arf_ptr,
+        capsule
+    );
+}
+
+
 
 PYBIND11_MODULE(_fchl19, m) {
     m.doc() = "Pybind11 bindings for FCHL-like ACSF generator";
@@ -849,4 +904,9 @@ Returns
         py::arg("n1"),
         py::arg("sigma")
     );
+    m.def("flocal_kernel_symm_rfp", &flocal_kernel_symm_rfp_py,
+        py::arg("x1"), py::arg("q1"), py::arg("n1"), py::arg("sigma"),
+        "Symmetric Gaussian kernel with RFP (TRANSR='N', UPLO='U') output.\n"
+        "Inputs: x1(nm,max_atoms,rep), q1(nm,max_atoms), n1(nm).\n"
+        "Returns: 1-D RFP array of length nm*(nm+1)/2.");
 }

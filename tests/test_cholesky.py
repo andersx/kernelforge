@@ -1,5 +1,5 @@
 import numpy as np
-from kernelforge import _kernels 
+from kernelforge import _cholesky
 
 import numpy as np
 import pytest
@@ -11,7 +11,7 @@ def test_small_system():
                   [0.6, 1.5, 3.0]], dtype=np.float64)
     y = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-    alpha = _kernels.solve_cholesky(K, y)
+    alpha = _cholesky.solve_cholesky(K, y, regularize=0.0)
 
     # Verify K_original @ alpha ≈ y
     K_original = np.array([[4.0, 2.0, 0.6],
@@ -28,7 +28,7 @@ def test_identity_matrix():
     K = np.eye(n, dtype=np.float64)
     y = np.arange(1, n + 1, dtype=np.float64)
 
-    alpha = _kernels.solve_cholesky(K, y)
+    alpha = _cholesky.solve_cholesky(K, y)
     np.testing.assert_allclose(alpha, y)
 
 
@@ -38,7 +38,7 @@ def test_random_pd_matrix():
     K = A.T @ A + np.eye(6) * 1e-6  # make SPD
     y = rng.standard_normal(6)
 
-    alpha = _kernels.solve_cholesky(K, y)
+    alpha = _cholesky.solve_cholesky(K, y, regularize=0.0)
 
     np.testing.assert_allclose((A.T @ A + np.eye(6) * 1e-6) @ alpha, y,
                                rtol=1e-10, atol=1e-12)
@@ -48,12 +48,12 @@ def test_non_square_matrix():
     with pytest.raises(RuntimeError):
         K = np.ones((3, 2), dtype=np.float64)
         y = np.ones(3, dtype=np.float64)
-        _kernels.solve_cholesky(K, y)
+        _cholesky.solve_cholesky(K, y)
 
 
 def test_mismatched_size():
     with pytest.raises(RuntimeError):
         K = np.eye(3, dtype=np.float64)
         y = np.ones(4, dtype=np.float64)
-        _kernels.solve_cholesky(K, y)
+        _cholesky.solve_cholesky(K, y)
 
