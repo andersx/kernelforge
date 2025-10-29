@@ -12,8 +12,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14]
-        python-version: ["3.12"]
+        os: [ubuntu-24.04]
+        python-version: ["3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -35,11 +35,9 @@ jobs:
 
       # 3. Linux-only: cache and install OpenBLAS
       - name: Install OpenBLAS (Linux only)
-        if: runner.os == 'Linux'
-        uses: awalsh128/cache-apt-pkgs-action@v1.4
-        with:
-          packages: libopenblas-dev
-          version: 1.0
+        run: |
+          # Optional: OpenBLAS dev on Ubuntu if you link system BLAS
+          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y libopenblas-dev; fi
 
       # 4. Setup Python
       - uses: actions/setup-python@v5
