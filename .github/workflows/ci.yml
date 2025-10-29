@@ -53,7 +53,7 @@ jobs:
           MKL_INTERFACE_LAYER: "LP64"
         run: |
           uv sync --dev --all-extras
-          uv pip install /scikit-build-core pybind11
+          uv pip install scikit-build-core pybind11
           uv pip install -e . --no-build-isolation
 
       # 6. Run tests
