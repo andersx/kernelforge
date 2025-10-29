@@ -37,7 +37,7 @@ jobs:
       - name: Install OpenBLAS (Linux only)
         run: |
           # Optional: OpenBLAS dev on Ubuntu if you link system BLAS
-          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y libopenblas-dev; fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get install -y libopenblas-dev; fi
 
       # 4. Setup Python
       - uses: actions/setup-python@v5
