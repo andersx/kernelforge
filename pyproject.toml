@@ -32,4 +32,4 @@ CMAKE_VERBOSE_MAKEFILE = "ON"
 CMAKE_BUILD_TYPE = "Release"
 
 [tool.uv.extra-build-dependencies]
-kernelforge = ["scikit-build-core"]
+kernelforge = ["scikit_build_core"]
