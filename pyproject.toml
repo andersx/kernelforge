@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.9", "pybind11", "setuptools"]
+requires = ["scikit-build-core>=0.9", "pybind11", "setuptools", "wheel"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -18,8 +18,8 @@ dependencies = [
 test = ["pytest>=8", "pytest-xdist", "pytest-cov", "pytest-timeout"]
 
 [project.urls]
-Homepage = "https://github.com/youruser/kernelforge"
-Issues = "https://github.com/youruser/kernelforge/issues"
+Homepage = "https://github.com/andersx/kernelforge"
+Issues = "https://github.com/andersx/kernelforge/issues"
 
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = true
