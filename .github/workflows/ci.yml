@@ -12,45 +12,57 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04]   # add 'windows-2022' if desired
+        os: [ubuntu-22.04, macos-14]
         python-version: ["3.12"]
 
     steps:
       - uses: actions/checkout@v4
 
+      # 1. Install uv (fast Python package manager)
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        shell: bash
+
+      - name: Add uv to PATH
+        run: echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+
+      # 2. Cache uv build/deps per OS and Python version
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+
+      # 3. Linux-only: cache and install OpenBLAS
+      - name: Install OpenBLAS (Linux only)
+        if: runner.os == 'Linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1.4
+        with:
+          packages: libopenblas-dev
+          version: 1.0
+
+      # 4. Setup Python
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
-
-      # macOS: Accelerate, Linux: OpenBLAS from system or wheels; keep it simple for CI
-      - name: Install build deps
-        run: |
-          python -m pip install -U pip
-          python -m pip install -U build ".[test]"
-          # Optional: OpenBLAS dev on Ubuntu if you link system BLAS
-          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y libopenblas-dev; fi
-
-      - name: Build & install (editable)
-        env:
-          # Make MKL/OpenBLAS behave in CI
-          OMP_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
-          MKL_THREADING_LAYER: "SEQUENTIAL"
-          MKL_INTERFACE_LAYER: "LP64"
-        run: |
-          python -m pip install -e . -v
-
-      - name: Pytest (fast)
+      # 5. Build and install project locally (cached)
+      - name: Build & install
         env:
           OMP_NUM_THREADS: "1"
           MKL_NUM_THREADS: "1"
           MKL_THREADING_LAYER: "SEQUENTIAL"
           MKL_INTERFACE_LAYER: "LP64"
         run: |
-          pytest -q -ra -k "not slow" -x
+          uv sync --dev --all-extras
+          uv pip install -e . --no-build-isolation
+
+      # 6. Run tests
+      - name: Run pytest
+        env:
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          MKL_THREADING_LAYER: "SEQUENTIAL"
+          MKL_INTERFACE_LAYER: "LP64"
+        run: uv run pytest -q -ra -k "not slow" -x
+

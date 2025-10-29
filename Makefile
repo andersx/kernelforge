@@ -1,8 +1,9 @@
 install:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON" pip install -e .[test] --verbose
+	CMAKE_ARGS="-DKF_USE_NATIVE=ON" uv pip install -e .[test] --verbose
 
 test:
 	pytest
 
 environment:
-	conda env create -f environments/environment-dev.yaml
+	uv venv --python 3.10
+# 	conda env create -f environments/environment-dev.yaml
