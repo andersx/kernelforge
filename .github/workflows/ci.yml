@@ -18,29 +18,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install OpenMP (macOS only)
+        if: runner.os == 'macOS'
+        run: brew install libomp gcc
+
       - name: Install OpenBLAS (Linux only)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libopenblas-dev
 
-      - name: Install OpenMP (macOS only)
-        if: runner.os == 'macOS'
-        run: brew install libomp gcc
-
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
         shell: bash
-
-      # - name: Cache uv
-      #   uses: actions/cache@v4
-      #   with:
-      #     path: |
-      #       ~/.cache/uv
-      #       .venv
-      #     key: uv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-      #     restore-keys: |
-      #       uv-${{ runner.os }}-${{ matrix.python-version }}-
 
       - name: Build & install
         env:
