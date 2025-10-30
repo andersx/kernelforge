@@ -29,7 +29,6 @@ jobs:
       - name: Install OpenBLAS (Linux only)
         if: runner.os == 'Linux'
         run: |
-          echo "libopenblas-dev" > .github/apt-packages.txt
           sudo apt-get update
           sudo apt-get install -y $(cat .github/apt-packages.txt)
 
