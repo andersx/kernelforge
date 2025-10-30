@@ -20,7 +20,7 @@ jobs:
 
       - name: Install OpenMP (macOS only)
         if: runner.os == 'macOS'
-        run: brew install libomp gcc
+        run: brew install libomp gcc openblas
 
       - name: Install OpenBLAS (Linux only)
         if: runner.os == 'Linux'
@@ -35,7 +35,7 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           CC: /opt/homebrew/bin/gcc-15
           CXX: /opt/homebrew/bin/g++-15
-          CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp  # macOS fix
+          CMAKE_PREFIX_PATH: /opt/homebrew/opt/openblas:/opt/homebrew/opt/libomp
         run: |
           uv sync --dev --all-extras
           uv pip install scikit-build-core pybind11
