@@ -33,7 +33,7 @@ jobs:
         env:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
-          # CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp  # macOS fix
+          CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp  # macOS fix
         run: |
           uv sync --dev --all-extras
           uv pip install scikit-build-core pybind11
