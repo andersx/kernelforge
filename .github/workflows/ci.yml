@@ -27,7 +27,7 @@ jobs:
         run: sudo apt-get install -y libopenblas-dev
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v1
+        uses: astral-sh/setup-uv@v7
 
       - name: Build & install
         env:
