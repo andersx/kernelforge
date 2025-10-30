@@ -45,4 +45,3 @@ jobs:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
         run: uv run pytest -q -ra -k "not slow" -x
-
