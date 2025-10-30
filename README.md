@@ -1,4 +1,4 @@
-# KernelForge - Optimized Lernels for ML
+# KernelForge - Optimized Kernels for ML
 
 I really only care about writing optimized kernel code, so this project will be completed as I find additional time... XD
 
