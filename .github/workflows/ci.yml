@@ -18,19 +18,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1. Cache APT package downloads (Linux only)
-      - name: Cache apt packages
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-${{ hashFiles('.github/apt-packages.txt') }}
+      # # 1. Cache APT package downloads (Linux only)
+      # - name: Cache apt packages
+      #   if: runner.os == 'Linux'
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: /var/cache/apt/archives
+      #     key: apt-${{ runner.os }}-${{ hashFiles('.github/apt-packages.txt') }}
 
-      - name: Install OpenBLAS (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y $(cat .github/apt-packages.txt)
+      # - name: Install OpenBLAS (Linux only)
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y $(cat .github/apt-packages.txt)
 
       # 2. Install OpenMP on macOS (optional but recommended)
       - name: Install OpenMP (macOS only)
