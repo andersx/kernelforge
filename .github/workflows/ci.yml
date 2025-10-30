@@ -12,75 +12,49 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04]   # optional add: windows-latest
+        os: [ubuntu-24.04] #, macos-14]
         python-version: ["3.14"]
 
     steps:
       - uses: actions/checkout@v4
 
-      # # 1. Cache APT package downloads (Linux only)
-      # - name: Cache apt packages
-      #   if: runner.os == 'Linux'
-      #   uses: actions/cache@v4
-      #   with:
-      #     path: /var/cache/apt/archives
-      #     key: apt-${{ runner.os }}-${{ hashFiles('.github/apt-packages.txt') }}
+      - name: Install OpenBLAS (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev
 
-      # - name: Install OpenBLAS (Linux only)
-      #   if: runner.os == 'Linux'
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y $(cat .github/apt-packages.txt)
-
-      # 2. Install OpenMP on macOS (optional but recommended)
       - name: Install OpenMP (macOS only)
         if: runner.os == 'macOS'
         run: brew install libomp gcc
 
-      # 3. Setup Python early (so uv sees it)
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: 'pip'   # extra built-in cache for pip wheels (fallback)
-
-      # 4. Install uv (fast Python package manager)
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
         shell: bash
 
-      - name: Add uv to PATH
-        run: echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+      # - name: Cache uv
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: |
+      #       ~/.cache/uv
+      #       .venv
+      #     key: uv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
+      #     restore-keys: |
+      #       uv-${{ runner.os }}-${{ matrix.python-version }}-
 
-      # 5. Cache uv (package builds, wheels, and lockfiles)
-      - name: Cache uv
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: uv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock') }}
-          restore-keys: |
-            uv-${{ runner.os }}-${{ matrix.python-version }}-
-
-      # 6. Sync dependencies and preinstall build backends
       - name: Build & install
         env:
           OMP_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
-          MKL_THREADING_LAYER: "SEQUENTIAL"
-          MKL_INTERFACE_LAYER: "LP64"
-          CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp  # macOS fix
+          OPENBLAS_NUM_THREADS: "1"
+          # CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp  # macOS fix
         run: |
           uv sync --dev --all-extras
           uv pip install scikit-build-core pybind11
           uv pip install -e . --no-build-isolation
 
-      # 7. Run tests
       - name: Run pytest
         env:
           OMP_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
-          MKL_THREADING_LAYER: "SEQUENTIAL"
-          MKL_INTERFACE_LAYER: "LP64"
+          OPENBLAS_NUM_THREADS: "1"
         run: uv run pytest -q -ra -k "not slow" -x
 
