@@ -12,15 +12,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04] #, macos-14]
+        os: [ubuntu-24.04, macos-latest]
         python-version: ["3.14"]
 
     steps:
       - uses: actions/checkout@v4
 
-      # - name: Install OpenMP (macOS only)
-      #   if: runner.os == 'macOS'
-      #   run: brew install libomp gcc
+      - name: Install OpenMP (macOS only)
+        if: runner.os == 'macOS'
+        run: brew install libomp gcc
 
       - name: Install OpenBLAS (Linux only)
         if: runner.os == 'Linux'
