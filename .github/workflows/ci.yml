@@ -26,9 +26,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libopenblas-dev
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-        shell: bash
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v1
 
       - name: Build & install
         env:

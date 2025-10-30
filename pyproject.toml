@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "kernelforge"
 version = "0.1.8"
-description = "Optimzed Kernels for ML"
+description = "Optimized Kernels for ML"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Anders Christensen"}]
