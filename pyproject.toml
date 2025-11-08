@@ -1,11 +1,11 @@
 [build-system]
-requires = ["scikit-build-core>=0.9", "pybind11", "setuptools"]
+requires = ["scikit-build-core>=0.9", "pybind11", "setuptools", "wheel"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "kernelforge"
 version = "0.1.8"
-description = "Optimzed Kernels for ML"
+description = "Optimized Kernels for ML"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Anders Christensen"}]
@@ -18,15 +18,18 @@ dependencies = [
 test = ["pytest>=8", "pytest-xdist", "pytest-cov", "pytest-timeout"]
 
 [project.urls]
-Homepage = "https://github.com/youruser/kernelforge"
-Issues = "https://github.com/youruser/kernelforge/issues"
+Homepage = "https://github.com/andersx/kernelforge"
+Issues = "https://github.com/andersx/kernelforge/issues"
 
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = true
 cmake.build-type = "Release"
-cmake.verbose = true
+build.verbose = true
 wheel.packages = ["python/kernelforge"]
 
 [tool.scikit-build.cmake.define]
 CMAKE_VERBOSE_MAKEFILE = "ON"
 CMAKE_BUILD_TYPE = "Release"
+
+[tool.uv.extra-build-dependencies]
+kernelforge = ["scikit_build_core"]

@@ -3,11 +3,21 @@ project(kernelforge LANGUAGES C CXX)
 
 # Platform tweaks
 if(APPLE)
-  set(DISABLE_NATIVE_FLAGS TRUE)
+
   # Required for "new lapack" in Accelerate
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "" FORCE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "" FORCE)
   add_compile_definitions(ACCELERATE_NEW_LAPACK)
   set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+
+  # Necessary to compile with -Accelerate, homebrew clang and openmp
+  # Took me way too long to figure out
+  add_compile_options(-stdlib=libc++)
+  add_link_options(
+    -stdlib=libc++
+    -L/opt/homebrew/opt/llvm/lib/c++
+    -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++
+  )
+
 endif()
 
 # Position-independent code for all targets (helps for Python extensions)
@@ -15,14 +25,28 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Dependencies
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+execute_process(
+  COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+  OUTPUT_VARIABLE pybind11_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
 find_package(pybind11 CONFIG REQUIRED)
-find_package(OpenMP REQUIRED) # optional
 
-# BLAS/LAPACK choice (one of Accelerate, MKL, or generic BLAS)
+find_package(OpenMP REQUIRED)
+if (OpenMP_CXX_FOUND)
+  if (APPLE)
+    # Apple/Homebrew Clang requires explicit flags
+    add_compile_options(-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include)
+    add_link_options(-L/opt/homebrew/opt/libomp/lib -lomp)
+  else()
+    add_compile_options(${OpenMP_CXX_FLAGS})
+    add_link_options(${OpenMP_CXX_FLAGS})
+  endif()
+endif()
+
+# Use Accelerate on Apple, otherwise BLAS (MKL, OpenBLAS, etc)
 if(APPLE)
   find_library(ACCELERATE Accelerate REQUIRED)
-elseif(WIN32)
-  find_package(MKL CONFIG REQUIRED)
 else()
   find_package(BLAS REQUIRED)
 endif()

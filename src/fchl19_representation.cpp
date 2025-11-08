@@ -1427,7 +1427,7 @@ void fatomic_local_gradient_kernel(
     }
 
     // Heuristics for batching
-    constexpr int BATCH_T      = 512; // try 256..1024; tune for your machine
+    constexpr int BATCH_T      = 8192; // try 256..1024; tune for your machine
     constexpr int T_MIN_GEMM   = 8;   // below this, GEMV often wins
     const     int LDB          = BATCH_T; // row-major leading dimension for D (rep x T)
     const     int LDC          = BATCH_T; // row-major leading dimension for H (ncols x T)

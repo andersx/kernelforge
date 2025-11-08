@@ -12,45 +12,49 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04]   # add 'windows-2022' if desired
-        python-version: ["3.12"]
+        os: [ubuntu-24.04, macos-15]
+        python-version: ["3.14"]
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
+      - name: Install OpenMP (macOS only)
+        if: runner.os == 'macOS'
+        run: brew install libomp llvm
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
+      - name: Install OpenBLAS (Linux only)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libopenblas-dev
 
-      # macOS: Accelerate, Linux: OpenBLAS from system or wheels; keep it simple for CI
-      - name: Install build deps
-        run: |
-          python -m pip install -U pip
-          python -m pip install -U build ".[test]"
-          # Optional: OpenBLAS dev on Ubuntu if you link system BLAS
-          if [[ "$RUNNER_OS" == "Linux" ]]; then sudo apt-get update && sudo apt-get install -y libopenblas-dev; fi
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
 
-      - name: Build & install (editable)
-        env:
-          # Make MKL/OpenBLAS behave in CI
-          OMP_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
-          MKL_THREADING_LAYER: "SEQUENTIAL"
-          MKL_INTERFACE_LAYER: "LP64"
-        run: |
-          python -m pip install -e . -v
-
-      - name: Pytest (fast)
+      - name: Build & install (macOS only)
+        if: runner.os == 'macOS'
         env:
           OMP_NUM_THREADS: "1"
-          MKL_NUM_THREADS: "1"
-          MKL_THREADING_LAYER: "SEQUENTIAL"
-          MKL_INTERFACE_LAYER: "LP64"
+          OPENBLAS_NUM_THREADS: "1"
+          CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp
         run: |
-          pytest -q -ra -k "not slow" -x
+          uv sync --dev --all-extras
+          uv pip install scikit-build-core pybind11
+          CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
+                      -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++" \
+            uv pip install -e .[test] --no-build-isolation
+
+      - name: Build & install (Linux only)
+        if: runner.os == 'linux'
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          uv sync --dev --all-extras
+          uv pip install scikit-build-core pybind11
+          uv pip install -e .[test] --no-build-isolation
+
+
+      - name: Run pytest
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: uv run pytest -q -ra -k "not slow" -x
