@@ -20,7 +20,7 @@ jobs:
 
       - name: Install OpenMP (macOS only)
         if: runner.os == 'macOS'
-        run: brew install libomp gcc openblas
+        run: brew install libomp llvm
 
       - name: Install OpenBLAS (Linux only)
         if: runner.os == 'Linux'
@@ -29,17 +29,29 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Build & install
+      - name: Build & install (macOS only)
+        if: runner.os == 'macOS'
         env:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
-          CC: /opt/homebrew/bin/gcc-15
-          CXX: /opt/homebrew/bin/g++-15
-          CMAKE_PREFIX_PATH: /opt/homebrew/opt/openblas:/opt/homebrew/opt/libomp
+          CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp
         run: |
           uv sync --dev --all-extras
           uv pip install scikit-build-core pybind11
-          uv pip install -e . --no-build-isolation
+          CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
+                      -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++" \
+            uv pip install -e .[test] --no-build-isolation
+
+      - name: Build & install (Linux only)
+        if: runner.os == 'linux'
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          uv sync --dev --all-extras
+          uv pip install scikit-build-core pybind11
+          uv pip install -e .[test] --no-build-isolation
+
 
       - name: Run pytest
         env:
