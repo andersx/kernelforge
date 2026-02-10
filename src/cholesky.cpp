@@ -3,7 +3,6 @@
 #include <pybind11/numpy.h>
 #include <vector>
 #include <cstring>
-#include <cblas.h>
 #include <stdexcept>
 #include <chrono>
 
