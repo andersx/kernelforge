@@ -1,4 +1,4 @@
-# KernelForge - Optimized Lernels for ML
+# KernelForge - Optimized Kernels for ML
 
 I really only care about writing optimized kernel code, so this project will be completed as I find additional time... XD
 
@@ -92,15 +92,27 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Add FCHL19 descriptor with derivatives
   - [x] Add FCHL19 kernel Jacobian
   - [x] Add FCHL19 kernel Hessian (GDML-style)
-- [ ] Finish the random Fourier features kernel and its Jacobian
+  - [ ] Improve FCHL19 kernel Jacobian performance (its poor)
+- Finish the random Fourier features kernel and its Jacobian
+  - [ ] Parallel random basis sampler
+  - [ ] RFF kernel for global descriptors
+  - [ ] SVD and QR solvers for rectangular matrices
+  - [ ] RFF kernel for local descriptors (FCHL19)
+  - [ ] RFF kernels with Cholesky solver and chunked DSYRK kernel updates
+  - [ ] RFF kernels with RFP format with chunked DSFRK kernel updates
+  - [ ] RFF kernel Jacobian for global descriptors
+  - [ ] RFF kernel Jacobian for local descriptors (FCHL19)
 - [ ] Notebook with rMD17 random Fourier features examples
-- [ ] Remove the legacy Fortran interface - but keep it for now for testing
+
+- Science:
+  - Benchmark full kernel vs RFF on rMD17 and QM7b and QM9
+  - Both FCHL19 and inverse-distance matrix
 
 #### Todos:
 - Houskeeping:
   - [x] Pybind11 bindings and CMake build system
   - [x] Setup CI with GitHub Actions
-  - [ ] Rewrite existing kernels to C++ (no Fortran)
+  - [x] Rewrite existing kernels to C++ (no Fortran)
   - [x] Setup GHA to build PyPI wheels
   - [x] Test Linux build matrices
   - [x] Test MacOS build matrices
@@ -146,11 +158,9 @@ The goal is to remove pain-points of existing QML libraries
   - [ ] Stretch goal 3: Attempt to optimize hyperparameters and cut-off functions
 - Add standard solvers:
   - [x] Cholesky in-place solver
-    - [ ] L2-reg kwarg
-    - [ ] Toggle destructive vs non-destructive
-    - [ ] Toggle upper vs lower
+    - [x] L2-reg kwarg
+    - [x] Toggle destructive vs non-destructive
   - [ ] QR and/or SVD for non-square matrices
-  - [ ] LU solver?
 - Add moleular descriptors with derivatives:
   - [ ] Coulomb matrix + misc variants without derivatives
   - [x] FCHL19 + derivatives

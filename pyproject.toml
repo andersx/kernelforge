@@ -24,7 +24,7 @@ Issues = "https://github.com/youruser/kernelforge/issues"
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = true
 cmake.build-type = "Release"
-cmake.verbose = true
+build.verbose = true
 wheel.packages = ["python/kernelforge"]
 
 [tool.scikit-build.cmake.define]
