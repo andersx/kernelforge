@@ -46,12 +46,10 @@ jobs:
             OMP_NUM_THREADS=1
             OPENBLAS_NUM_THREADS=1
           CIBW_BEFORE_BUILD_LINUX: |
-            curl -L https://anaconda.org/multibuild-wheels-staging/openblas-libs/v0.3.27/download/openblas-v0.3.27-manylinux2014_x86_64.tar.gz | tar xz
-            cp -r usr /opt/openblas
-            ls -l /opt/openblas/local/lib/libopenblas.so
+            yum -y install openblas-devel
           CIBW_ENVIRONMENT_LINUX: >
-            LD_LIBRARY_PATH=/opt/openblas/local/lib:$LD_LIBRARY_PATH
-            CMAKE_ARGS="-DBLAS_LIBRARIES=/opt/openblas/local/lib/libopenblas.so -DBLAS_INCLUDE_DIR=/opt/openblas/local/include -DBLAS_VENDOR=OpenBLAS"
+            LD_LIBRARY_PATH=/usr/lib64:$LD_LIBRARY_PATH
+            CMAKE_ARGS="-DBLAS_VENDOR=OpenBLAS"
             OPENBLAS_NUM_THREADS=1
             OMP_NUM_THREADS=1
           CIBW_ENVIRONMENT_PASS_LINUX: >
