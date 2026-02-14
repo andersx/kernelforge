@@ -1166,7 +1166,7 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
                 (int)N, (int)M,
                 1.0, X1, (int)M,
                 0.0, S.data(), (int)N);
-    #pragma omp parallel for collapse(2)
+    #pragma omp parallel for
     for (std::size_t i = 0; i < N; ++i) {
         for (std::size_t j = i+1; j < N; ++j) {
             S[i*N + j] = S[j*N + i];
