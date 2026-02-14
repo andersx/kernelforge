@@ -49,7 +49,7 @@ jobs:
             CPPFLAGS="-I/usr/include/openblas"
             CFLAGS="-I/usr/include/openblas"
             LD_LIBRARY_PATH="/usr/lib64:$LD_LIBRARY_PATH"
-            CMAKE_ARGS="-DBLAS_LIBRARIES=/usr/lib64/libopenblas.so -DBLAS_INCLUDE_DIR=/usr/include/openblas"
+            CMAKE_ARGS="-DBLAS_LIBRARIES=/usr/lib64/libopenblas.so -DBLAS_INCLUDE_DIR=/usr/include/openblas -DCMAKE_CXX_FLAGS=-I/usr/include/openblas -DCMAKE_C_FLAGS=-I/usr/include/openblas"
             OPENBLAS_NUM_THREADS=1
             OMP_NUM_THREADS=1
           CIBW_ENVIRONMENT_PASS_LINUX: >
