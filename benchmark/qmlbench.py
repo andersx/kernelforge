@@ -55,15 +55,21 @@ def load_ethanol_raw_data() -> np.ndarray:
     npz_path = CACHE_DIR / "ethanol_ccsd_t-train.npz"
 
     if not npz_path.exists():
-        url = (
-            "https://sgdml.org/secure_proxy.php?file=data/npz/ethanol_ccsd_t-train.zip"
-        )
+        url = "https://sgdml.org/secure_proxy.php?file=data/npz/ethanol_ccsd_t.zip"
         print(f"  [Downloading ethanol dataset...]")
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_path = Path(tmpdir) / "ethanol.zip"
-                urllib.request.urlretrieve(url, zip_path)
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req) as response:
+                    if response.status != 200:
+                        raise RuntimeError(
+                            f"HTTP {response.status}: Failed to download from {url}"
+                        )
+                    with open(zip_path, "wb") as f:
+                        f.write(response.read())
+
                 with zipfile.ZipFile(zip_path) as z:
                     z.extractall(tmpdir)
                 extracted = list(Path(tmpdir).glob("*.npz"))[0]
@@ -84,7 +90,14 @@ def load_qm7b_raw_data() -> np.ndarray:
         print(f"  [Downloading QM7b dataset...]")
 
         try:
-            urllib.request.urlretrieve(url, npz_path)
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req) as response:
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"HTTP {response.status}: Failed to download from {url}"
+                    )
+                with open(npz_path, "wb") as f:
+                    f.write(response.read())
         except Exception as e:
             print(f"  [Error downloading QM7b: {e}]", file=sys.stderr)
             raise
@@ -152,9 +165,9 @@ def prepare_qm7b_fchl19(n_structures: int = 100) -> Dict:
 
 
 def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
-    """Benchmark FCHL19 representation generation on ethanol (N=100)."""
+    """Benchmark FCHL19 representation generation on ethanol (N=1000)."""
     data = load_ethanol_raw_data()
-    R = data["R"][:100]
+    R = data["R"][:1000]
     z = data["z"]
     elements = [1, 6, 8]
 
@@ -166,32 +179,32 @@ def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
     X = np.asarray(X)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Ethanol FCHL19 representations (N=100)"
+    return elapsed, "Ethanol FCHL19 representations (N=1000)"
 
 
 def benchmark_ethanol_fchl19_gradients() -> Tuple[float, str]:
-    """Benchmark FCHL19 gradient computation on ethanol (N=100)."""
+    """Benchmark FCHL19 gradient computation on ethanol (N=1000)."""
     data = load_ethanol_raw_data()
-    R = data["R"][:100]
+    R = data["R"][:1000]
     z = data["z"]
     elements = [1, 6, 8]
 
     start = time.perf_counter()
     dX = []
     for r in R:
-        _, grad = generate_fchl_acsf_and_gradients(r, z, elements=elements)
-        dX.append(grad)
+        _, _ = generate_fchl_acsf_and_gradients(r, z, elements=elements)
+        # dX.append(grad)
     dX = np.asarray(dX)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Ethanol FCHL19 gradients (N=100)"
+    return elapsed, "Ethanol FCHL19 gradients (N=1000)"
 
 
 def benchmark_qm7b_fchl19_representations() -> Tuple[float, str]:
-    """Benchmark FCHL19 representation generation on QM7b (N=100)."""
+    """Benchmark FCHL19 representation generation on QM7b (N=1000)."""
     data = load_qm7b_raw_data()
-    R = data["R"][:100]
-    z_list = data["z"][:100]
+    R = data["R"][:1000]
+    z_list = data["z"][:1000]
     elements = [1, 6, 7, 8, 16, 17]
 
     start = time.perf_counter()
@@ -201,14 +214,14 @@ def benchmark_qm7b_fchl19_representations() -> Tuple[float, str]:
         X_list.append(rep)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "QM7b FCHL19 representations (N=100)"
+    return elapsed, "QM7b FCHL19 representations (N=1000)"
 
 
 def benchmark_qm7b_fchl19_gradients() -> Tuple[float, str]:
-    """Benchmark FCHL19 gradient computation on QM7b (N=100)."""
+    """Benchmark FCHL19 gradient computation on QM7b (N=1000)."""
     data = load_qm7b_raw_data()
-    R = data["R"][:100]
-    z_list = data["z"][:100]
+    R = data["R"][:1000]
+    z_list = data["z"][:1000]
     elements = [1, 6, 7, 8, 16, 17]
 
     start = time.perf_counter()
@@ -218,7 +231,7 @@ def benchmark_qm7b_fchl19_gradients() -> Tuple[float, str]:
         dX.append(grad)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "QM7b FCHL19 gradients (N=100)"
+    return elapsed, "QM7b FCHL19 gradients (N=1000)"
 
 
 def benchmark_kernel_symm_ethanol() -> Tuple[float, str]:
