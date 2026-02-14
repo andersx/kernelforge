@@ -167,71 +167,63 @@ def prepare_qm7b_fchl19(n_structures: int = 100) -> Dict:
 def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
     """Benchmark FCHL19 representation generation on ethanol (N=1000)."""
     data = load_ethanol_raw_data()
-    R = data["R"][:1000]
+    n = 10000
+    R = data["R"][:n]
     z = data["z"]
     elements = [1, 6, 8]
 
     start = time.perf_counter()
-    X = []
     for r in R:
-        rep = generate_fchl_acsf(r, z, elements=elements)
-        X.append(rep)
-    X = np.asarray(X)
+        _ = generate_fchl_acsf(r, z, elements=elements)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Ethanol FCHL19 representations (N=1000)"
+    return elapsed, f"Ethanol FCHL19 representations (N={n})"
 
 
 def benchmark_ethanol_fchl19_gradients() -> Tuple[float, str]:
     """Benchmark FCHL19 gradient computation on ethanol (N=1000)."""
     data = load_ethanol_raw_data()
-    R = data["R"][:1000]
+    n = 10000
+    R = data["R"][:n]
     z = data["z"]
     elements = [1, 6, 8]
 
     start = time.perf_counter()
-    dX = []
     for r in R:
         _, _ = generate_fchl_acsf_and_gradients(r, z, elements=elements)
-        # dX.append(grad)
-    dX = np.asarray(dX)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Ethanol FCHL19 gradients (N=1000)"
+    return elapsed, f"Ethanol FCHL19 gradients (N={n})"
 
 
 def benchmark_qm7b_fchl19_representations() -> Tuple[float, str]:
-    """Benchmark FCHL19 representation generation on QM7b (N=1000)."""
+    """Benchmark FCHL19 representation generation on QM7b (N=7211)."""
     data = load_qm7b_raw_data()
-    R = data["R"][:1000]
-    z_list = data["z"][:1000]
+    R = data["R"]
+    z_list = data["z"]
     elements = [1, 6, 7, 8, 16, 17]
 
     start = time.perf_counter()
-    X_list = []
     for i, r in enumerate(R):
-        rep = generate_fchl_acsf(r, z_list[i], elements=elements)
-        X_list.append(rep)
+        _ = generate_fchl_acsf(r, z_list[i], elements=elements)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "QM7b FCHL19 representations (N=1000)"
+    return elapsed, f"QM7b FCHL19 representations (N={len(R)})"
 
 
 def benchmark_qm7b_fchl19_gradients() -> Tuple[float, str]:
-    """Benchmark FCHL19 gradient computation on QM7b (N=1000)."""
+    """Benchmark FCHL19 gradient computation on QM7b (N=7211)."""
     data = load_qm7b_raw_data()
-    R = data["R"][:1000]
-    z_list = data["z"][:1000]
+    R = data["R"]
+    z_list = data["z"]
     elements = [1, 6, 7, 8, 16, 17]
 
     start = time.perf_counter()
-    dX = []
-    for i, r in enumerate(R):
-        _, grad = generate_fchl_acsf_and_gradients(r, z_list[i], elements=elements)
-        dX.append(grad)
+    for r, z in zip(R, z_list):
+        _, _ = generate_fchl_acsf_and_gradients(r, z, elements=elements)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "QM7b FCHL19 gradients (N=1000)"
+    return elapsed, "QM7b FCHL19 gradients (N=7211)"
 
 
 def benchmark_kernel_symm_ethanol() -> Tuple[float, str]:
@@ -304,20 +296,38 @@ def benchmark_kernel_asymm_qm7b() -> Tuple[float, str]:
     return elapsed, "Local kernel asymmetric (QM7b, N=100)"
 
 
+def benchmark_kernel_gdml_ethanol() -> Tuple[float, str]:
+    """Benchmark symmetric GDML kernel on ethanol (N=100)."""
+    n = 200
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    K = fgdml_kernel(X, X, dX, dX, Q, Q, N, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"GDML kernel symmetric (Ethanol, N=n)"
+
+
 def benchmark_kernel_gdml_symm_ethanol() -> Tuple[float, str]:
-    """Benchmark symmetric GDML kernel on ethanol (N=20)."""
-    data = prepare_ethanol_fchl19(20)
-    X = data["X"][:20]
-    dX = data["dX"][:20]
-    Q = data["Q"][:20]
-    N = data["N"][:20]
-    sigma = 2.0
+    """Benchmark symmetric GDML kernel on ethanol (N=100)."""
+    n = 200
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
 
     start = time.perf_counter()
     K = fgdml_kernel_symm(X, dX, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "GDML kernel symmetric (Ethanol, N=20)"
+    return elapsed, f"GDML kernel symmetric (Ethanol, N=n)"
 
 
 # ============================================================================
@@ -333,6 +343,7 @@ BENCHMARKS = {
     "kernel_asymm_ethanol": benchmark_kernel_asymm_ethanol,
     "kernel_symm_qm7b": benchmark_kernel_symm_qm7b,
     "kernel_asymm_qm7b": benchmark_kernel_asymm_qm7b,
+    "kernel_gdml_ethanol": benchmark_kernel_gdml_ethanol,
     "kernel_gdml_symm_ethanol": benchmark_kernel_gdml_symm_ethanol,
 }
 
@@ -353,6 +364,7 @@ SUITES = {
         "kernel_asymm_qm7b",
     ],
     "gdml-kernels": [
+        "kernel_gdml_ethanol",
         "kernel_gdml_symm_ethanol",
     ],
 }
