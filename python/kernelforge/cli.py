@@ -1,52 +1,28 @@
-"""
-KernelForge Benchmark Suite
-
-A simple, single-run benchmark tool for KernelForge kernels and representations.
-Usage:
-    qmlbench all
-    qmlbench representations
-    qmlbench ethanol-kernels
-    qmlbench qm7b-kernels
-    qmlbench gdml-kernels
-"""
-
+import argparse
 import sys
+import tempfile
 import time
-import platform
-import socket
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Tuple, List, Optional
 import urllib.request
 import zipfile
-import tempfile
+from importlib.metadata import version
+from pathlib import Path
+from typing import Dict, Tuple
 
 import numpy as np
-import typer
-
 from kernelforge._fchl19 import (
-    generate_fchl_acsf,
-    generate_fchl_acsf_and_gradients,
-    flocal_kernel,
-    flocal_kernel_symm,
     fgdml_kernel,
     fgdml_kernel_symm,
+    flocal_kernel,
+    flocal_kernel_symm,
+    generate_fchl_acsf,
+    generate_fchl_acsf_and_gradients,
 )
 
-# ============================================================================
-# CONSTANTS
-# ============================================================================
-
-__version__ = "0.1.8"
 PROGRAM_NAME = "KernelForge Benchmarks"
 
-# Data cache directory
+# Data cache directory for downloaded datasets
 CACHE_DIR = Path.home() / ".kernelforge" / "datasets"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-# ============================================================================
-# DATA LOADING
-# ============================================================================
 
 
 def load_ethanol_raw_data() -> np.ndarray:
@@ -156,11 +132,6 @@ def prepare_qm7b_fchl19(n_structures: int = 100) -> Dict:
         Q[i, :n_atoms] = q_i
 
     return {"X": X, "N": N, "Q": Q}
-
-
-# ============================================================================
-# BENCHMARK FUNCTIONS
-# ============================================================================
 
 
 def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
@@ -329,10 +300,6 @@ def benchmark_kernel_gdml_symm_ethanol() -> Tuple[float, str]:
     return elapsed, f"GDML kernel symmetric (Ethanol, N=n)"
 
 
-# ============================================================================
-# BENCHMARK REGISTRY
-# ============================================================================
-
 BENCHMARKS = {
     "ethanol_fchl19_repr": benchmark_ethanol_fchl19_representations,
     "ethanol_fchl19_grad": benchmark_ethanol_fchl19_gradients,
@@ -369,59 +336,18 @@ SUITES = {
 }
 
 SUITES["all"] = []
-for suite_benchmarks in SUITES.values():
-    SUITES["all"].extend(suite_benchmarks)
-
-
-# ============================================================================
-# OUTPUT FORMATTING
-# ============================================================================
-
-
-def get_system_info() -> Dict[str, str]:
-    """Collect system information."""
-    try:
-        import psutil
-
-        cpu_count = psutil.cpu_count(logical=True)
-    except:
-        cpu_count = 1
-
-    try:
-        import cpuinfo
-
-        cpu_model = cpuinfo.get_cpu_info().get("brand_raw", "Unknown CPU")
-    except:
-        cpu_model = "Unknown CPU"
-
-    py_version = f"{platform.python_version()} ({platform.python_implementation()})"
-    platform_info = f"{platform.system()} ({platform.machine()})"
-
-    return {
-        "python": py_version,
-        "platform": platform_info,
-        "cpu": f"{cpu_model} ({cpu_count} cores)",
-        "hostname": socket.gethostname(),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC"),
-    }
+for suite_name, suite_benchmarks in SUITES.items():
+    if suite_name != "all":
+        SUITES["all"].extend(suite_benchmarks)
 
 
 def print_header(suite_name: str) -> None:
-    """Print the benchmark header with system info."""
-    info = get_system_info()
-
+    """Print the benchmark header."""
+    title = f"{PROGRAM_NAME} v{version('kernelforge')} | Suite: {suite_name}"
     print()
-    print("╔" + "=" * 78 + "╗")
-    print(f"║ {PROGRAM_NAME} v{__version__:<52} ║")
-    print("╠" + "=" * 78 + "╣")
-    print(f"║ Python:      {info['python']:<63} ║")
-    print(f"║ Platform:    {info['platform']:<63} ║")
-    print(f"║ CPU:         {info['cpu']:<63} ║")
-    print(f"║ Hostname:    {info['hostname']:<63} ║")
-    print(f"║ Timestamp:   {info['timestamp']:<63} ║")
-    print("╠" + "=" * 78 + "╣")
-    print(f"║ Suite:       {suite_name:<63} ║")
-    print("╠" + "=" * 78 + "╣")
+    print("-" * 80)
+    print(title)
+    print("-" * 80)
     print()
 
 
@@ -435,7 +361,7 @@ def print_footer(total_ms: float, count: int) -> None:
     """Print the footer with summary."""
     total_s = total_ms / 1000.0
     print()
-    print("═" * 80)
+    print("-" * 80)
     print()
     print(f"  Total time:  {total_s:.4f} s")
     print(f"  Benchmarks:  {count}")
@@ -443,56 +369,29 @@ def print_footer(total_ms: float, count: int) -> None:
     print()
 
 
-# ============================================================================
-# CLI
-# ============================================================================
-
-
-app = typer.Typer(help=f"{PROGRAM_NAME} - Single-run benchmark suite for KernelForge")
-
-
-@app.command()
-def run(
-    suite: str = typer.Argument(
-        "all",
-        help="Benchmark suite to run: all, representations, ethanol-kernels, qm7b-kernels, gdml-kernels",
-    ),
-):
+def run(suite: str):
     """Run KernelForge benchmarks."""
     if suite not in SUITES:
-        typer.secho(f"Error: Unknown suite '{suite}'", fg=typer.colors.RED)
-        typer.echo(f"Available suites: {', '.join(SUITES.keys())}")
-        raise typer.Exit(1)
+        print(f"Error: Unknown suite '{suite}'", file=sys.stderr)
+        print(f"Available suites: {', '.join(SUITES.keys())}", file=sys.stderr)
+        sys.exit(1)
 
     suite_benchmarks = SUITES[suite]
     if not suite_benchmarks:
-        typer.secho("Error: Empty suite", fg=typer.colors.RED)
-        raise typer.Exit(1)
+        print("Error: Empty suite", file=sys.stderr)
+        sys.exit(1)
 
-    # Print header
     print_header(suite)
 
-    # Run benchmarks
     total_ms = 0
     results = []
 
     for bench_name in suite_benchmarks:
-        if bench_name not in BENCHMARKS:
-            typer.secho(f"Error: Unknown benchmark '{bench_name}'", fg=typer.colors.RED)
-            raise typer.Exit(1)
-
-        try:
-            bench_func = BENCHMARKS[bench_name]
-            elapsed_ms, description = bench_func()
-            print_result(bench_name, elapsed_ms, description)
-            total_ms += elapsed_ms
-            results.append((bench_name, elapsed_ms, description))
-        except Exception as e:
-            typer.secho(
-                f"Error running benchmark '{bench_name}': {e}",
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(1)
+        bench_func = BENCHMARKS[bench_name]
+        elapsed_ms, description = bench_func()
+        print_result(bench_name, elapsed_ms, description)
+        total_ms += elapsed_ms
+        results.append((bench_name, elapsed_ms, description))
 
     # Print footer
     print_footer(total_ms, len(results))
@@ -500,7 +399,20 @@ def run(
 
 def main():
     """Main entry point for the qmlbench command."""
-    app()
+    parser = argparse.ArgumentParser(
+        prog="qmlbench",
+        description=f"{PROGRAM_NAME} - Single-run benchmark suite for KernelForge",
+    )
+    parser.add_argument(
+        "suite",
+        nargs="?",
+        default="all",
+        choices=list(SUITES.keys()),
+        help="Benchmark suite to run (default: all)",
+    )
+
+    args = parser.parse_args()
+    run(args.suite)
 
 
 if __name__ == "__main__":
