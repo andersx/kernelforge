@@ -12,8 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04]
-        # os: [ubuntu-22.04, macos-latest]
+        os: [ubuntu-22.04, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +34,7 @@ jobs:
 
       - name: Build wheels
         env:
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "pp* *-musllinux_* cp*-manylinux_i686"
           CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
           CIBW_TEST_EXTRAS: "test"
@@ -46,23 +45,29 @@ jobs:
             yum -y install openblas-devel
             find /usr/include -name cblas.h -print
           CIBW_ENVIRONMENT_LINUX: >
-            LD_LIBRARY_PATH=/usr/lib64:$LD_LIBRARY_PATH
-            # CMAKE_ARGS="-DBLAS_VENDOR=OpenBLAS" # Not needed
+            CPPFLAGS="-I/usr/include/openblas"
+            CFLAGS="-I/usr/include/openblas"
+            LD_LIBRARY_PATH="/usr/lib64:$LD_LIBRARY_PATH"
+            CMAKE_ARGS="-DBLAS_LIBRARIES=/usr/lib64/libopenblas.so -DBLAS_INCLUDE_DIR=/usr/include/openblas -DCMAKE_CXX_FLAGS=-I/usr/include/openblas -DCMAKE_C_FLAGS=-I/usr/include/openblas"
             OPENBLAS_NUM_THREADS=1
             OMP_NUM_THREADS=1
           CIBW_ENVIRONMENT_PASS_LINUX: >
+            CPPFLAGS
+            CFLAGS
             LD_LIBRARY_PATH
             CMAKE_ARGS
             OPENBLAS_NUM_THREADS
             OMP_NUM_THREADS
           CIBW_ENVIRONMENT_MACOS: >
             MACOSX_DEPLOYMENT_TARGET=15.0
-            CMAKE_ARGS="-DBLAS_VENDOR=Apple"
-            FC=gfortran-14
+            CMAKE_ARGS="-DBLAS_VENDOR=Apple
+              -DCMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include
+              -DCMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include
+              -DCMAKE_SHARED_LINKER_FLAGS=-L/opt/homebrew/opt/libomp/lib
+              -DCMAKE_EXE_LINKER_FLAGS=-L/opt/homebrew/opt/libomp/lib"
           CIBW_ENVIRONMENT_PASS_MACOS: >
             MACOSX_DEPLOYMENT_TARGET
             CMAKE_ARGS
-            FC
           CIBW_ARCHS_MACOS: arm64
         run: python -m cibuildwheel --output-dir wheelhouse
 
