@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "kernelforge"
-version = "0.1.13"
+version = "0.1.14"
 description = "Optimized Kernels for ML"
 readme = "README.md"
 license = {text = "MIT"}
@@ -16,6 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist", "pytest-cov", "pytest-timeout"]
+
+[project.scripts]
+qmlbench = "kernelforge.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/andersx/kernelforge"
