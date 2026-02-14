@@ -60,7 +60,7 @@ jobs:
             OPENBLAS_NUM_THREADS
             OMP_NUM_THREADS
           CIBW_ENVIRONMENT_MACOS: >
-            MACOSX_DEPLOYMENT_TARGET=14.0
+            MACOSX_DEPLOYMENT_TARGET=15.0
             CMAKE_ARGS="-DBLAS_VENDOR=Apple
               -DCMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include
               -DCMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include
