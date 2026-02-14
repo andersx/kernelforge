@@ -10,6 +10,3 @@ test:
 environment:
 	uv venv --python 3.14
 	uv pip install scikit-build-core pybind11
-
-qmlbench:
-	qmlbench all
