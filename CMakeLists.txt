@@ -141,3 +141,45 @@ install(TARGETS _kernels _invdist _fchl19 _cholesky
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )
 install(FILES python/kernelforge/__init__.py DESTINATION kernelforge)
+
+# ---- Development targets -----------------------------------------------------
+# Collect all C++ source files
+file(GLOB_RECURSE KF_CXX_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
+)
+
+# clang-format target
+find_program(CLANG_FORMAT_EXE NAMES clang-format)
+if(CLANG_FORMAT_EXE)
+  add_custom_target(format
+    COMMAND ${CLANG_FORMAT_EXE} -i ${KF_CXX_SOURCES}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Running clang-format on all C++ source files"
+    VERBATIM
+  )
+else()
+  add_custom_target(format
+    COMMAND ${CMAKE_COMMAND} -E echo "clang-format not found. Please install it to use this target."
+    COMMENT "clang-format not available"
+  )
+endif()
+
+# clang-tidy target
+find_program(CLANG_TIDY_EXE NAMES clang-tidy)
+if(CLANG_TIDY_EXE)
+  add_custom_target(tidy
+    COMMAND ${CLANG_TIDY_EXE} ${KF_CXX_SOURCES} --
+      -std=c++17
+      -I${CMAKE_CURRENT_SOURCE_DIR}/src
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Running clang-tidy on all C++ source files"
+    VERBATIM
+  )
+else()
+  add_custom_target(tidy
+    COMMAND ${CMAKE_COMMAND} -E echo "clang-tidy not found. Please install it to use this target."
+    COMMENT "clang-tidy not available"
+  )
+endif()
