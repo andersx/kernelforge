@@ -32,12 +32,12 @@ jobs:
         run: brew install gcc libomp
 
       - name: Install cibuildwheel
-        run: python -m pip install cibuildwheel==2.*
+        run: python -m pip install cibuildwheel==3.3.1
 
       - name: Build wheels
         env:
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
-          CIBW_SKIP: "pp* *-musllinux_* cp*-manylinux_i686"
+          CIBW_SKIP: "pp* *-musllinux_* cp*-manylinux_i686 cp31?t-*"
           CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
           CIBW_TEST_EXTRAS: "test"
           CIBW_ENVIRONMENT: >
