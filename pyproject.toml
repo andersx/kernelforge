@@ -45,7 +45,7 @@ CMAKE_VERBOSE_MAKEFILE = "ON"
 CMAKE_BUILD_TYPE = "Release"
 
 [tool.uv.extra-build-dependencies]
-kernelforge = ["scikit_build_core"]
+kernelforge = ["scikit_build_core", "setuptools-scm>=8.0"]
 
 [tool.setuptools_scm]
 # Use git tags with 'v' prefix (e.g., v0.1.14)
