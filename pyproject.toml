@@ -1,10 +1,10 @@
 [build-system]
-requires = ["scikit-build-core>=0.9", "pybind11", "setuptools", "wheel"]
+requires = ["scikit-build-core>=0.9", "setuptools-scm>=8.0", "pybind11", "setuptools", "wheel"]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "kernelforge"
-version = "0.1.14"
+dynamic = ["version"]
 description = "Optimized Kernels for ML"
 readme = "README.md"
 license = {text = "MIT"}
@@ -44,9 +44,16 @@ CMAKE_BUILD_TYPE = "Release"
 [tool.uv.extra-build-dependencies]
 kernelforge = ["scikit_build_core"]
 
+[tool.setuptools_scm]
+# Use git tags with 'v' prefix (e.g., v0.1.14)
+version_scheme = "python-simplified-semver"
+local_scheme = "no-local-version"
+tag_regex = "^v?(?P<version>[0-9.]+)$"
+fallback_version = "0.0.0.dev0"
+
 [tool.black]
 line-length = 100
-target-version = ["py311", "py312"]
+target-version = ["py311", "py312"]  # Black doesn't support py313/py314 yet
 exclude = '''
 /(
     \.git

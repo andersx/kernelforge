@@ -1,3 +1,8 @@
 """KernelForge - Optimized kernels for machine learning."""
 
-__version__ = "0.1.8"
+try:
+    from importlib.metadata import version
+
+    __version__ = version("kernelforge")
+except Exception:
+    __version__ = "unknown"

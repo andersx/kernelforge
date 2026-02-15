@@ -140,6 +140,39 @@ When you commit, pre-commit automatically runs:
 
 If any check fails, the commit is rejected. Fix the issues and commit again.
 
+## Versioning
+
+KernelForge uses **setuptools-scm** for automatic version management based on git tags.
+
+### Version Format
+
+- **Release versions**: Determined by git tags (e.g., `v0.1.14` → version `0.1.14`)
+- **Development versions**: Automatic format `X.Y.Z.devN+g<commit>` between releases
+- **Example**: `0.1.15.dev7+gabc1234` means 7 commits after v0.1.14 tag
+
+### Creating a New Release
+
+```bash
+# 1. Ensure you're on the main branch and up to date
+git checkout master
+git pull
+
+# 2. Create and push a new tag (with 'v' prefix)
+git tag -a v0.1.15 -m "Release version 0.1.15"
+git push origin v0.1.15
+
+# 3. Version is automatically set to 0.1.15 when building
+```
+
+### Version Detection
+
+The version is automatically detected from git tags during:
+- Package building
+- Installation
+- Import (`from kernelforge import __version__`)
+
+**Note:** You should never manually edit version numbers in the code. Git tags are the single source of truth.
+
 ## Questions?
 
 Open an issue on GitHub if you have questions or need help!
