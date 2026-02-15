@@ -1,6 +1,6 @@
 // invdist.hpp
 #pragma once
-#include <cstddef> // size_t
+#include <cstddef>  // size_t
 
 namespace invdist {
 
@@ -15,10 +15,7 @@ std::size_t pair_to_index(std::size_t i, std::size_t j, std::size_t N) noexcept;
  * R_flat: (3N) flattened coords (x1,y1,z1, x2,y2,z2, ..., xN,yN,zN)
  * eps: small distance floor (used as max(eps^2, r^2))
  */
-void inverse_distance_upper(const double* R_flat,
-                            std::size_t N,
-                            double eps,
-                            double* x);
+void inverse_distance_upper(const double *R_flat, std::size_t N, double eps, double *x);
 
 /**
  * Same as above, plus dense Jacobian J (M x 3N).
@@ -26,11 +23,7 @@ void inverse_distance_upper(const double* R_flat,
  *   d(1/r_ij)/dr_i = -(r_i - r_j)/r^3
  *   d(1/r_ij)/dr_j = +(r_i - r_j)/r^3
  */
-void inverse_distance_upper_and_jacobian(const double* R_flat,
-                                         std::size_t N,
-                                         double eps,
-                                         double* x,
-                                         double* J);
+void inverse_distance_upper_and_jacobian(const double *R_flat, std::size_t N, double eps, double *x,
+                                         double *J);
 
-} // namespace invdist
-
+}  // namespace invdist

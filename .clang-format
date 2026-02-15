@@ -1,0 +1,84 @@
+---
+# KernelForge C++ Code Style Configuration
+# Based on Google style with customizations
+
+BasedOnStyle: Google
+
+# Core formatting preferences
+IndentWidth: 4
+ColumnLimit: 100
+DerivePointerAlignment: false
+PointerAlignment: Right  # int *ptr style
+UseTab: Never
+
+# Indentation
+AccessModifierOffset: -4
+IndentCaseLabels: true
+NamespaceIndentation: None
+IndentPPDirectives: BeforeHash
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignOperands: Align
+AlignTrailingComments: true
+
+# Line breaks
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AlwaysBreakAfterReturnType: None
+AlwaysBreakBeforeMultilineStrings: false
+
+# Braces (K&R style)
+BreakBeforeBraces: Attach
+BraceWrapping:
+  AfterClass: false
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterFunction: false
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  BeforeCatch: false
+  BeforeElse: false
+
+# Spaces
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpacesInParentheses: false
+SpacesInAngles: Never
+SpacesInSquareBrackets: false
+
+# Includes
+SortIncludes: true
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Own headers first
+  - Regex:           '^".*\.h(pp)?"$'
+    Priority:        1
+  # C system headers
+  - Regex:           '^<[a-z_]+\.h>$'
+    Priority:        2
+  # C++ standard library
+  - Regex:           '^<[a-z_]+>$'
+    Priority:        3
+  # Third-party libraries (BLAS, OpenMP, pybind11)
+  - Regex:           '^<(cblas|omp|pybind11|Accelerate).*>$'
+    Priority:        4
+  # Everything else
+  - Regex:           '.*'
+    Priority:        5
+
+# Language
+Language: Cpp
+Standard: c++17
+
+# Other
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+ReflowComments: true

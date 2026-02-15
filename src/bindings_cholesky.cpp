@@ -1,48 +1,50 @@
-#include <pybind11/pybind11.h>
+// C++ standard library
+#include <stdexcept>
+
+// Third-party libraries
 #include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+
+// Project headers
 #include "aligned_alloc64.hpp"
 #include "cholesky.hpp"
-
-#include <stdexcept>
 
 namespace py = pybind11;
 
 py::array_t<double> solve_cholesky_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> K_in,
-    py::array_t<double, py::array::c_style | py::array::forcecast> y_in,
-    double regularize = 0.0
-) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_in, double regularize = 0.0) {
     py::buffer_info Kbuf = K_in.request(true);
     py::buffer_info ybuf = y_in.request();
 
-    if (Kbuf.ndim != 2 || Kbuf.shape[0] != Kbuf.shape[1]) throw std::runtime_error("K must be n x n.");
-    if (ybuf.ndim != 1 || ybuf.shape[0] != Kbuf.shape[0]) throw std::runtime_error("y must have length n.");
+    if (Kbuf.ndim != 2 || Kbuf.shape[0] != Kbuf.shape[1])
+        throw std::runtime_error("K must be n x n.");
+    if (ybuf.ndim != 1 || ybuf.shape[0] != Kbuf.shape[0])
+        throw std::runtime_error("y must have length n.");
 
     const int n = static_cast<int>(Kbuf.shape[0]);
-    auto* K = static_cast<double*>(Kbuf.ptr);
-    const auto* y = static_cast<const double*>(ybuf.ptr);
+    auto *K = static_cast<double *>(Kbuf.ptr);
+    const auto *y = static_cast<const double *>(ybuf.ptr);
 
     // 64-byte aligned buffer that NumPy will own
-    double* alpha_ptr = aligned_alloc_64(n);
+    double *alpha_ptr = aligned_alloc_64(n);
 
     // Compute directly into the aligned buffer
     solve_cholesky(K, y, n, alpha_ptr, regularize);
 
-    auto free_capsule = py::capsule(alpha_ptr, [](void* p) {
-        aligned_free_64(static_cast<double*>(p));
-    });
+    auto free_capsule =
+        py::capsule(alpha_ptr, [](void *p) { aligned_free_64(static_cast<double *>(p)); });
 
     return py::array_t<double>({n}, {sizeof(double)}, alpha_ptr, free_capsule);
 }
 
 static py::array_t<double> solve_cholesky_rfp_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> K_arf_in, // 1-D RFP
-    py::array_t<double, py::array::c_style | py::array::forcecast> y_in,     // 1-D
+    py::array_t<double, py::array::c_style | py::array::forcecast> K_arf_in,  // 1-D RFP
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_in,      // 1-D
     double regularize,
-    char uplo = 'U',    // <-- pass the ACTUAL mapping of K_arf ('U' if your kernel wrote upper)
-    char transr = 'N'
-) {
-    auto Kbuf = K_arf_in.request(true); // writable: factorization is in-place
+    char uplo = 'U',  // <-- pass the ACTUAL mapping of K_arf ('U' if your kernel wrote upper)
+    char transr = 'N') {
+    auto Kbuf = K_arf_in.request(true);  // writable: factorization is in-place
     auto ybuf = y_in.request();
 
     if (Kbuf.ndim != 1 || ybuf.ndim != 1)
@@ -52,48 +54,50 @@ static py::array_t<double> solve_cholesky_rfp_py(
     if ((std::size_t)Kbuf.shape[0] != need)
         throw std::runtime_error("K_arf length must be n*(n+1)/2");
 
-    auto* K_arf = static_cast<double*>(Kbuf.ptr);
-    const auto* y = static_cast<const double*>(ybuf.ptr);
+    auto *K_arf = static_cast<double *>(Kbuf.ptr);
+    const auto *y = static_cast<const double *>(ybuf.ptr);
 
-    double* alpha_ptr = aligned_alloc_64((std::size_t)n);
-    if (!alpha_ptr) throw std::bad_alloc();
+    double *alpha_ptr = aligned_alloc_64((std::size_t)n);
+    if (!alpha_ptr)
+        throw std::bad_alloc();
 
     solve_cholesky_rfp(K_arf, y, n, alpha_ptr, regularize, uplo, transr);
 
-    auto cap = py::capsule(alpha_ptr, [](void* p){ aligned_free_64(p); });
-    return py::array_t<double>({ (py::ssize_t)n }, { (py::ssize_t)sizeof(double) }, alpha_ptr, cap);
+    auto cap = py::capsule(alpha_ptr, [](void *p) { aligned_free_64(p); });
+    return py::array_t<double>({(py::ssize_t)n}, {(py::ssize_t)sizeof(double)}, alpha_ptr, cap);
 }
 
-
-
-
-
 // Helper to normalize flags (inline to avoid extra helpers)
-static inline char norm_uplo(char u)  { return (u=='l'||u=='L') ? 'L' : 'U'; }
-static inline char norm_tr(char t)    { return (t=='t'||t=='T') ? 'T' : 'N'; }
-static inline char swap_uplo(char u)  { return (u=='U') ? 'L' : 'U'; }
+static inline char norm_uplo(char u) {
+    return (u == 'l' || u == 'L') ? 'L' : 'U';
+}
+static inline char norm_tr(char t) {
+    return (t == 't' || t == 'T') ? 'T' : 'N';
+}
+static inline char swap_uplo(char u) {
+    return (u == 'U') ? 'L' : 'U';
+}
 
 // Full (n×n, **C-order**) -> RFP (length n*(n+1)/2), no copy of A.
 // We pass the raw C-order pointer straight to Fortran, but **swap UPLO**.
 py::array_t<double> full_to_rfp_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> A_in,
-    char uplo = 'L',
-    char transr = 'N'
-) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> A_in, char uplo = 'L',
+    char transr = 'N') {
     py::buffer_info Abuf = A_in.request();  // C-order; no copy
     if (Abuf.ndim != 2 || Abuf.shape[0] != Abuf.shape[1])
         throw std::runtime_error("A must be square (n x n).");
 
-    uplo   = norm_uplo(uplo);
+    uplo = norm_uplo(uplo);
     transr = norm_tr(transr);
 
     const int n = static_cast<int>(Abuf.shape[0]);
-    const double* Arow = static_cast<const double*>(Abuf.ptr);
+    const double *Arow = static_cast<const double *>(Abuf.ptr);
 
     // Output RFP buffer
     const size_t nt = (size_t)n * (n + 1ull) / 2ull;
-    double* ARF = aligned_alloc_64(nt);
-    if (!ARF) throw std::bad_alloc();
+    double *ARF = aligned_alloc_64(nt);
+    if (!ARF)
+        throw std::bad_alloc();
 
     // Treat Arow as column-major A^T; swap UPLO so the intended triangle is used
     const int lda = n;
@@ -103,8 +107,8 @@ py::array_t<double> full_to_rfp_py(
         throw std::runtime_error("dtrttf_ failed, info=" + std::to_string(info));
     }
 
-    auto cap = py::capsule(ARF, [](void* p){ aligned_free_64(static_cast<double*>(p)); });
-    return py::array_t<double>({ (py::ssize_t)nt }, { (py::ssize_t)sizeof(double) }, ARF, cap);
+    auto cap = py::capsule(ARF, [](void *p) { aligned_free_64(static_cast<double *>(p)); });
+    return py::array_t<double>({(py::ssize_t)nt}, {(py::ssize_t)sizeof(double)}, ARF, cap);
 }
 
 // RFP (length n*(n+1)/2) -> Full (n×n, **C-order**), no extra copies.
@@ -112,12 +116,10 @@ py::array_t<double> full_to_rfp_py(
 // then **expose the same buffer as C-order**. Because the matrix is symmetric,
 // the transpose view is identical, and swapping UPLO ensures the expected triangle is filled.
 py::array_t<double> rfp_to_full_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> ARF_in,
-    int n,
-    char uplo = 'L',
-    char transr = 'N'
-) {
-    if (n <= 0) throw std::runtime_error("n must be > 0");
+    py::array_t<double, py::array::c_style | py::array::forcecast> ARF_in, int n, char uplo = 'L',
+    char transr = 'N') {
+    if (n <= 0)
+        throw std::runtime_error("n must be > 0");
     py::buffer_info Rbuf = ARF_in.request();
     if (Rbuf.ndim != 1)
         throw std::runtime_error("ARF must be a 1-D array.");
@@ -125,15 +127,16 @@ py::array_t<double> rfp_to_full_py(
     if ((size_t)Rbuf.shape[0] != need)
         throw std::runtime_error("ARF length must be n*(n+1)/2.");
 
-    uplo   = norm_uplo(uplo);
+    uplo = norm_uplo(uplo);
     transr = norm_tr(transr);
 
-    const double* ARF = static_cast<const double*>(Rbuf.ptr);
+    const double *ARF = static_cast<const double *>(Rbuf.ptr);
 
     // Allocate full matrix buffer once; we will *return it as C-order*
     const size_t nn = (size_t)n * (size_t)n;
-    double* A = aligned_alloc_64(nn);
-    if (!A) throw std::bad_alloc();
+    double *A = aligned_alloc_64(nn);
+    if (!A)
+        throw std::bad_alloc();
 
     // Fortran writes treating A as column-major; swap UPLO to compensate
     const int lda = n;
@@ -144,35 +147,31 @@ py::array_t<double> rfp_to_full_py(
     }
 
     // Expose as C-order (row-major) without copying
-    auto cap = py::capsule(A, [](void* p){ aligned_free_64(static_cast<double*>(p)); });
+    auto cap = py::capsule(A, [](void *p) { aligned_free_64(static_cast<double *>(p)); });
     return py::array_t<double>(
-        /* shape   */ { (py::ssize_t)n, (py::ssize_t)n },
-        /* strides */ { (py::ssize_t)(sizeof(double) * n), (py::ssize_t)sizeof(double) },
+        /* shape   */ {(py::ssize_t)n, (py::ssize_t)n},
+        /* strides */ {(py::ssize_t)(sizeof(double) * n), (py::ssize_t)sizeof(double)},
         /* ptr     */ A,
-        /* base    */ cap
-    );
+        /* base    */ cap);
 }
-
 
 PYBIND11_MODULE(_cholesky, m) {
     m.doc() = "Cholesky solvers";
-    m.def("solve_cholesky", &solve_cholesky_py,
-         py::arg("K"), py::arg("y"), py::arg("regularize") = 0.0,
-         "Solve Kx=y using Cholesky factorization.\n"
-         "- K is overwritten with factorization\n"
-         "- y is preserved\n"
-         "- regularize is added to diagonal of K\n"
-         "- alpha is returned");
-    m.def("solve_cholesky_rfp_L", &solve_cholesky_rfp_py,
-         py::arg("K_arf"), py::arg("y"), py::arg("regularize") = 0.0,
-          py::arg("uplo") = 'U',
+    m.def("solve_cholesky", &solve_cholesky_py, py::arg("K"), py::arg("y"),
+          py::arg("regularize") = 0.0,
+          "Solve Kx=y using Cholesky factorization.\n"
+          "- K is overwritten with factorization\n"
+          "- y is preserved\n"
+          "- regularize is added to diagonal of K\n"
+          "- alpha is returned");
+    m.def("solve_cholesky_rfp_L", &solve_cholesky_rfp_py, py::arg("K_arf"), py::arg("y"),
+          py::arg("regularize") = 0.0, py::arg("uplo") = 'U', py::arg("transr") = 'N',
+          "Solve (K * alpha = y) where K is SPD in RFP format (TRANSR='N', UPLO='L').\n"
+          "Overwrites K_arf during factorization (diagonal restored afterwards).");
+    m.def("full_to_rfp", &full_to_rfp_py, py::arg("A"), py::arg("uplo") = 'U',
           py::arg("transr") = 'N',
-         "Solve (K * alpha = y) where K is SPD in RFP format (TRANSR='N', UPLO='L').\n"
-         "Overwrites K_arf during factorization (diagonal restored afterwards).");
-    m.def("full_to_rfp", &full_to_rfp_py,
-          py::arg("A"), py::arg("uplo")='U', py::arg("transr")='N',
           "Full (n×n, Fortran-order) -> RFP (1-D). No copies; A must be F-contiguous.");
-    m.def("rfp_to_full", &rfp_to_full_py,
-          py::arg("ARF"), py::arg("n"), py::arg("uplo")='U', py::arg("transr")='N',
+    m.def("rfp_to_full", &rfp_to_full_py, py::arg("ARF"), py::arg("n"), py::arg("uplo") = 'U',
+          py::arg("transr") = 'N',
           "RFP (1-D) -> Full (n×n, Fortran-order). No extra copies; returns F-contiguous.");
 }
