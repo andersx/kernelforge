@@ -37,7 +37,7 @@ jobs:
           CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp
         run: |
           uv sync --dev --all-extras
-          uv pip install scikit-build-core pybind11
+          uv pip install scikit-build-core pybind11 setuptools-scm
           CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
                       -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++" \
             uv pip install -e .[test] --no-build-isolation
@@ -49,7 +49,7 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
         run: |
           uv sync --dev --all-extras
-          uv pip install scikit-build-core pybind11
+          uv pip install scikit-build-core pybind11 setuptools-scm
           uv pip install -e .[test] --no-build-isolation
 
 
