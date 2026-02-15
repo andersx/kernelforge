@@ -1,7 +1,7 @@
 """Type stubs for _kernels C++ extension module."""
 
-from numpy.typing import NDArray
 import numpy as np
+from numpy.typing import NDArray
 
 def kernel_symm(X: NDArray[np.float64], alpha: float) -> NDArray[np.float64]: ...
 def kernel_asymm(

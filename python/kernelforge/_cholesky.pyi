@@ -1,7 +1,7 @@
 """Type stubs for _cholesky C++ extension module."""
 
-from numpy.typing import NDArray
 import numpy as np
+from numpy.typing import NDArray
 
 def solve_cholesky(
     K: NDArray[np.float64], y: NDArray[np.float64], regularize: float = 0.0

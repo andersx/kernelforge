@@ -1,7 +1,7 @@
 """Type stubs for _fchl19 C++ extension module."""
 
-from numpy.typing import NDArray
 import numpy as np
+from numpy.typing import NDArray
 
 def compute_rep_size(nelements: int, nbasis2: int, nbasis3: int, nabasis: int) -> int: ...
 def generate_fchl_acsf(

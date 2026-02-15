@@ -1,7 +1,7 @@
 """Type stubs for _invdist C++ extension module."""
 
-from numpy.typing import NDArray
 import numpy as np
+from numpy.typing import NDArray
 
 def num_pairs(N: int) -> int: ...
 def inverse_distance_upper(R: NDArray[np.float64]) -> NDArray[np.float64]: ...
