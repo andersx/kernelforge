@@ -1,10 +1,7 @@
 #include <iostream>
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
 #include <vector>
 #include <cstring>
 #include <stdexcept>
-#include <chrono>
 
 // Declare Fortran LAPACK symbols (all vendors provide these)
 extern "C" {
@@ -66,20 +63,13 @@ void solve_cholesky(double* K, const double* y, int n, double* alpha, double reg
     // reset diagonal
     for (int i = 0; i < n; ++i) K[i * n + i] = diagonal[i];
 
-    // restore symmetry by mirroring upper triangle to lower triangle
-    auto start = std::chrono::high_resolution_clock::now();
+    // Restore symmetry by mirroring upper triangle to lower triangle
     #pragma omp parallel for schedule(static)
     for (size_t j = 1; j < n; ++j) {
         for (size_t i = 0; i < j; ++i) {
              K[j * n + i] = K[i * n + j];
         }
     }
-
-    // End timer
-    auto stop = std::chrono::high_resolution_clock::now();
-    // Compute duration in milliseconds
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
-    pybind11::print("Mirroring (reset) took", duration.count(), "ms");
 }
 
 

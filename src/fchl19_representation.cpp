@@ -10,12 +10,9 @@
 #include <cstdint>
 #include <limits>
 #include <numeric>
-#include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
-#include <chrono>
 #include <vector>
 #include <omp.h>
 #include <iostream>
@@ -1274,17 +1271,11 @@ void flocal_kernel_symmetric(
 
     // Zero once (full matrix; cheap and simple). If you only ever write the lower
     // triangle, you can halve this by zeroing rows up to i inclusive.
-    // std::memset(kernel, 0, sizeof(double) * (size_t)nm * nm);
-    auto start = std::chrono::high_resolution_clock::now();
+    // Initialize kernel matrix to zero
     #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < (size_t)nm * nm; ++i) {
         kernel[i] = 0.0;
     }
-    // cblas_dscal((int64_t)nm * nm, 0.0, kernel, 1);
-    auto stop = std::chrono::high_resolution_clock::now();
-    // Compute duration in milliseconds
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
-    pybind11::print("Fill took", duration.count(), "ms");
 
     const double inv_sigma2 = -1.0 / (2.0 * sigma * sigma);
 
@@ -2051,4 +2042,3 @@ void fgdml_kernel_symmetric_lower(
 
 
 } // namespace fchl19
-
