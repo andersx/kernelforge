@@ -72,7 +72,7 @@ def test_nonsymmetric_triangle_semantics(n, uplo, transr, seed=123) -> None:  # 
     np.testing.assert_allclose(Bs, expected, rtol=1e-13, atol=1e-13)
 
 
-def test_bad_length_raises() -> None:  # type: ignore[no-untyped-def]
+def test_bad_length_raises() -> None:
     n = 5
     good = np.zeros(n * (n + 1) // 2, dtype=np.float64)
     bad = np.zeros(good.size + 1, dtype=np.float64)
@@ -85,7 +85,7 @@ def test_bad_length_raises() -> None:  # type: ignore[no-untyped-def]
         _ = _cholesky.rfp_to_full(bad, n, uplo="U", transr="N")
 
 
-def test_c_contiguity_and_dtype() -> None:  # type: ignore[no-untyped-def]
+def test_c_contiguity_and_dtype() -> None:
     n = 6
     A = np.arange(n * n, dtype=np.float64).reshape(n, n)  # C-order by default
     arf = _cholesky.full_to_rfp(A, uplo="U", transr="N")

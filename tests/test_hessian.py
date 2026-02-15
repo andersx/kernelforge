@@ -88,7 +88,7 @@ def test_various_tile_sizes(tile_B) -> None:  # type: ignore[no-untyped-def]
     np.testing.assert_allclose(H, H_ref, rtol=1e-12, atol=1e-12)
 
 
-def test_bad_sigma_raises() -> None:  # type: ignore[no-untyped-def]
+def test_bad_sigma_raises() -> None:
     rng = np.random.default_rng(2)
     X1 = rng.normal(size=(1, 3))
     X2 = rng.normal(size=(1, 3))
@@ -101,7 +101,7 @@ def test_bad_sigma_raises() -> None:  # type: ignore[no-untyped-def]
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, -1.0)
 
 
-def test_shape_mismatch_raises() -> None:  # type: ignore[no-untyped-def]
+def test_shape_mismatch_raises() -> None:
     rng = np.random.default_rng(3)
     X1 = rng.normal(size=(2, 4))
     X2 = rng.normal(size=(3, 4))

@@ -9,7 +9,7 @@ def _strict_upper_pairs(N):  # type: ignore
     return [(i, j) for i in range(N) for j in range(i + 1, N)]
 
 
-def test_shapes_and_basic_values() -> None:  # type: ignore[no-untyped-def]
+def test_shapes_and_basic_values() -> None:
     rng = np.random.default_rng(0)
 
     N1, N2 = 3, 4
@@ -30,7 +30,7 @@ def test_shapes_and_basic_values() -> None:  # type: ignore[no-untyped-def]
     assert not np.allclose(K, 0.0)
 
 
-def test_formula_matches_numpy_reference() -> None:  # type: ignore[no-untyped-def]
+def test_formula_matches_numpy_reference() -> None:
     rng = np.random.default_rng(1)
 
     N1, N2 = 2, 3
@@ -117,7 +117,7 @@ def test_finite_difference_linearized_feature_model(N1, N2, M, N) -> None:  # ty
         np.testing.assert_allclose(ana[coords_to_test], num[coords_to_test], rtol=rtol, atol=atol)
 
 
-def test_bad_sigma_raises() -> None:  # type: ignore[no-untyped-def]
+def test_bad_sigma_raises() -> None:
     rng = np.random.default_rng(3)
 
     N1, N2, M, D = 1, 1, 4, 6
@@ -132,7 +132,7 @@ def test_bad_sigma_raises() -> None:  # type: ignore[no-untyped-def]
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, -1.0)
 
 
-def test_input_shape_mismatch_errors() -> None:  # type: ignore[no-untyped-def]
+def test_input_shape_mismatch_errors() -> None:
     rng = np.random.default_rng(4)
 
     N1, N2, M, D = 2, 2, 5, 9

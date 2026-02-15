@@ -11,7 +11,7 @@ def _strict_upper_pairs(N):  # type: ignore
     return [(i, j) for i in range(N) for j in range(i + 1, N)]
 
 
-def test_shapes_and_ordering_and_sparsity() -> None:  # type: ignore[no-untyped-def]
+def test_shapes_and_ordering_and_sparsity() -> None:
     rng = np.random.default_rng(42)
     N = 5
     # well-separated random coords to avoid tiny distances
@@ -74,7 +74,7 @@ def test_jacobian_central_difference(N) -> None:  # type: ignore[no-untyped-def]
         np.testing.assert_allclose(ana_col, num_col, rtol=rtol, atol=atol)
 
 
-def test_eps_stability_no_nan_inf() -> None:  # type: ignore[no-untyped-def]
+def test_eps_stability_no_nan_inf() -> None:
     rng = np.random.default_rng(7)
     N = 4
     R = rng.normal(size=(N, 3)) * 1e-9  # nearly coincident (stress eps path)

@@ -96,7 +96,7 @@ def test_fatomic_local_gradient_kernel_matches_reference(seed) -> None:  # type:
     np.testing.assert_allclose(K, K_ref, rtol=1e-10, atol=1e-10)
 
 
-def test_no_matches_yields_zero_matrix() -> None:  # type: ignore[no-untyped-def]
+def test_no_matches_yields_zero_matrix() -> None:
     rng = np.random.default_rng(42)
     nm1, nm2 = 2, 2
     max_atoms1, max_atoms2 = 3, 3
@@ -118,7 +118,7 @@ def test_no_matches_yields_zero_matrix() -> None:  # type: ignore[no-untyped-def
     assert np.allclose(K, 0.0)
 
 
-def test_empty_derivatives_returns_nm1_by_0() -> None:  # type: ignore[no-untyped-def]
+def test_empty_derivatives_returns_nm1_by_0() -> None:
     rng = np.random.default_rng(7)
     nm1, nm2 = 3, 2
     max_atoms1, max_atoms2 = 4, 3
@@ -140,7 +140,7 @@ def test_empty_derivatives_returns_nm1_by_0() -> None:  # type: ignore[no-untype
     assert K.size == 0
 
 
-def test_shape_errors_raise_valueerror() -> None:  # type: ignore[no-untyped-def]
+def test_shape_errors_raise_valueerror() -> None:
     rng = np.random.default_rng(9)
     nm1, nm2 = 2, 2
     max_atoms1, max_atoms2 = 3, 3
