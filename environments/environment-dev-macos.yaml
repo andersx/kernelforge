@@ -28,6 +28,6 @@ dependencies:
   - pytest-cov
   - pytest-xdist
   - pytest-timeout
-  - clang_arm64 
-  - clangxx_arm64 
+  - clang_arm64
+  - clangxx_arm64
   - llvm-openmp

@@ -1,7 +1,8 @@
 // invdist.cpp
 #include "invdist.hpp"
-#include <cmath>
+
 #include <algorithm>
+#include <cmath>
 
 namespace invdist {
 
@@ -15,11 +16,7 @@ std::size_t pair_to_index(std::size_t i, std::size_t j, std::size_t N) noexcept 
     return i * (N - 1) - (i * (i + 1)) / 2 + (j - i - 1);
 }
 
-void inverse_distance_upper(const double* R_flat,
-                            std::size_t N,
-                            double eps,
-                            double* x)
-{
+void inverse_distance_upper(const double *R_flat, std::size_t N, double eps, double *x) {
     const double eps2 = eps * eps;
     std::size_t p = 0;
 
@@ -35,20 +32,17 @@ void inverse_distance_upper(const double* R_flat,
             const double Dy = yi - R_flat[j0 + 1];
             const double Dz = zi - R_flat[j0 + 2];
 
-            double r2 = Dx*Dx + Dy*Dy + Dz*Dz;
-            if (r2 < eps2) r2 = eps2;
+            double r2 = Dx * Dx + Dy * Dy + Dz * Dz;
+            if (r2 < eps2)
+                r2 = eps2;
 
             x[p] = 1.0 / std::sqrt(r2);
         }
     }
 }
 
-void inverse_distance_upper_and_jacobian(const double* R_flat,
-                                         std::size_t N,
-                                         double eps,
-                                         double* x,
-                                         double* J)
-{
+void inverse_distance_upper_and_jacobian(const double *R_flat, std::size_t N, double eps, double *x,
+                                         double *J) {
     const std::size_t M = num_pairs(N);
     const std::size_t D = 3 * N;
 
@@ -70,11 +64,12 @@ void inverse_distance_upper_and_jacobian(const double* R_flat,
             const double Dy = yi - R_flat[j0 + 1];
             const double Dz = zi - R_flat[j0 + 2];
 
-            double r2 = Dx*Dx + Dy*Dy + Dz*Dz;
-            if (r2 < eps2) r2 = eps2;
+            double r2 = Dx * Dx + Dy * Dy + Dz * Dz;
+            if (r2 < eps2)
+                r2 = eps2;
 
-            const double inv_r  = 1.0 / std::sqrt(r2);
-            const double inv_r3 = inv_r / r2; // 1/r^3
+            const double inv_r = 1.0 / std::sqrt(r2);
+            const double inv_r3 = inv_r / r2;  // 1/r^3
 
             x[p] = inv_r;
 
@@ -94,5 +89,4 @@ void inverse_distance_upper_and_jacobian(const double* R_flat,
     }
 }
 
-} // namespace invdist
-
+}  // namespace invdist
