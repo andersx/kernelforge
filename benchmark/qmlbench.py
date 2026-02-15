@@ -11,27 +11,25 @@ Usage:
     python benchmark/qmlbench.py gdml-kernels
 """
 
-import sys
-import time
 import platform
 import socket
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Tuple, List, Optional
+import sys
+import tempfile
+import time
 import urllib.request
 import zipfile
-import tempfile
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import typer
 
 from kernelforge._fchl19 import (
-    generate_fchl_acsf,
-    generate_fchl_acsf_and_gradients,
+    fgdml_kernel_symm,
     flocal_kernel,
     flocal_kernel_symm,
-    fgdml_kernel,
-    fgdml_kernel_symm,
+    generate_fchl_acsf,
+    generate_fchl_acsf_and_gradients,
 )
 
 # ============================================================================
@@ -55,10 +53,8 @@ def load_ethanol_raw_data() -> np.ndarray:
     npz_path = CACHE_DIR / "ethanol_ccsd_t-train.npz"
 
     if not npz_path.exists():
-        url = (
-            "https://sgdml.org/secure_proxy.php?file=data/npz/ethanol_ccsd_t-train.zip"
-        )
-        print(f"  [Downloading ethanol dataset...]")
+        url = "https://sgdml.org/secure_proxy.php?file=data/npz/ethanol_ccsd_t-train.zip"
+        print("  [Downloading ethanol dataset...]")
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -81,7 +77,7 @@ def load_qm7b_raw_data() -> np.ndarray:
 
     if not npz_path.exists():
         url = "https://github.com/andersx/kernelforge/releases/download/dataset-qm7b-v1.0/qm7b_complete.npz"
-        print(f"  [Downloading QM7b dataset...]")
+        print("  [Downloading QM7b dataset...]")
 
         try:
             urllib.request.urlretrieve(url, npz_path)
@@ -92,7 +88,7 @@ def load_qm7b_raw_data() -> np.ndarray:
     return np.load(npz_path, allow_pickle=True)
 
 
-def prepare_ethanol_fchl19(n_structures: int = 100) -> Dict:
+def prepare_ethanol_fchl19(n_structures: int = 100) -> dict:
     """Prepare FCHL19 representations and gradients for ethanol."""
     data = load_ethanol_raw_data()
     R = data["R"][:n_structures]
@@ -114,7 +110,7 @@ def prepare_ethanol_fchl19(n_structures: int = 100) -> Dict:
     return {"X": X, "dX": dX, "N": N, "Q": Q, "z": z}
 
 
-def prepare_qm7b_fchl19(n_structures: int = 100) -> Dict:
+def prepare_qm7b_fchl19(n_structures: int = 100) -> dict:
     """Prepare FCHL19 representations for QM7b."""
     data = load_qm7b_raw_data()
     R = data["R"][:n_structures]
@@ -151,7 +147,7 @@ def prepare_qm7b_fchl19(n_structures: int = 100) -> Dict:
 # ============================================================================
 
 
-def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
+def benchmark_ethanol_fchl19_representations() -> tuple[float, str]:
     """Benchmark FCHL19 representation generation on ethanol (N=100)."""
     data = load_ethanol_raw_data()
     R = data["R"][:100]
@@ -169,7 +165,7 @@ def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
     return elapsed, "Ethanol FCHL19 representations (N=100)"
 
 
-def benchmark_ethanol_fchl19_gradients() -> Tuple[float, str]:
+def benchmark_ethanol_fchl19_gradients() -> tuple[float, str]:
     """Benchmark FCHL19 gradient computation on ethanol (N=100)."""
     data = load_ethanol_raw_data()
     R = data["R"][:100]
@@ -187,7 +183,7 @@ def benchmark_ethanol_fchl19_gradients() -> Tuple[float, str]:
     return elapsed, "Ethanol FCHL19 gradients (N=100)"
 
 
-def benchmark_qm7b_fchl19_representations() -> Tuple[float, str]:
+def benchmark_qm7b_fchl19_representations() -> tuple[float, str]:
     """Benchmark FCHL19 representation generation on QM7b (N=100)."""
     data = load_qm7b_raw_data()
     R = data["R"][:100]
@@ -204,7 +200,7 @@ def benchmark_qm7b_fchl19_representations() -> Tuple[float, str]:
     return elapsed, "QM7b FCHL19 representations (N=100)"
 
 
-def benchmark_qm7b_fchl19_gradients() -> Tuple[float, str]:
+def benchmark_qm7b_fchl19_gradients() -> tuple[float, str]:
     """Benchmark FCHL19 gradient computation on QM7b (N=100)."""
     data = load_qm7b_raw_data()
     R = data["R"][:100]
@@ -221,7 +217,7 @@ def benchmark_qm7b_fchl19_gradients() -> Tuple[float, str]:
     return elapsed, "QM7b FCHL19 gradients (N=100)"
 
 
-def benchmark_kernel_symm_ethanol() -> Tuple[float, str]:
+def benchmark_kernel_symm_ethanol() -> tuple[float, str]:
     """Benchmark symmetric local kernel on ethanol (N=100)."""
     data = prepare_ethanol_fchl19(100)
     X = data["X"][:100]
@@ -236,7 +232,7 @@ def benchmark_kernel_symm_ethanol() -> Tuple[float, str]:
     return elapsed, "Local kernel symmetric (Ethanol, N=100)"
 
 
-def benchmark_kernel_asymm_ethanol() -> Tuple[float, str]:
+def benchmark_kernel_asymm_ethanol() -> tuple[float, str]:
     """Benchmark asymmetric local kernel on ethanol (N=20, train-test split)."""
     data = prepare_ethanol_fchl19(20)
     X = data["X"][:20]
@@ -256,7 +252,7 @@ def benchmark_kernel_asymm_ethanol() -> Tuple[float, str]:
     return elapsed, "Local kernel asymmetric (Ethanol, N=20)"
 
 
-def benchmark_kernel_symm_qm7b() -> Tuple[float, str]:
+def benchmark_kernel_symm_qm7b() -> tuple[float, str]:
     """Benchmark symmetric local kernel on QM7b (N=100)."""
     data = prepare_qm7b_fchl19(100)
     X = data["X"][:100]
@@ -271,7 +267,7 @@ def benchmark_kernel_symm_qm7b() -> Tuple[float, str]:
     return elapsed, "Local kernel symmetric (QM7b, N=100)"
 
 
-def benchmark_kernel_asymm_qm7b() -> Tuple[float, str]:
+def benchmark_kernel_asymm_qm7b() -> tuple[float, str]:
     """Benchmark asymmetric local kernel on QM7b (N=100, train-test split)."""
     data = prepare_qm7b_fchl19(100)
     X = data["X"][:100]
@@ -291,7 +287,7 @@ def benchmark_kernel_asymm_qm7b() -> Tuple[float, str]:
     return elapsed, "Local kernel asymmetric (QM7b, N=100)"
 
 
-def benchmark_kernel_gdml_symm_ethanol() -> Tuple[float, str]:
+def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
     """Benchmark symmetric GDML kernel on ethanol (N=20)."""
     data = prepare_ethanol_fchl19(20)
     X = data["X"][:20]
@@ -354,20 +350,20 @@ for suite_benchmarks in SUITES.values():
 # ============================================================================
 
 
-def get_system_info() -> Dict[str, str]:
+def get_system_info() -> dict[str, str]:
     """Collect system information."""
     try:
         import psutil
 
         cpu_count = psutil.cpu_count(logical=True)
-    except:
+    except ImportError:
         cpu_count = 1
 
     try:
         import cpuinfo
 
         cpu_model = cpuinfo.get_cpu_info().get("brand_raw", "Unknown CPU")
-    except:
+    except ImportError:
         cpu_model = "Unknown CPU"
 
     py_version = f"{platform.python_version()} ({platform.python_implementation()})"
@@ -415,7 +411,7 @@ def print_footer(total_ms: float, count: int) -> None:
     print()
     print(f"  Total time:  {total_s:.4f} s")
     print(f"  Benchmarks:  {count}")
-    print(f"  Status:      OK ✓")
+    print("  Status:      OK ✓")
     print()
 
 
@@ -468,7 +464,7 @@ def run(
                 f"Error running benchmark '{bench_name}': {e}",
                 fg=typer.colors.RED,
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
     # Print footer
     print_footer(total_ms, len(results))

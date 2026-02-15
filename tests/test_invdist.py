@@ -8,7 +8,7 @@ from kernelforge import _invdist as invdist
 
 def _strict_upper_pairs(N):
     """[(0,1), (0,2), ..., (N-2,N-1)]"""
-    return [(i, j) for i in range(N) for j in range(i+1, N)]
+    return [(i, j) for i in range(N) for j in range(i + 1, N)]
 
 
 def test_shapes_and_ordering_and_sparsity():
@@ -82,4 +82,3 @@ def test_eps_stability_no_nan_inf():
     x, J = invdist.inverse_distance_upper_and_jacobian(R, eps=1e-8)
     assert np.isfinite(x).all()
     assert np.isfinite(J).all()
-

@@ -1,22 +1,17 @@
 import numpy as np
-from kernelforge import _cholesky
-
-import numpy as np
 import pytest
+
+from kernelforge import _cholesky
 
 
 def test_small_system():
-    K = np.array([[4.0, 2.0, 0.6],
-                  [2.0, 5.0, 1.5],
-                  [0.6, 1.5, 3.0]], dtype=np.float64)
+    K = np.array([[4.0, 2.0, 0.6], [2.0, 5.0, 1.5], [0.6, 1.5, 3.0]], dtype=np.float64)
     y = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
     alpha = _cholesky.solve_cholesky(K, y, regularize=0.0)
 
     # Verify K_original @ alpha ≈ y
-    K_original = np.array([[4.0, 2.0, 0.6],
-                           [2.0, 5.0, 1.5],
-                           [0.6, 1.5, 3.0]], dtype=np.float64)
+    K_original = np.array([[4.0, 2.0, 0.6], [2.0, 5.0, 1.5], [0.6, 1.5, 3.0]], dtype=np.float64)
     np.testing.assert_allclose(K_original @ alpha, y, rtol=1e-12, atol=1e-14)
 
     # y must be preserved
@@ -40,8 +35,7 @@ def test_random_pd_matrix():
 
     alpha = _cholesky.solve_cholesky(K, y, regularize=0.0)
 
-    np.testing.assert_allclose((A.T @ A + np.eye(6) * 1e-6) @ alpha, y,
-                               rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose((A.T @ A + np.eye(6) * 1e-6) @ alpha, y, rtol=1e-10, atol=1e-12)
 
 
 def test_non_square_matrix():
@@ -56,4 +50,3 @@ def test_mismatched_size():
         K = np.eye(3, dtype=np.float64)
         y = np.ones(4, dtype=np.float64)
         _cholesky.solve_cholesky(K, y)
-

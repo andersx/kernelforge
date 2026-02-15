@@ -41,18 +41,21 @@ def assemble_ref_full(X1, dX1, X2, dX2, sigma):
             H_block = ref_block(x1, J1, x2, J2, sigma)
             ra = a * D1
             cb = b * D2
-            H[ra:ra+D1, cb:cb+D2] = H_block
+            H[ra : ra + D1, cb : cb + D2] = H_block
     return H
 
 
-@pytest.mark.parametrize("N1,N2,M,D1,D2", [
-    (2, 3, 5, 4, 3),
-    (1, 1, 6, 5, 5),
-])
+@pytest.mark.parametrize(
+    "N1,N2,M,D1,D2",
+    [
+        (2, 3, 5, 4, 3),
+        (1, 1, 6, 5, 5),
+    ],
+)
 def test_shapes_and_values(N1, N2, M, D1, D2):
     rng = np.random.default_rng(0)
-    X1  = rng.normal(size=(N1, M))
-    X2  = rng.normal(size=(N2, M))
+    X1 = rng.normal(size=(N1, M))
+    X2 = rng.normal(size=(N2, M))
     dX1 = rng.normal(size=(N1, M, D1))
     dX2 = rng.normal(size=(N2, M, D2))
     sigma = 0.7
@@ -69,8 +72,8 @@ def test_shapes_and_values(N1, N2, M, D1, D2):
 def test_various_tile_sizes(tile_B):
     rng = np.random.default_rng(1)
     N1, N2, M, D1, D2 = 2, 5, 8, 3, 4
-    X1  = rng.normal(size=(N1, M))
-    X2  = rng.normal(size=(N2, M))
+    X1 = rng.normal(size=(N1, M))
+    X2 = rng.normal(size=(N2, M))
     dX1 = rng.normal(size=(N1, M, D1))
     dX2 = rng.normal(size=(N2, M, D2))
     sigma = 0.9
@@ -87,8 +90,8 @@ def test_various_tile_sizes(tile_B):
 
 def test_bad_sigma_raises():
     rng = np.random.default_rng(2)
-    X1  = rng.normal(size=(1, 3))
-    X2  = rng.normal(size=(1, 3))
+    X1 = rng.normal(size=(1, 3))
+    X2 = rng.normal(size=(1, 3))
     dX1 = rng.normal(size=(1, 3, 2))
     dX2 = rng.normal(size=(1, 3, 2))
 
@@ -100,8 +103,8 @@ def test_bad_sigma_raises():
 
 def test_shape_mismatch_raises():
     rng = np.random.default_rng(3)
-    X1  = rng.normal(size=(2, 4))
-    X2  = rng.normal(size=(3, 4))
+    X1 = rng.normal(size=(2, 4))
+    X2 = rng.normal(size=(3, 4))
     dX1 = rng.normal(size=(2, 4, 3))
     dX2 = rng.normal(size=(3, 4, 5))
 
@@ -120,4 +123,3 @@ def test_shape_mismatch_raises():
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2[:-1], 0.8)
     with pytest.raises(Exception):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2[:, :-1, :], 0.8)
-

@@ -3,9 +3,10 @@ import pytest
 
 from kernelforge import _cholesky
 
+
 def _sym_from_triangle(A, uplo):
     """Build a symmetric matrix from only one triangle of A (ignores the other)."""
-    if uplo == 'U':
+    if uplo == "U":
         T = np.triu(A)
         return T + np.triu(A, 1).T
     else:
@@ -19,7 +20,7 @@ def _sym_from_triangle(A, uplo):
 def test_roundtrip_symmetric(n, uplo, transr, seed=0):
     rng = np.random.default_rng(seed)
     M = rng.standard_normal((n, n))
-    A = (M + M.T) * 0.5         # symmetric
+    A = (M + M.T) * 0.5  # symmetric
     A = np.ascontiguousarray(A, dtype=np.float64)
     assert A.flags["C_CONTIGUOUS"]
 
@@ -58,7 +59,7 @@ def test_nonsymmetric_triangle_semantics(n, uplo, transr, seed=123):
     assert A.flags["C_CONTIGUOUS"]
 
     arf = _cholesky.full_to_rfp(A, uplo=uplo, transr=transr)
-    B   = _cholesky.rfp_to_full(arf, n=n, uplo=uplo, transr=transr)
+    B = _cholesky.rfp_to_full(arf, n=n, uplo=uplo, transr=transr)
 
     if uplo == "U":
         np.testing.assert_allclose(np.triu(B), np.triu(A), rtol=1e-13, atol=1e-13)
@@ -74,7 +75,7 @@ def test_nonsymmetric_triangle_semantics(n, uplo, transr, seed=123):
 def test_bad_length_raises():
     n = 5
     good = np.zeros(n * (n + 1) // 2, dtype=np.float64)
-    bad  = np.zeros(good.size + 1, dtype=np.float64)
+    bad = np.zeros(good.size + 1, dtype=np.float64)
 
     # Good length works
     _ = _cholesky.rfp_to_full(good, n, uplo="U", transr="N")
@@ -86,7 +87,7 @@ def test_bad_length_raises():
 
 def test_c_contiguity_and_dtype():
     n = 6
-    A = np.arange(n*n, dtype=np.float64).reshape(n, n)  # C-order by default
+    A = np.arange(n * n, dtype=np.float64).reshape(n, n)  # C-order by default
     arf = _cholesky.full_to_rfp(A, uplo="U", transr="N")
     assert arf.dtype == np.float64 and arf.flags["C_CONTIGUOUS"]
 
@@ -95,4 +96,3 @@ def test_c_contiguity_and_dtype():
 
     # Triangle must match original's triangle
     np.testing.assert_allclose(np.triu(B), np.triu(A), rtol=0, atol=0)
-

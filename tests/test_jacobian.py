@@ -88,7 +88,7 @@ def test_finite_difference_linearized_feature_model(N1, N2, M, N):
     atol = 5e-6
     rtol = 2e-4
 
-    for (a, b) in pairs_to_test:
+    for a, b in pairs_to_test:
         x1 = X1[a].copy()
         J = dX1[a]  # (M, D)
         x2 = X2[b]
@@ -152,4 +152,3 @@ def test_input_shape_mismatch_errors():
     # dX1 N1 dimension must match X1 N1
     with pytest.raises(Exception):
         _ = _kernels.gaussian_jacobian_batch(X1[:-1], dX1, X2_ok, 0.9)
-
