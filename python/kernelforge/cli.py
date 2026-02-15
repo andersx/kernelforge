@@ -6,9 +6,9 @@ import urllib.request
 import zipfile
 from importlib.metadata import version
 from pathlib import Path
-from typing import Dict, Tuple
 
 import numpy as np
+
 from kernelforge._fchl19 import (
     fgdml_kernel,
     fgdml_kernel_symm,
@@ -31,7 +31,7 @@ def load_ethanol_raw_data() -> np.ndarray:
 
     if not npz_path.exists():
         url = "https://sgdml.org/secure_proxy.php?file=data/npz/ethanol_ccsd_t.zip"
-        print(f"  [Downloading ethanol dataset...]")
+        print("  [Downloading ethanol dataset...]")
 
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -39,9 +39,7 @@ def load_ethanol_raw_data() -> np.ndarray:
                 req = urllib.request.Request(url)
                 with urllib.request.urlopen(req) as response:
                     if response.status != 200:
-                        raise RuntimeError(
-                            f"HTTP {response.status}: Failed to download from {url}"
-                        )
+                        raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
                     with open(zip_path, "wb") as f:
                         f.write(response.read())
 
@@ -62,15 +60,13 @@ def load_qm7b_raw_data() -> np.ndarray:
 
     if not npz_path.exists():
         url = "https://github.com/andersx/kernelforge/releases/download/dataset-qm7b-v1.0/qm7b_complete.npz"
-        print(f"  [Downloading QM7b dataset...]")
+        print("  [Downloading QM7b dataset...]")
 
         try:
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req) as response:
                 if response.status != 200:
-                    raise RuntimeError(
-                        f"HTTP {response.status}: Failed to download from {url}"
-                    )
+                    raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
                 with open(npz_path, "wb") as f:
                     f.write(response.read())
         except Exception as e:
@@ -80,7 +76,7 @@ def load_qm7b_raw_data() -> np.ndarray:
     return np.load(npz_path, allow_pickle=True)
 
 
-def prepare_ethanol_fchl19(n_structures: int = 100) -> Dict:
+def prepare_ethanol_fchl19(n_structures: int = 100) -> dict:
     """Prepare FCHL19 representations and gradients for ethanol."""
     data = load_ethanol_raw_data()
     R = data["R"][:n_structures]
@@ -102,7 +98,7 @@ def prepare_ethanol_fchl19(n_structures: int = 100) -> Dict:
     return {"X": X, "dX": dX, "N": N, "Q": Q, "z": z}
 
 
-def prepare_qm7b_fchl19(n_structures: int = 100) -> Dict:
+def prepare_qm7b_fchl19(n_structures: int = 100) -> dict:
     """Prepare FCHL19 representations for QM7b."""
     data = load_qm7b_raw_data()
     R = data["R"][:n_structures]
@@ -134,7 +130,7 @@ def prepare_qm7b_fchl19(n_structures: int = 100) -> Dict:
     return {"X": X, "N": N, "Q": Q}
 
 
-def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
+def benchmark_ethanol_fchl19_representations() -> tuple[float, str]:
     """Benchmark FCHL19 representation generation on ethanol (N=1000)."""
     data = load_ethanol_raw_data()
     n = 10000
@@ -150,7 +146,7 @@ def benchmark_ethanol_fchl19_representations() -> Tuple[float, str]:
     return elapsed, f"Ethanol FCHL19 representations (N={n})"
 
 
-def benchmark_ethanol_fchl19_gradients() -> Tuple[float, str]:
+def benchmark_ethanol_fchl19_gradients() -> tuple[float, str]:
     """Benchmark FCHL19 gradient computation on ethanol (N=1000)."""
     data = load_ethanol_raw_data()
     n = 10000
@@ -166,7 +162,7 @@ def benchmark_ethanol_fchl19_gradients() -> Tuple[float, str]:
     return elapsed, f"Ethanol FCHL19 gradients (N={n})"
 
 
-def benchmark_qm7b_fchl19_representations() -> Tuple[float, str]:
+def benchmark_qm7b_fchl19_representations() -> tuple[float, str]:
     """Benchmark FCHL19 representation generation on QM7b (N=7211)."""
     data = load_qm7b_raw_data()
     R = data["R"]
@@ -181,7 +177,7 @@ def benchmark_qm7b_fchl19_representations() -> Tuple[float, str]:
     return elapsed, f"QM7b FCHL19 representations (N={len(R)})"
 
 
-def benchmark_qm7b_fchl19_gradients() -> Tuple[float, str]:
+def benchmark_qm7b_fchl19_gradients() -> tuple[float, str]:
     """Benchmark FCHL19 gradient computation on QM7b (N=7211)."""
     data = load_qm7b_raw_data()
     R = data["R"]
@@ -196,7 +192,7 @@ def benchmark_qm7b_fchl19_gradients() -> Tuple[float, str]:
     return elapsed, "QM7b FCHL19 gradients (N=7211)"
 
 
-def benchmark_kernel_symm_ethanol() -> Tuple[float, str]:
+def benchmark_kernel_symm_ethanol() -> tuple[float, str]:
     """Benchmark symmetric local kernel on ethanol (N=100)."""
     data = prepare_ethanol_fchl19(100)
     X = data["X"][:100]
@@ -211,7 +207,7 @@ def benchmark_kernel_symm_ethanol() -> Tuple[float, str]:
     return elapsed, "Local kernel symmetric (Ethanol, N=100)"
 
 
-def benchmark_kernel_asymm_ethanol() -> Tuple[float, str]:
+def benchmark_kernel_asymm_ethanol() -> tuple[float, str]:
     """Benchmark asymmetric local kernel on ethanol (N=20, train-test split)."""
     data = prepare_ethanol_fchl19(20)
     X = data["X"][:20]
@@ -231,7 +227,7 @@ def benchmark_kernel_asymm_ethanol() -> Tuple[float, str]:
     return elapsed, "Local kernel asymmetric (Ethanol, N=20)"
 
 
-def benchmark_kernel_symm_qm7b() -> Tuple[float, str]:
+def benchmark_kernel_symm_qm7b() -> tuple[float, str]:
     """Benchmark symmetric local kernel on QM7b (N=100)."""
     data = prepare_qm7b_fchl19(100)
     X = data["X"][:100]
@@ -246,7 +242,7 @@ def benchmark_kernel_symm_qm7b() -> Tuple[float, str]:
     return elapsed, "Local kernel symmetric (QM7b, N=100)"
 
 
-def benchmark_kernel_asymm_qm7b() -> Tuple[float, str]:
+def benchmark_kernel_asymm_qm7b() -> tuple[float, str]:
     """Benchmark asymmetric local kernel on QM7b (N=100, train-test split)."""
     data = prepare_qm7b_fchl19(100)
     X = data["X"][:100]
@@ -266,7 +262,7 @@ def benchmark_kernel_asymm_qm7b() -> Tuple[float, str]:
     return elapsed, "Local kernel asymmetric (QM7b, N=100)"
 
 
-def benchmark_kernel_gdml_ethanol() -> Tuple[float, str]:
+def benchmark_kernel_gdml_ethanol() -> tuple[float, str]:
     """Benchmark symmetric GDML kernel on ethanol (N=100)."""
     n = 200
     data = prepare_ethanol_fchl19(n)
@@ -280,10 +276,10 @@ def benchmark_kernel_gdml_ethanol() -> Tuple[float, str]:
     K = fgdml_kernel(X, X, dX, dX, Q, Q, N, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"GDML kernel symmetric (Ethanol, N=n)"
+    return elapsed, "GDML kernel symmetric (Ethanol, N=n)"
 
 
-def benchmark_kernel_gdml_symm_ethanol() -> Tuple[float, str]:
+def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
     """Benchmark symmetric GDML kernel on ethanol (N=100)."""
     n = 200
     data = prepare_ethanol_fchl19(n)
@@ -297,7 +293,7 @@ def benchmark_kernel_gdml_symm_ethanol() -> Tuple[float, str]:
     K = fgdml_kernel_symm(X, dX, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"GDML kernel symmetric (Ethanol, N=n)"
+    return elapsed, "GDML kernel symmetric (Ethanol, N=n)"
 
 
 BENCHMARKS = {
@@ -365,7 +361,7 @@ def print_footer(total_ms: float, count: int) -> None:
     print()
     print(f"  Total time:  {total_s:.4f} s")
     print(f"  Benchmarks:  {count}")
-    print(f"  Status:      OK ✓")
+    print("  Status:      OK ✓")
     print()
 
 

@@ -98,6 +98,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["F401", "F811", "N803", "N806", "F841", "B017", "B023", "C408"]  # Test-specific ignores
 "benchmark/*" = ["N806", "F841", "B905"]  # Allow uppercase variable names (X, R, N, Q standard in ML), unused K (benchmarking), zip without strict
+"python/kernelforge/cli.py" = ["N806", "F841", "B905"]  # CLI benchmarking code - same conventions as benchmark/
 
 [tool.mypy]
 python_version = "3.11"
