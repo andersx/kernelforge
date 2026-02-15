@@ -122,14 +122,6 @@ strict_optional = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["numpy.*", "pytest.*", "typer.*", "psutil.*", "cpuinfo.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "kernelforge.*"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
 module = [
     "test_cholesky",
     "test_fchl19",
