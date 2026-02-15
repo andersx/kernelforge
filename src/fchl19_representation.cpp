@@ -207,150 +207,151 @@ void generate_fchl_acsf(
         ang_w[l] = 2.0 * std::exp(-0.5 * t * t);
     }
 
-    // Precompute log(Rs2)
+    // Precompute log(Rs2) and 1/Rs2
     std::vector<double> log_Rs2(nbasis2, 0.0);
+    std::vector<double> inv_Rs2(nbasis2, 0.0);
     for (size_t k = 0; k < nbasis2; ++k) {
         if (Rs2[k] <= 0.0) throw std::invalid_argument("All Rs2 must be > 0");
         log_Rs2[k] = std::log(Rs2[k]);
+        inv_Rs2[k] = 1.0 / Rs2[k];
     }
 
     // ---------------- Two-body term ----------------
-#if defined(_OPENMP)
-    // Use per-row locks to avoid atomics and compute each pair once.
-    std::vector<omp_lock_t> row_locks(natoms);
-    for (size_t r = 0; r < natoms; ++r) omp_init_lock(&row_locks[r]);
+    // Thread-local buffers + reduction (no locks needed)
+    #pragma omp parallel
+    {
+        std::vector<double> rep_local(natoms * rep_size, 0.0);
 
-    #pragma omp parallel for schedule(dynamic)
-    for (long long ii = 0; ii < static_cast<long long>(natoms); ++ii) {
-        const size_t i = static_cast<size_t>(ii);
-        const int elem_i = elem_of_atom[i];
-        for (size_t j = i + 1; j < natoms; ++j) {
-            const int elem_j = elem_of_atom[j];
-            const double rij = D[idx2(i,j,natoms)];
-            if (rij > rcut) continue;
+        #pragma omp for schedule(dynamic) nowait
+        for (long long ii = 0; ii < static_cast<long long>(natoms); ++ii) {
+            const size_t i = static_cast<size_t>(ii);
+            const int elem_i = elem_of_atom[i];
+            for (size_t j = i + 1; j < natoms; ++j) {
+                const int elem_j = elem_of_atom[j];
+                const double rij = D[idx2(i,j,natoms)];
+                if (rij > rcut) continue;
 
-            const double rij2 = rij * rij;
-            const double t = eta2 / std::max(rij2, EPS);
-            const double log1pt = std::log1p(t);
-            const double sigma = std::sqrt(std::max(log1pt, 0.0));
-            if (sigma < EPS) continue;
-            const double mu = std::log(rij) - 0.5 * log1pt;
-            const double decay_ij = rdecay2[idx2(i,j,natoms)];
-            const double inv_pref = decay_ij / (sigma * SQRT_2PI * std::pow(rij, two_body_decay));
+                const double rij2 = rij * rij;
+                const double t = eta2 / std::max(rij2, EPS);
+                const double log1pt = std::log1p(t);
+                const double sigma = std::sqrt(std::max(log1pt, 0.0));
+                if (sigma < EPS) continue;
+                const double mu = std::log(rij) - 0.5 * log1pt;
+                const double decay_ij = rdecay2[idx2(i,j,natoms)];
+                const double inv_pref = decay_ij / (sigma * SQRT_2PI * std::pow(rij, two_body_decay));
+                const double inv_sigma_sq = 1.0 / (sigma * sigma);
 
-            const size_t ch_j = static_cast<size_t>(elem_j) * nbasis2;
-            const size_t ch_i = static_cast<size_t>(elem_i) * nbasis2;
+                const size_t ch_j = static_cast<size_t>(elem_j) * nbasis2;
+                const size_t ch_i = static_cast<size_t>(elem_i) * nbasis2;
 
-            const size_t arow = i < j ? i : j;
-            const size_t brow = i < j ? j : i;
-            omp_set_lock(&row_locks[arow]);
-            omp_set_lock(&row_locks[brow]);
-
-            for (size_t k = 0; k < nbasis2; ++k) {
-                const double dlog = log_Rs2[k] - mu;
-                const double g = std::exp(-0.5 * (dlog * dlog) / (sigma * sigma));
-                const double val = inv_pref * (g / Rs2[k]);
-                rep[idx2(i, ch_j + k, rep_size)] += val;
-                rep[idx2(j, ch_i + k, rep_size)] += val;
+                for (size_t k = 0; k < nbasis2; ++k) {
+                    const double dlog = log_Rs2[k] - mu;
+                    const double g = std::exp(-0.5 * dlog * dlog * inv_sigma_sq);
+                    const double val = inv_pref * g * inv_Rs2[k];
+                    rep_local[idx2(i, ch_j + k, rep_size)] += val;
+                    rep_local[idx2(j, ch_i + k, rep_size)] += val;
+                }
             }
-
-            omp_unset_lock(&row_locks[brow]);
-            omp_unset_lock(&row_locks[arow]);
         }
-    }
 
-    for (size_t r = 0; r < natoms; ++r) omp_destroy_lock(&row_locks[r]);
-#else
-    for (size_t i = 0; i < natoms; ++i) {
-        const int elem_i = elem_of_atom[i];
-        for (size_t j = i + 1; j < natoms; ++j) {
-            const int elem_j = elem_of_atom[j];
-            const double rij = D[idx2(i,j,natoms)];
-            if (rij > rcut) continue;
-
-            const double rij2 = rij * rij;
-            const double t = eta2 / std::max(rij2, EPS);
-            const double log1pt = std::log1p(t);
-            const double sigma = std::sqrt(std::max(log1pt, 0.0));
-            if (sigma < EPS) continue;
-            const double mu = std::log(rij) - 0.5 * log1pt;
-            const double decay_ij = rdecay2[idx2(i,j,natoms)];
-            const double inv_pref = decay_ij / (sigma * SQRT_2PI * std::pow(rij, two_body_decay));
-
-            const size_t ch_j = static_cast<size_t>(elem_j) * nbasis2;
-            const size_t ch_i = static_cast<size_t>(elem_i) * nbasis2;
-
-            for (size_t k = 0; k < nbasis2; ++k) {
-                const double dlog = log_Rs2[k] - mu;
-                const double g = std::exp(-0.5 * (dlog * dlog) / (sigma * sigma));
-                const double val = inv_pref * (g / Rs2[k]);
-                rep[idx2(i, ch_j + k, rep_size)] += val;
-                rep[idx2(j, ch_i + k, rep_size)] += val;
+        // Reduce thread-local buffers into global rep
+        #pragma omp critical
+        {
+            for (size_t idx = 0; idx < natoms * rep_size; ++idx) {
+                rep[idx] += rep_local[idx];
             }
         }
     }
-#endif
 
     // ---------------- Three-body term ----------------
+    const size_t three_offset = nelements * nbasis2;
+
     #pragma omp parallel for schedule(dynamic)
     for (size_t i = 0; i < natoms; ++i) {
-        const int elem_i = elem_of_atom[i]; (void)elem_i; // symmetry only
-        std::array<double,3> A,B,C;
-        const double* rb = &coords[3*i]; B = {rb[0], rb[1], rb[2]};
+        // Thread-local angular buffer (avoid heap alloc per triplet)
+        std::vector<double> angular(nabasis);
+
+        const double* rb = &coords[3*i];
         for (size_t j = 0; j + 1 < natoms; ++j) {
             if (j == i) continue;
             const double rij = D[idx2(i,j,natoms)];
             if (rij > acut) continue;
-            const int elem_j = elem_of_atom[j]; (void)elem_j;
-            const double* ra = &coords[3*j]; A = {ra[0], ra[1], ra[2]};
+            const int elem_j = elem_of_atom[j];
+            const double* ra = &coords[3*j];
+
+            // Precompute normalized edge vector eij = (A-B)/rij
+            const double inv_rij = 1.0 / std::max(rij, EPS);
+            const double eij0 = (ra[0] - rb[0]) * inv_rij;
+            const double eij1 = (ra[1] - rb[1]) * inv_rij;
+            const double eij2 = (ra[2] - rb[2]) * inv_rij;
+
             for (size_t k = j + 1; k < natoms; ++k) {
                 if (k == i) continue;
-                if (k == j) continue;
                 const double rik = D[idx2(i,k,natoms)];
                 if (rik > acut) continue;
-                const int elem_k = elem_of_atom[k]; (void)elem_k;
-                const double* rc = &coords[3*k]; C = {rc[0], rc[1], rc[2]};
+                const int elem_k = elem_of_atom[k];
+                const double* rc = &coords[3*k];
 
-                const double angle_ib = calc_angle(A.data(), B.data(), C.data());
-                const double cos1 = std::cos(angle_ib);
-                const double cos2 = calc_cos_angle(A.data(), C.data(), B.data());
-                const double cos3 = calc_cos_angle(B.data(), A.data(), C.data());
+                // Normalized edge vector eik = (C-B)/rik
+                const double inv_rik = 1.0 / std::max(rik, EPS);
+                const double eik0 = (rc[0] - rb[0]) * inv_rik;
+                const double eik1 = (rc[1] - rb[1]) * inv_rik;
+                const double eik2 = (rc[2] - rb[2]) * inv_rik;
 
+                // Normalized edge vector ejk = (C-A)/rjk
                 const double rjk = D[idx2(j,k,natoms)];
+                const double inv_rjk = 1.0 / std::max(rjk, EPS);
+                const double ejk0 = (rc[0] - ra[0]) * inv_rjk;
+                const double ejk1 = (rc[1] - ra[1]) * inv_rjk;
+                const double ejk2 = (rc[2] - ra[2]) * inv_rjk;
+
+                // Cosines from dot products of normalized vectors (no acos needed)
+                double cos_i = eij0*eik0 + eij1*eik1 + eij2*eik2;
+                cos_i = std::max(-1.0, std::min(1.0, cos_i));
+                const double cos_j = -(eij0*ejk0 + eij1*ejk1 + eij2*ejk2);  // dot(-eij, ejk)
+                const double cos_k = eik0*ejk0 + eik1*ejk1 + eik2*ejk2;     // dot(eik, ejk) = dot(-eik, -ejk)
+
+                // ATM factor
+                const double denom = std::pow(std::max(rik*rij*rjk, EPS), three_body_decay);
+                const double ksi3 = (1.0 + 3.0 * cos_i * cos_j * cos_k) * (three_body_weight / denom);
+
+                // Angular basis via Chebyshev recurrence (no acos/cos/sin calls)
+                const double sin_i = std::sqrt(std::max(0.0, 1.0 - cos_i * cos_i));
+                // o=1: cos(1*angle) = cos_i, sin(1*angle) = sin_i
+                angular[0] = ang_w[0] * cos_i;
+                if (nabasis > 1) angular[1] = ang_w[0] * sin_i;
+
+                // Higher harmonics o=3,5,... via Chebyshev recurrence
+                if (n_harm > 1) {
+                    const double two_cos = 2.0 * cos_i;
+                    double cn_2 = 1.0, sn_2 = 0.0;     // cos(0), sin(0)
+                    double cn_1 = cos_i, sn_1 = sin_i;  // cos(θ), sin(θ)
+                    size_t harm_stored = 1;
+                    const int max_o = ang_o[n_harm - 1];
+                    for (int n = 2; n <= max_o; ++n) {
+                        const double cn = two_cos * cn_1 - cn_2;
+                        const double sn = two_cos * sn_1 - sn_2;
+                        cn_2 = cn_1; sn_2 = sn_1;
+                        cn_1 = cn;   sn_1 = sn;
+                        if (n == ang_o[harm_stored]) {
+                            angular[2*harm_stored]     = ang_w[harm_stored] * cn;
+                            angular[2*harm_stored + 1] = ang_w[harm_stored] * sn;
+                            if (++harm_stored >= n_harm) break;
+                        }
+                    }
+                }
+
+                // Element pair index and accumulation
+                const size_t pair_idx = pair_index(nelements, elem_j, elem_k);
+                const size_t base = three_offset + pair_idx * (nbasis3 * nabasis);
+
                 const double decay_ij = rdecay3[idx2(i,j,natoms)];
                 const double decay_ik = rdecay3[idx2(i,k,natoms)];
                 const double rbar = 0.5 * (rij + rik);
 
-                const double denom = std::pow(std::max(rik*rij*rjk, EPS), three_body_decay);
-                const double ksi3 = (1.0 + 3.0 * cos1 * cos2 * cos3) * (three_body_weight / denom);
-
-                std::vector<double> angular(nabasis, 0.0);
-                for (size_t l = 0; l < n_harm; ++l) {
-                    const int o = ang_o[l];
-                    const double w = ang_w[l];
-                    const double oa = static_cast<double>(o) * angle_ib;
-                    const size_t ci = 2*l;
-                    const size_t si = 2*l + 1;
-                    angular[ci] = w * std::cos(oa);
-                    angular[si] = w * std::sin(oa);
-                }
-
-                auto pair_index = [nelements](int p, int q) -> size_t {
-                    if (p > q) std::swap(p, q);
-                    const long long llp = p, llq = q, llen = static_cast<long long>(nelements);
-                    long long idx = -llp * (llp + 1) / 2 + llq + llen * llp;
-                    return static_cast<size_t>(idx);
-                };
-
-                const int p = std::min(elem_j, elem_k);
-                const int q = std::max(elem_j, elem_k);
-                const size_t pair_idx = pair_index(p, q);
-
-                const size_t three_offset = nelements * nbasis2; // start of 3-body block
-                const size_t base = three_offset + pair_idx * (nbasis3 * nabasis);
-
                 for (size_t l = 0; l < nbasis3; ++l) {
-                    const double radial_l = std::exp(-eta3 * (rbar - Rs3[l]) * (rbar - Rs3[l])) * decay_ij * decay_ik;
+                    const double dr = rbar - Rs3[l];
+                    const double radial_l = std::exp(-eta3 * dr * dr) * decay_ij * decay_ik;
                     const double scale = radial_l * ksi3;
                     const size_t z = base + l * nabasis;
                     double* dst = &rep[idx2(i, z, rep_size)];
@@ -494,14 +495,22 @@ void generate_fchl_acsf_and_gradients(
 
     // ---------------- Three-body: values + gradients ----------------
     const size_t three_offset = nelements * nbasis2;
-    // Scratch arrays
-    std::array<double,3> A,B,C;
+    const size_t three_block_size = rep_size - three_offset;
+    const double inv_acut = (acut > 0) ? 1.0 / acut : 0.0;
+    const double ang_w_pre = std::exp(-0.5 * zeta * zeta) * 2.0;
+    const double tbd_over_w_pre = (three_body_weight != 0.0) ? (three_body_decay / three_body_weight) : 0.0;
 
+    #pragma omp parallel for schedule(dynamic)
     for(size_t i=0;i<natoms;++i){
         // per-center buffers for the 3-body block
-        std::vector<double> atom_rep(rep_size - three_offset, 0.0);
-        std::vector<double> atom_grad((rep_size - three_offset) * natoms * 3, 0.0);
-        const double* rb = &coords[3*i]; B = {rb[0], rb[1], rb[2]};
+        std::vector<double> atom_rep(three_block_size, 0.0);
+        std::vector<double> atom_grad(three_block_size * natoms * 3, 0.0);
+        // Pre-allocated scratch buffers (avoid heap alloc per triplet)
+        std::vector<double> radial(nbasis3), d_radial(nbasis3);
+        std::vector<double> angular(nabasis), d_angular(nabasis);
+
+        const double* rb = &coords[3*i];
+        const double Bx = rb[0], By = rb[1], Bz = rb[2];
         for(size_t j=0;j+1<natoms;++j){
             if (j==i) continue;
             const double rij = D[idx2(i,j,natoms)]; if (rij>acut) continue;
@@ -509,7 +518,17 @@ void generate_fchl_acsf_and_gradients(
             const double invrij = invD[idx2(i,j,natoms)];
             const double invrij2 = invD2[idx2(i,j,natoms)];
             const int elem_j = elem_of_atom[j];
-            const double* ra = &coords[3*j]; A = {ra[0], ra[1], ra[2]};
+            const double* ra = &coords[3*j];
+            const double Ax = ra[0], Ay = ra[1], Az = ra[2];
+
+            // Precompute normalized edge vector eij = (A-B)/rij
+            const double eij0 = (Ax - Bx) * invrij;
+            const double eij1 = (Ay - By) * invrij;
+            const double eij2 = (Az - Bz) * invrij;
+
+            // Precompute decay derivative scalar for ij
+            const double s_ij = -PI * std::sin(PI * rij * inv_acut) * 0.5 * invrij * inv_acut;
+
             for(size_t k=j+1;k<natoms;++k){
                 if (k==i) continue;
                 const double rik = D[idx2(i,k,natoms)]; if (rik>acut) continue;
@@ -518,52 +537,63 @@ void generate_fchl_acsf_and_gradients(
                 const double invrik2 = invD2[idx2(i,k,natoms)];
                 const double invrjk = invD[idx2(j,k,natoms)];
                 const int elem_k = elem_of_atom[k];
-                const double* rc = &coords[3*k]; C = {rc[0], rc[1], rc[2]};
+                const double* rc = &coords[3*k];
+                const double Cx = rc[0], Cy = rc[1], Cz = rc[2];
 
-                const double angle = calc_angle(A.data(), B.data(), C.data());
-                const double cos_i = calc_cos_angle(A.data(), B.data(), C.data());
-                const double cos_k = calc_cos_angle(A.data(), C.data(), B.data());
-                const double cos_j = calc_cos_angle(B.data(), A.data(), C.data());
-                const double dot = (A[0]-B[0])*(C[0]-B[0]) + (A[1]-B[1])*(C[1]-B[1]) + (A[2]-B[2])*(C[2]-B[2]);
+                // Normalized edge vectors
+                const double eik0 = (Cx - Bx) * invrik;
+                const double eik1 = (Cy - By) * invrik;
+                const double eik2 = (Cz - Bz) * invrik;
+                const double ejk0 = (Cx - Ax) * invrjk;
+                const double ejk1 = (Cy - Ay) * invrjk;
+                const double ejk2 = (Cz - Az) * invrjk;
 
-                // radial parts per Rs3 center
-                std::vector<double> radial(nbasis3), radial_base(nbasis3), d_radial(nbasis3);
+                // Cosines from dot products (no acos/cos/sin needed)
+                double cos_i = eij0*eik0 + eij1*eik1 + eij2*eik2;
+                cos_i = std::max(-1.0, std::min(1.0, cos_i));
+                const double cos_j = -(eij0*ejk0 + eij1*ejk1 + eij2*ejk2);
+                const double cos_k = eik0*ejk0 + eik1*ejk1 + eik2*ejk2;
+
+                // Raw dot product (A-B)·(C-B) — needed for angle gradient
+                const double dot = (Ax-Bx)*(Cx-Bx) + (Ay-By)*(Cy-By) + (Az-Bz)*(Cz-Bz);
+
+                // Radial parts per Rs3 center (reuse pre-allocated buffer)
                 for(size_t l=0;l<nbasis3;++l){
                     const double rbar = 0.5*(rij+rik) - Rs3[l];
                     const double base = std::exp(-eta3 * rbar * rbar);
-                    radial_base[l] = base;
                     d_radial[l] = base * eta3 * rbar;
-                    radial[l] = base; // decay applied later per-term
+                    radial[l] = base;
                 }
 
-                // Angular basis for nFourier=1 only, as in the Fortran gradient
-                const double ang_w = std::exp(-0.5*zeta*zeta) * 2.0;
-                std::vector<double> angular(nabasis, 0.0), d_angular(nabasis, 0.0);
-                if (nabasis>=1) { angular[0] = ang_w * std::cos(angle); d_angular[0] = ang_w * std::sin(angle); }
-                if (nabasis>=2) { angular[1] = ang_w * std::sin(angle); d_angular[1] = -ang_w * std::cos(angle); }
-                // d angle / d coordinates scale (denominator)
-                const double denom = std::sqrt(std::max(1e-10, rij2*rik2 - dot*dot));
-                // direction vectors multiplying d_angular (3-vectors)
-                std::array<double,3> d_ang_d_j, d_ang_d_k, d_ang_d_i;
-                d_ang_d_j = { C[0]-B[0] + dot*( (B[0]-A[0]) * invrij2 ),
-                              C[1]-B[1] + dot*( (B[1]-A[1]) * invrij2 ),
-                              C[2]-B[2] + dot*( (B[2]-A[2]) * invrij2 ) };
-                d_ang_d_k = { A[0]-B[0] + dot*( (B[0]-C[0]) * invrik2 ),
-                              A[1]-B[1] + dot*( (B[1]-C[1]) * invrik2 ),
-                              A[2]-B[2] + dot*( (B[2]-C[2]) * invrik2 ) };
-                d_ang_d_i = { -(d_ang_d_j[0] + d_ang_d_k[0]),
-                               -(d_ang_d_j[1] + d_ang_d_k[1]),
-                               -(d_ang_d_j[2] + d_ang_d_k[2]) };
+                // Angular basis from cos_i, sin_i (no trig calls)
+                const double sin_i = std::sqrt(std::max(0.0, 1.0 - cos_i * cos_i));
+                angular[0] = ang_w_pre * cos_i;
+                d_angular[0] = ang_w_pre * sin_i;
+                if (nabasis >= 2) {
+                    angular[1] = ang_w_pre * sin_i;
+                    d_angular[1] = -ang_w_pre * cos_i;
+                }
 
-                // Decay derivatives
+                // d angle / d coordinates (denominator)
+                const double denom = std::sqrt(std::max(1e-10, rij2*rik2 - dot*dot));
+                // direction vectors multiplying d_angular
+                const double d_ang_d_j0 = Cx-Bx + dot*((Bx-Ax)*invrij2);
+                const double d_ang_d_j1 = Cy-By + dot*((By-Ay)*invrij2);
+                const double d_ang_d_j2 = Cz-Bz + dot*((Bz-Az)*invrij2);
+                const double d_ang_d_k0 = Ax-Bx + dot*((Bx-Cx)*invrik2);
+                const double d_ang_d_k1 = Ay-By + dot*((By-Cy)*invrik2);
+                const double d_ang_d_k2 = Az-Bz + dot*((Bz-Cz)*invrik2);
+                const double d_ang_d_i0 = -(d_ang_d_j0 + d_ang_d_k0);
+                const double d_ang_d_i1 = -(d_ang_d_j1 + d_ang_d_k1);
+                const double d_ang_d_i2 = -(d_ang_d_j2 + d_ang_d_k2);
+
+                // Decay and decay derivatives
                 const double decay_ij = rdecay3[idx2(i,j,natoms)];
                 const double decay_ik = rdecay3[idx2(i,k,natoms)];
-                std::array<double,3> d_ijdecay = { -PI*(B[0]-A[0]) * std::sin(PI*rij*(acut>0?1.0/acut:0.0)) * 0.5 * invrij * (acut>0?1.0/acut:0.0),
-                                                   -PI*(B[1]-A[1]) * std::sin(PI*rij*(acut>0?1.0/acut:0.0)) * 0.5 * invrij * (acut>0?1.0/acut:0.0),
-                                                   -PI*(B[2]-A[2]) * std::sin(PI*rij*(acut>0?1.0/acut:0.0)) * 0.5 * invrij * (acut>0?1.0/acut:0.0) };
-                std::array<double,3> d_ikdecay = { -PI*(B[0]-C[0]) * std::sin(PI*rik*(acut>0?1.0/acut:0.0)) * 0.5 * invrik * (acut>0?1.0/acut:0.0),
-                                                   -PI*(B[1]-C[1]) * std::sin(PI*rik*(acut>0?1.0/acut:0.0)) * 0.5 * invrik * (acut>0?1.0/acut:0.0),
-                                                   -PI*(B[2]-C[2]) * std::sin(PI*rik*(acut>0?1.0/acut:0.0)) * 0.5 * invrik * (acut>0?1.0/acut:0.0) };
+                // d_ijdecay[t] = s_ij * (B[t] - A[t])
+                const double d_ijd0 = s_ij * (Bx-Ax), d_ijd1 = s_ij * (By-Ay), d_ijd2 = s_ij * (Bz-Az);
+                const double s_ik = -PI * std::sin(PI * rik * inv_acut) * 0.5 * invrik * inv_acut;
+                const double d_ikd0 = s_ik * (Bx-Cx), d_ikd1 = s_ik * (By-Cy), d_ikd2 = s_ik * (Bz-Cz);
 
                 // ATM factor and its pieces
                 const double invr_atm = std::pow(invrij * invrjk * invrik, three_body_decay);
@@ -572,105 +602,145 @@ void generate_fchl_acsf_and_gradients(
                 const double atm_j = (3.0 * cos_k * cos_i) * invr_atm * invrij * invrjk;
                 const double atm_k = (3.0 * cos_i * cos_j) * invr_atm * invrjk * invrik;
 
-                const double vi = (A[0]-B[0])*(C[0]-B[0]) + (A[1]-B[1])*(C[1]-B[1]) + (A[2]-B[2])*(C[2]-B[2]);
-                const double vj = (C[0]-A[0])*(B[0]-A[0]) + (C[1]-A[1])*(B[1]-A[1]) + (C[2]-A[2])*(B[2]-A[2]);
-                const double vk = (B[0]-C[0])*(A[0]-C[0]) + (B[1]-C[1])*(A[1]-C[1]) + (B[2]-C[2])*(A[2]-C[2]);
+                const double vi = dot; // (A-B)·(C-B)
+                const double vj = (Cx-Ax)*(Bx-Ax) + (Cy-Ay)*(By-Ay) + (Cz-Az)*(Bz-Az);
+                const double vk = (Bx-Cx)*(Ax-Cx) + (By-Cy)*(Ay-Cy) + (Bz-Cz)*(Az-Cz);
 
-                std::array<double,3> d_atm_ii = { 2*B[0]-A[0]-C[0] - vi*((B[0]-A[0])*invrij*invrij + (B[0]-C[0])*invrik*invrik),
-                                                  2*B[1]-A[1]-C[1] - vi*((B[1]-A[1])*invrij*invrij + (B[1]-C[1])*invrik*invrik),
-                                                  2*B[2]-A[2]-C[2] - vi*((B[2]-A[2])*invrij*invrij + (B[2]-C[2])*invrik*invrik) };
-                std::array<double,3> d_atm_ij = { C[0]-A[0] - vj*(B[0]-A[0])*invrij*invrij,
-                                                  C[1]-A[1] - vj*(B[1]-A[1])*invrij*invrij,
-                                                  C[2]-A[2] - vj*(B[2]-A[2])*invrij*invrij };
-                std::array<double,3> d_atm_ik = { A[0]-C[0] - vk*(B[0]-C[0])*invrik*invrik,
-                                                  A[1]-C[1] - vk*(B[1]-C[1])*invrik*invrik,
-                                                  A[2]-C[2] - vk*(B[2]-C[2])*invrik*invrik };
+                // ATM derivative direction vectors (3 atoms x 3 derivative sources)
+                const double d_atm_ii0 = 2*Bx-Ax-Cx - vi*((Bx-Ax)*invrij2 + (Bx-Cx)*invrik2);
+                const double d_atm_ii1 = 2*By-Ay-Cy - vi*((By-Ay)*invrij2 + (By-Cy)*invrik2);
+                const double d_atm_ii2 = 2*Bz-Az-Cz - vi*((Bz-Az)*invrij2 + (Bz-Cz)*invrik2);
+                const double d_atm_ij0 = Cx-Ax - vj*(Bx-Ax)*invrij2;
+                const double d_atm_ij1 = Cy-Ay - vj*(By-Ay)*invrij2;
+                const double d_atm_ij2 = Cz-Az - vj*(Bz-Az)*invrij2;
+                const double d_atm_ik0 = Ax-Cx - vk*(Bx-Cx)*invrik2;
+                const double d_atm_ik1 = Ay-Cy - vk*(By-Cy)*invrik2;
+                const double d_atm_ik2 = Az-Cz - vk*(Bz-Cz)*invrik2;
 
-                std::array<double,3> d_atm_ji = { C[0]-B[0] - vi*(A[0]-B[0])*invrij*invrij,
-                                                  C[1]-B[1] - vi*(A[1]-B[1])*invrij*invrij,
-                                                  C[2]-B[2] - vi*(A[2]-B[2])*invrij*invrij };
-                std::array<double,3> d_atm_jj = { 2*A[0]-B[0]-C[0] - vj*((A[0]-B[0])*invrij*invrij + (A[0]-C[0])*invrjk*invrjk),
-                                                  2*A[1]-B[1]-C[1] - vj*((A[1]-B[1])*invrij*invrij + (A[1]-C[1])*invrjk*invrjk),
-                                                  2*A[2]-B[2]-C[2] - vj*((A[2]-B[2])*invrij*invrij + (A[2]-C[2])*invrjk*invrjk) };
-                std::array<double,3> d_atm_jk = { B[0]-C[0] - vk*(A[0]-C[0])*invrjk*invrjk,
-                                                  B[1]-C[1] - vk*(A[1]-C[1])*invrjk*invrjk,
-                                                  B[2]-C[2] - vk*(A[2]-C[2])*invrjk*invrjk };
+                const double d_atm_ji0 = Cx-Bx - vi*(Ax-Bx)*invrij2;
+                const double d_atm_ji1 = Cy-By - vi*(Ay-By)*invrij2;
+                const double d_atm_ji2 = Cz-Bz - vi*(Az-Bz)*invrij2;
+                const double d_atm_jj0 = 2*Ax-Bx-Cx - vj*((Ax-Bx)*invrij2 + (Ax-Cx)*invrjk*invrjk);
+                const double d_atm_jj1 = 2*Ay-By-Cy - vj*((Ay-By)*invrij2 + (Ay-Cy)*invrjk*invrjk);
+                const double d_atm_jj2 = 2*Az-Bz-Cz - vj*((Az-Bz)*invrij2 + (Az-Cz)*invrjk*invrjk);
+                const double d_atm_jk0 = Bx-Cx - vk*(Ax-Cx)*invrjk*invrjk;
+                const double d_atm_jk1 = By-Cy - vk*(Ay-Cy)*invrjk*invrjk;
+                const double d_atm_jk2 = Bz-Cz - vk*(Az-Cz)*invrjk*invrjk;
 
-                std::array<double,3> d_atm_ki = { A[0]-B[0] - vi*(C[0]-B[0])*invrik*invrik,
-                                                  A[1]-B[1] - vi*(C[1]-B[1])*invrik*invrik,
-                                                  A[2]-B[2] - vi*(C[2]-B[2])*invrik*invrik };
-                std::array<double,3> d_atm_kj = { B[0]-A[0] - vj*(C[0]-A[0])*invrjk*invrjk,
-                                                  B[1]-A[1] - vj*(C[1]-A[1])*invrjk*invrjk,
-                                                  B[2]-A[2] - vj*(C[2]-A[2])*invrjk*invrjk };
-                std::array<double,3> d_atm_kk = { 2*C[0]-A[0]-B[0] - vk*((C[0]-A[0])*invrjk*invrjk + (C[0]-B[0])*invrik*invrik),
-                                                  2*C[1]-A[1]-B[1] - vk*((C[1]-A[1])*invrjk*invrjk + (C[1]-B[1])*invrik*invrik),
-                                                  2*C[2]-A[2]-B[2] - vk*((C[2]-A[2])*invrjk*invrjk + (C[2]-B[2])*invrik*invrik) };
+                const double d_atm_ki0 = Ax-Bx - vi*(Cx-Bx)*invrik2;
+                const double d_atm_ki1 = Ay-By - vi*(Cy-By)*invrik2;
+                const double d_atm_ki2 = Az-Bz - vi*(Cz-Bz)*invrik2;
+                const double d_atm_kj0 = Bx-Ax - vj*(Cx-Ax)*invrjk*invrjk;
+                const double d_atm_kj1 = By-Ay - vj*(Cy-Ay)*invrjk*invrjk;
+                const double d_atm_kj2 = Bz-Az - vj*(Cz-Az)*invrjk*invrjk;
+                const double d_atm_kk0 = 2*Cx-Ax-Bx - vk*((Cx-Ax)*invrjk*invrjk + (Cx-Bx)*invrik2);
+                const double d_atm_kk1 = 2*Cy-Ay-By - vk*((Cy-Ay)*invrjk*invrjk + (Cy-By)*invrik2);
+                const double d_atm_kk2 = 2*Cz-Az-Bz - vk*((Cz-Az)*invrjk*invrjk + (Cz-Bz)*invrik2);
 
-                const double tbd_over_w = (three_body_weight!=0.0) ? (three_body_decay/three_body_weight) : 0.0;
-                std::array<double,3> d_atm_extra_i = { ((A[0]-B[0])*invrij*invrij + (C[0]-B[0])*invrik*invrik) * atm * tbd_over_w,
-                                                        ((A[1]-B[1])*invrij*invrij + (C[1]-B[1])*invrik*invrik) * atm * tbd_over_w,
-                                                        ((A[2]-B[2])*invrij*invrij + (C[2]-B[2])*invrik*invrik) * atm * tbd_over_w };
-                std::array<double,3> d_atm_extra_j = { ((B[0]-A[0])*invrij*invrij + (C[0]-A[0])*invrjk*invrjk) * atm * tbd_over_w,
-                                                        ((B[1]-A[1])*invrij*invrij + (C[1]-A[1])*invrjk*invrjk) * atm * tbd_over_w,
-                                                        ((B[2]-A[2])*invrij*invrij + (C[2]-A[2])*invrjk*invrjk) * atm * tbd_over_w };
-                std::array<double,3> d_atm_extra_k = { ((A[0]-C[0])*invrjk*invrjk + (B[0]-C[0])*invrik*invrik) * atm * tbd_over_w,
-                                                        ((A[1]-C[1])*invrjk*invrjk + (B[1]-C[1])*invrik*invrik) * atm * tbd_over_w,
-                                                        ((A[2]-C[2])*invrjk*invrjk + (B[2]-C[2])*invrik*invrik) * atm * tbd_over_w };
+                const double atm_tbd = atm * tbd_over_w_pre;
+                const double d_extra_i0 = ((Ax-Bx)*invrij2 + (Cx-Bx)*invrik2) * atm_tbd;
+                const double d_extra_i1 = ((Ay-By)*invrij2 + (Cy-By)*invrik2) * atm_tbd;
+                const double d_extra_i2 = ((Az-Bz)*invrij2 + (Cz-Bz)*invrik2) * atm_tbd;
+                const double d_extra_j0 = ((Bx-Ax)*invrij2 + (Cx-Ax)*invrjk*invrjk) * atm_tbd;
+                const double d_extra_j1 = ((By-Ay)*invrij2 + (Cy-Ay)*invrjk*invrjk) * atm_tbd;
+                const double d_extra_j2 = ((Bz-Az)*invrij2 + (Cz-Az)*invrjk*invrjk) * atm_tbd;
+                const double d_extra_k0 = ((Ax-Cx)*invrjk*invrjk + (Bx-Cx)*invrik2) * atm_tbd;
+                const double d_extra_k1 = ((Ay-Cy)*invrjk*invrjk + (By-Cy)*invrik2) * atm_tbd;
+                const double d_extra_k2 = ((Az-Cz)*invrjk*invrjk + (Bz-Cz)*invrik2) * atm_tbd;
 
-                // unordered element pair (elem_j, elem_k)
+                // Element pair index
                 const size_t pair_idx0 = pair_index(nelements, elem_j, elem_k);
                 const size_t base = pair_idx0 * (nbasis3 * nabasis);
 
-                for(size_t l=0;l<nbasis3;++l){
-                    const double scale_val = radial[l] * atm * decay_ij * decay_ik;
-                    const double scale_ang_grad = decay_ij * decay_ik * radial[l];
-                    const size_t z0 = base + l * nabasis; // start feature index in 3-body block
+                // Precompute per-dimension gradient building blocks
+                const double inv_denom = 1.0 / denom;
+                // d_ang direction / denom for each atom and dim
+                const double dai0 = d_ang_d_i0 * inv_denom, dai1 = d_ang_d_i1 * inv_denom, dai2 = d_ang_d_i2 * inv_denom;
+                const double daj0 = d_ang_d_j0 * inv_denom, daj1 = d_ang_d_j1 * inv_denom, daj2 = d_ang_d_j2 * inv_denom;
+                const double dak0 = d_ang_d_k0 * inv_denom, dak1 = d_ang_d_k1 * inv_denom, dak2 = d_ang_d_k2 * inv_denom;
 
-                    // values: add to atom_rep
+                // ATM derivatives (full, including three_body_weight)
+                const double atmi0 = (atm_i*d_atm_ii0 + atm_j*d_atm_ij0 + atm_k*d_atm_ik0 + d_extra_i0) * three_body_weight;
+                const double atmi1 = (atm_i*d_atm_ii1 + atm_j*d_atm_ij1 + atm_k*d_atm_ik1 + d_extra_i1) * three_body_weight;
+                const double atmi2 = (atm_i*d_atm_ii2 + atm_j*d_atm_ij2 + atm_k*d_atm_ik2 + d_extra_i2) * three_body_weight;
+                const double atmj0 = (atm_i*d_atm_ji0 + atm_j*d_atm_jj0 + atm_k*d_atm_jk0 + d_extra_j0) * three_body_weight;
+                const double atmj1 = (atm_i*d_atm_ji1 + atm_j*d_atm_jj1 + atm_k*d_atm_jk1 + d_extra_j1) * three_body_weight;
+                const double atmj2 = (atm_i*d_atm_ji2 + atm_j*d_atm_jj2 + atm_k*d_atm_jk2 + d_extra_j2) * three_body_weight;
+                const double atmk0 = (atm_i*d_atm_ki0 + atm_j*d_atm_kj0 + atm_k*d_atm_kk0 + d_extra_k0) * three_body_weight;
+                const double atmk1 = (atm_i*d_atm_ki1 + atm_j*d_atm_kj1 + atm_k*d_atm_kk1 + d_extra_k1) * three_body_weight;
+                const double atmk2 = (atm_i*d_atm_ki2 + atm_j*d_atm_kj2 + atm_k*d_atm_kk2 + d_extra_k2) * three_body_weight;
+
+                // Decay combination derivatives per dim
+                const double dec_i0 = d_ijd0*decay_ik + decay_ij*d_ikd0;
+                const double dec_i1 = d_ijd1*decay_ik + decay_ij*d_ikd1;
+                const double dec_i2 = d_ijd2*decay_ik + decay_ij*d_ikd2;
+                const double dec_j0 = -d_ijd0*decay_ik;
+                const double dec_j1 = -d_ijd1*decay_ik;
+                const double dec_j2 = -d_ijd2*decay_ik;
+                const double dec_k0 = -decay_ij*d_ikd0;
+                const double dec_k1 = -decay_ij*d_ikd1;
+                const double dec_k2 = -decay_ij*d_ikd2;
+
+                // Radial derivative directional parts (precomputed per dim)
+                const double BmA0 = (Bx-Ax)*invrij, BmA1 = (By-Ay)*invrij, BmA2 = (Bz-Az)*invrij;
+                const double BmC0 = (Bx-Cx)*invrik, BmC1 = (By-Cy)*invrik, BmC2 = (Bz-Cz)*invrik;
+
+                const double decay_prod = decay_ij * decay_ik;
+
+                for(size_t l=0;l<nbasis3;++l){
+                    const double scale_val = radial[l] * atm * decay_prod;
+                    const double scale_ang = decay_prod * radial[l];
+                    const double d_rad_l = d_radial[l];
+                    const size_t z0 = base + l * nabasis;
+
+                    // values
                     for(size_t aidx=0;aidx<nabasis;++aidx){
                         atom_rep[z0 + aidx] += angular[aidx] * scale_val;
                     }
 
-                    // gradients for i,j,k over 3 dims t
-                    for(int t=0;t<3;++t){
-                        // d angle contributions scale 1/denom
-                        const double dai = d_ang_d_i[(size_t)t] / denom;
-                        const double daj = d_ang_d_j[(size_t)t] / denom;
-                        const double dak = d_ang_d_k[(size_t)t] / denom;
+                    // radial derivative directional parts for this l
+                    const double dri0 = d_rad_l * (-(BmA0 + BmC0));
+                    const double dri1 = d_rad_l * (-(BmA1 + BmC1));
+                    const double dri2 = d_rad_l * (-(BmA2 + BmC2));
+                    const double drj0 = d_rad_l * BmA0;
+                    const double drj1 = d_rad_l * BmA1;
+                    const double drj2 = d_rad_l * BmA2;
+                    const double drk0 = d_rad_l * BmC0;
+                    const double drk1 = d_rad_l * BmC1;
+                    const double drk2 = d_rad_l * BmC2;
 
-                        // radial derivative directional parts
-                        const double dri = d_radial[l] * (-( (B[(size_t)t]-A[(size_t)t]) * invrij + (B[(size_t)t]-C[(size_t)t]) * invrik ));
-                        const double drj = d_radial[l] * ((B[(size_t)t]-A[(size_t)t]) * invrij);
-                        const double drk = d_radial[l] * ((B[(size_t)t]-C[(size_t)t]) * invrik);
+                    const double rad_l = radial[l];
 
-                        // ATM derivatives
-                        const double atmi = (atm_i * d_atm_ii[(size_t)t] + atm_j * d_atm_ij[(size_t)t] + atm_k * d_atm_ik[(size_t)t] + d_atm_extra_i[(size_t)t]) * three_body_weight;
-                        const double atmj = (atm_i * d_atm_ji[(size_t)t] + atm_j * d_atm_jj[(size_t)t] + atm_k * d_atm_jk[(size_t)t] + d_atm_extra_j[(size_t)t]) * three_body_weight;
-                        const double atmk = (atm_i * d_atm_ki[(size_t)t] + atm_j * d_atm_kj[(size_t)t] + atm_k * d_atm_kk[(size_t)t] + d_atm_extra_k[(size_t)t]) * three_body_weight;
+                    for(size_t aidx=0;aidx<nabasis;++aidx){
+                        const double ang = angular[aidx];
+                        const double dang = d_angular[aidx];
 
-                        const double dec_i = d_ijdecay[(size_t)t] * decay_ik + decay_ij * d_ikdecay[(size_t)t];
-                        const double dec_j = -d_ijdecay[(size_t)t] * decay_ik; // minus as in Fortran
-                        const double dec_k = -decay_ij * d_ikdecay[(size_t)t];
-
-                        for(size_t aidx=0;aidx<nabasis;++aidx){
-                            const double ang   = angular[aidx];
-                            const double dang  = d_angular[aidx];
-                            const double gi = (dang * dai) * scale_ang_grad * atm
-                                            + ang * dri * atm * decay_ij * decay_ik
-                                            + ang * radial[l] * atmi * decay_ij * decay_ik
-                                            + ang * radial[l] * dec_i * (atm);
-                            const double gj = (dang * daj) * scale_ang_grad * atm
-                                            + ang * drj * atm * decay_ij * decay_ik
-                                            + ang * radial[l] * atmj * decay_ij * decay_ik
-                                            + ang * radial[l] * dec_j * (atm);
-                            const double gk = (dang * dak) * scale_ang_grad * atm
-                                            + ang * drk * atm * decay_ij * decay_ik
-                                            + ang * radial[l] * atmk * decay_ij * decay_ik
-                                            + ang * radial[l] * dec_k * (atm);
-
-                            atom_grad[((z0 + aidx)*natoms + i)*3 + (size_t)t] += gi;
-                            atom_grad[((z0 + aidx)*natoms + j)*3 + (size_t)t] += gj;
-                            atom_grad[((z0 + aidx)*natoms + k)*3 + (size_t)t] += gk;
+                        // dim 0
+                        {
+                            const double gi = dang*dai0*scale_ang*atm + ang*dri0*atm*decay_prod + ang*rad_l*atmi0*decay_prod + ang*rad_l*dec_i0*atm;
+                            const double gj = dang*daj0*scale_ang*atm + ang*drj0*atm*decay_prod + ang*rad_l*atmj0*decay_prod + ang*rad_l*dec_j0*atm;
+                            const double gk = dang*dak0*scale_ang*atm + ang*drk0*atm*decay_prod + ang*rad_l*atmk0*decay_prod + ang*rad_l*dec_k0*atm;
+                            atom_grad[((z0+aidx)*natoms+i)*3+0] += gi;
+                            atom_grad[((z0+aidx)*natoms+j)*3+0] += gj;
+                            atom_grad[((z0+aidx)*natoms+k)*3+0] += gk;
+                        }
+                        // dim 1
+                        {
+                            const double gi = dang*dai1*scale_ang*atm + ang*dri1*atm*decay_prod + ang*rad_l*atmi1*decay_prod + ang*rad_l*dec_i1*atm;
+                            const double gj = dang*daj1*scale_ang*atm + ang*drj1*atm*decay_prod + ang*rad_l*atmj1*decay_prod + ang*rad_l*dec_j1*atm;
+                            const double gk = dang*dak1*scale_ang*atm + ang*drk1*atm*decay_prod + ang*rad_l*atmk1*decay_prod + ang*rad_l*dec_k1*atm;
+                            atom_grad[((z0+aidx)*natoms+i)*3+1] += gi;
+                            atom_grad[((z0+aidx)*natoms+j)*3+1] += gj;
+                            atom_grad[((z0+aidx)*natoms+k)*3+1] += gk;
+                        }
+                        // dim 2
+                        {
+                            const double gi = dang*dai2*scale_ang*atm + ang*dri2*atm*decay_prod + ang*rad_l*atmi2*decay_prod + ang*rad_l*dec_i2*atm;
+                            const double gj = dang*daj2*scale_ang*atm + ang*drj2*atm*decay_prod + ang*rad_l*atmj2*decay_prod + ang*rad_l*dec_j2*atm;
+                            const double gk = dang*dak2*scale_ang*atm + ang*drk2*atm*decay_prod + ang*rad_l*atmk2*decay_prod + ang*rad_l*dec_k2*atm;
+                            atom_grad[((z0+aidx)*natoms+i)*3+2] += gi;
+                            atom_grad[((z0+aidx)*natoms+j)*3+2] += gj;
+                            atom_grad[((z0+aidx)*natoms+k)*3+2] += gk;
                         }
                     }
                 }
@@ -678,14 +748,14 @@ void generate_fchl_acsf_and_gradients(
         }
 
         // scatter into global rep/grad for center i (3-body block only)
-        for(size_t off=0; off<atom_rep.size(); ++off){
+        for(size_t off=0; off<three_block_size; ++off){
             rep[idx2(i, three_offset + off, rep_size)] += atom_rep[off];
         }
-        for(size_t off=0; off<atom_rep.size(); ++off){
+        for(size_t off=0; off<three_block_size; ++off){
             for(size_t a=0;a<natoms;++a){
                 for(size_t t=0;t<3;++t){
                     const double v = atom_grad[(off*natoms + a)*3 + t];
-                    grad[gidx(i, three_offset + off, a, t, rep_size, natoms)] += v;
+                    if (v != 0.0) grad[gidx(i, three_offset + off, a, t, rep_size, natoms)] += v;
                 }
             }
         }
