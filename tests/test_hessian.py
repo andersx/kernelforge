@@ -4,7 +4,7 @@ import pytest
 from kernelforge import _kernels  # the module name from the pybind shim
 
 
-def ref_block(x1, J1, x2, J2, sigma):
+def ref_block(x1, J1, x2, J2, sigma):  # type: ignore
     """
     Reference NumPy implementation for one (a,b) block:
     H = (k/s^2) * J1^T J2 - (k/s^4) * (J1^T d) (J2^T d)^T
@@ -22,7 +22,7 @@ def ref_block(x1, J1, x2, J2, sigma):
     return term1 - term2
 
 
-def assemble_ref_full(X1, dX1, X2, dX2, sigma):
+def assemble_ref_full(X1, dX1, X2, dX2, sigma):  # type: ignore
     """
     Assemble full ((N1*D1) x (N2*D2)) Hessian by looping in Python
     and calling the closed-form block above.
@@ -52,7 +52,7 @@ def assemble_ref_full(X1, dX1, X2, dX2, sigma):
         (1, 1, 6, 5, 5),
     ],
 )
-def test_shapes_and_values(N1, N2, M, D1, D2):
+def test_shapes_and_values(N1, N2, M, D1, D2) -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(0)
     X1 = rng.normal(size=(N1, M))
     X2 = rng.normal(size=(N2, M))
@@ -69,7 +69,7 @@ def test_shapes_and_values(N1, N2, M, D1, D2):
 
 
 @pytest.mark.parametrize("tile_B", [1, 2, 4, 7, 0])  # 0 => auto
-def test_various_tile_sizes(tile_B):
+def test_various_tile_sizes(tile_B) -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(1)
     N1, N2, M, D1, D2 = 2, 5, 8, 3, 4
     X1 = rng.normal(size=(N1, M))
@@ -88,7 +88,7 @@ def test_various_tile_sizes(tile_B):
     np.testing.assert_allclose(H, H_ref, rtol=1e-12, atol=1e-12)
 
 
-def test_bad_sigma_raises():
+def test_bad_sigma_raises() -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(2)
     X1 = rng.normal(size=(1, 3))
     X2 = rng.normal(size=(1, 3))
@@ -101,7 +101,7 @@ def test_bad_sigma_raises():
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, -1.0)
 
 
-def test_shape_mismatch_raises():
+def test_shape_mismatch_raises() -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(3)
     X1 = rng.normal(size=(2, 4))
     X2 = rng.normal(size=(3, 4))
