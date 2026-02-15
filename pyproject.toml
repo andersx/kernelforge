@@ -9,7 +9,7 @@ description = "Optimized Kernels for ML"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [{name = "Anders Christensen"}]
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=2.00",
 ]
