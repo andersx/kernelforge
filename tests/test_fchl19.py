@@ -1,11 +1,10 @@
 import numpy as np
-import pytest
 
 from kernelforge import _fchl19 as _fchl
 from kernelforge._fchl19 import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 
 
-def _call_generate(coords, nuclear_z, **kwargs):
+def _call_generate(coords, nuclear_z, **kwargs):  # type: ignore
     """
     Wrapper to call the extension using named args, handling either arg order
     (coords first or nuclear_z first) depending on how it was compiled.
@@ -18,21 +17,21 @@ def _call_generate(coords, nuclear_z, **kwargs):
     params.update(kwargs)
     try:
         # Our binding signature: (coords, nuclear_z, ...)
-        return fn(**params)
+        return fn(**params)  # type: ignore[arg-type]
     except TypeError:
         # Fallback if someone compiled as (nuclear_z, coords, ...)
         params2 = dict(params)
         params2["coords"], params2["nuclear_z"] = params["nuclear_z"], params["coords"]
-        return fn(**params2)
+        return fn(**params2)  # type: ignore[arg-type]
 
 
-def _descr_size(n_elements, nRs2, nRs3, nFourier):
+def _descr_size(n_elements, nRs2, nRs3, nFourier):  # type: ignore
     # Matches the code in the binding:
     # rep_size = n_elements*nRs2 + (n_elements*(n_elements+1)) * nRs3 * nFourier
     return n_elements * nRs2 + (n_elements * (n_elements + 1)) * nRs3 * nFourier
 
 
-def test_shape_with_defaults_and_explicit_rep_size():
+def test_shape_with_defaults_and_explicit_rep_size() -> None:
     # H-O-H linear-ish toy geometry
     coords = np.array(
         [[-0.9572, 0.0, 0.0], [0.0000, 0.0, 0.0], [0.9572, 0.0, 0.0]], dtype=np.float64
@@ -50,7 +49,7 @@ def test_shape_with_defaults_and_explicit_rep_size():
     assert rep.shape == (coords.shape[0], expected_rep_size)
 
 
-def test_shape_with_explicit_basis_sizes_and_elements():
+def test_shape_with_explicit_basis_sizes_and_elements() -> None:
     coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=np.float64)
     Z = np.array([6, 1, 1], dtype=np.int32)  # CHH
 
@@ -77,7 +76,7 @@ def test_shape_with_explicit_basis_sizes_and_elements():
     assert rep.shape == (coords.shape[0], expected_rep_size)
 
 
-def test_translation_invariance():
+def test_translation_invariance() -> None:
     coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
     Z = np.array([1, 1], dtype=np.int32)
 
@@ -119,7 +118,7 @@ def test_translation_invariance():
     np.testing.assert_allclose(rep1, rep2, rtol=1e-10, atol=1e-12)
 
 
-def test_three_body_zeroing_block_when_weight_zero():
+def test_three_body_zeroing_block_when_weight_zero() -> None:
     # Geometry with angles so 3-body term would be nonzero when enabled
     coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 0.8, 0.0]], dtype=np.float64)
     Z = np.array([1, 1, 1], dtype=np.int32)
@@ -169,13 +168,13 @@ def test_three_body_zeroing_block_when_weight_zero():
     assert np.linalg.norm(rep_pos[:, two_body_size:]) > 0.0
 
 
-def test_defaults_match_manual_linspace_construction():
-    # Ensure the binding’s internal linspace matches what we’d build in Python
-    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
-    Z = np.array([8, 1, 16], dtype=np.int32)  # O, H, S
+def test_defaults_match_manual_linspace_construction() -> None:
+    # Ensure the binding's internal linspace matches what we'd build in Python
+    # TODO: Implement test
+    pass
 
 
-def test_rep_matches_between_functions():
+def test_rep_matches_between_functions() -> None:
     # small, simple triatomic
     coords = np.array(
         [[-0.9572, 0.0, 0.0], [0.0000, 0.0, 0.0], [0.9572, 0.0, 0.0]], dtype=np.float64
@@ -198,8 +197,8 @@ def test_rep_matches_between_functions():
         three_body_weight=13.4,
     )
 
-    rep_only = generate_fchl_acsf(coords, Z, **kw)
-    rep_both, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)
+    rep_only = generate_fchl_acsf(coords, Z, **kw)  # type: ignore[arg-type]
+    rep_both, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)  # type: ignore[arg-type]
 
     assert rep_only.shape == rep_both.shape
     np.testing.assert_allclose(rep_only, rep_both, rtol=1e-12, atol=1e-14)
@@ -209,7 +208,7 @@ def test_rep_matches_between_functions():
     assert grad.shape == (n, rep_size, n * 3)
 
 
-def test_analytic_grad_matches_finite_difference():
+def test_analytic_grad_matches_finite_difference() -> None:
     # small CH2-like geometry (asymmetric to avoid accidental cancellations)
     coords = np.array(
         [[0.00, 0.00, 0.00], [1.10, 0.00, 0.00], [-0.20, 0.95, 0.15]],  # C  # H  # H
@@ -232,7 +231,7 @@ def test_analytic_grad_matches_finite_difference():
         three_body_weight=2.5,
     )
 
-    rep, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)
+    rep, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)  # type: ignore[arg-type]
     n, rep_size = rep.shape
 
     # central finite-difference using the rep-only function
@@ -246,8 +245,8 @@ def test_analytic_grad_matches_finite_difference():
             cm = coords.copy()
             cp[a, d] += h
             cm[a, d] -= h
-            rep_p = generate_fchl_acsf(cp, Z, **kw)
-            rep_m = generate_fchl_acsf(cm, Z, **kw)
+            rep_p = generate_fchl_acsf(cp, Z, **kw)  # type: ignore[arg-type]
+            rep_m = generate_fchl_acsf(cm, Z, **kw)  # type: ignore[arg-type]
             fd_grad[:, :, a * 3 + d] = (rep_p - rep_m) / (2.0 * h)
 
     # Compare analytic vs FD. Use slightly looser tolerances than for exact equality.
@@ -255,7 +254,7 @@ def test_analytic_grad_matches_finite_difference():
     np.testing.assert_allclose(grad, fd_grad, rtol=5e-6, atol=5e-8)
 
 
-def test_translation_invariance_and_zero_grad_under_uniform_shift():
+def test_translation_invariance_and_zero_grad_under_uniform_shift() -> None:
     # two atoms; translation of all atoms should not change rep,
     # and gradient wrt a *uniform* shift of all atoms should sum to ~0
     coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
@@ -276,10 +275,10 @@ def test_translation_invariance_and_zero_grad_under_uniform_shift():
         three_body_weight=1.0,
     )
 
-    rep1, grad1 = generate_fchl_acsf_and_gradients(coords, Z, **kw)
+    rep1, grad1 = generate_fchl_acsf_and_gradients(coords, Z, **kw)  # type: ignore[arg-type]
 
     shift = np.array([+3.2, -1.1, +0.7])
-    rep2, grad2 = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)
+    rep2, grad2 = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)  # type: ignore[arg-type]
 
     np.testing.assert_allclose(rep1, rep2, rtol=1e-12, atol=1e-14)
 
