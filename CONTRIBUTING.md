@@ -31,8 +31,8 @@ pre-commit install
 Run Black and isort to format your code:
 
 ```bash
-black python/ tests/ benchmark/
-isort python/ tests/ benchmark/
+black python/ tests/
+isort python/ tests/
 ```
 
 ### Lint Code
@@ -40,13 +40,13 @@ isort python/ tests/ benchmark/
 Check for code quality issues with Ruff:
 
 ```bash
-ruff check python/ tests/ benchmark/
+ruff check python/ tests/
 ```
 
 Auto-fix issues when possible:
 
 ```bash
-ruff check --fix python/ tests/ benchmark/
+ruff check --fix python/ tests/
 ```
 
 ### Type Check
@@ -54,21 +54,21 @@ ruff check --fix python/ tests/ benchmark/
 Verify type annotations with mypy:
 
 ```bash
-mypy python/ tests/ benchmark/
+mypy python/ tests/
 ```
 
 ### Run All Checks
 
 ```bash
 # Format
-black python/ tests/ benchmark/
-isort python/ tests/ benchmark/
+black python/ tests/
+isort python/ tests/
 
 # Lint
-ruff check python/ tests/ benchmark/
+ruff check python/ tests/
 
 # Type check
-mypy python/ tests/ benchmark/
+mypy python/ tests/
 
 # Run tests
 pytest
@@ -78,7 +78,7 @@ pytest
 
 ### General Rules
 - **Line length**: 100 characters
-- **Python version**: 3.10+
+- **Python version**: 3.11+
 - **Type hints**: Required for all function signatures
 - **Docstrings**: Brief 1-2 line descriptions for functions
 
@@ -90,7 +90,7 @@ pytest
 ### Variable Naming
 - **Standard convention**: lowercase with underscores (`my_variable`)
 - **Exception**: Scientific code may use uppercase for mathematical notation (X, R, N, Q, K)
-  - These are allowed in `benchmark/` and `tests/` directories
+  - These are allowed in `tests/` and CLI code
   - Represents common ML/scientific conventions (feature matrices, coordinates, etc.)
 
 ### Import Organization

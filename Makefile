@@ -15,17 +15,17 @@ environment:
 .PHONY: format lint typecheck check
 
 format:
-	black python/ tests/ benchmark/
-	isort python/ tests/ benchmark/
+	black python/ tests/
+	isort python/ tests/
 
 lint:
-	ruff check python/ tests/ benchmark/
+	ruff check python/ tests/
 
 lint-fix:
-	ruff check --fix python/ tests/ benchmark/
+	ruff check --fix python/ tests/
 
 typecheck:
-	mypy python/ tests/ benchmark/
+	mypy python/ tests/
 
 check: format lint typecheck
 	@echo "All code quality checks passed!"

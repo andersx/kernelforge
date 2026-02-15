@@ -28,14 +28,14 @@ jobs:
           pip install numpy pytest
 
       - name: Check formatting with Black
-        run: black --check python/ tests/ benchmark/
+        run: black --check python/ tests/
 
       - name: Check import sorting with isort
-        run: isort --check-only python/ tests/ benchmark/
+        run: isort --check-only python/ tests/
 
       - name: Lint with Ruff
-        run: ruff check python/ tests/ benchmark/
+        run: ruff check python/ tests/
 
       - name: Type check with mypy
-        run: mypy python/ tests/ benchmark/
+        run: mypy python/ tests/
         continue-on-error: true  # Don't fail CI on mypy errors initially
