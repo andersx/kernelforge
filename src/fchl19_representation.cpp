@@ -21,19 +21,6 @@
 
 namespace fchl19 {
 
-    // allocate aligned temporary buffer
-static inline double* alloc_aligned(size_t n, size_t alignment = 64) {
-    void* ptr = nullptr;
-    if (posix_memalign(&ptr, alignment, ((n * sizeof(double) + alignment - 1) / alignment) * alignment) != 0) {
-        throw std::bad_alloc();
-    }
-    return reinterpret_cast<double*>(ptr);
-}
-
-static inline void free_aligned(void* p) {
-    std::free(p);
-}
-
 // Compute the expected representation size so the caller doesn't have to.
 std::size_t compute_rep_size(size_t nelements, size_t nbasis2, size_t nbasis3, size_t nabasis) {
     const size_t two_body = nelements * nbasis2;
@@ -946,7 +933,7 @@ void flocal_kernel(
         }
 
         // Reusable aligned scratch tile (B×B), written anew per dgemm call
-        double* Cblk = alloc_aligned((size_t)B * B);
+        double* Cblk = aligned_alloc_64((size_t)B * B);
         if (!Cblk) throw std::bad_alloc();
 
         // ---- Tile over (rows, cols) ----
@@ -1093,7 +1080,7 @@ static inline PackedLabelSym pack_label_block_sym_T(
 }
 
 // assume you already have:
-//   double* alloc_aligned(size_t n);  // aligned, uninitialized; free with std::free
+//   double* aligned_alloc_64(size_t n);  // aligned, uninitialized; free with std::free
 
 
 //  #######################################
@@ -1164,7 +1151,7 @@ void flocal_kernel_symmetric_rfp(
         }
 
         // Scratch tile
-        double* Cblk = alloc_aligned((size_t)B * B);
+        double* Cblk = aligned_alloc_64((size_t)B * B);
         if (!Cblk) throw std::bad_alloc();
 
         for (int i0 = 0; i0 < R; i0 += B) {
@@ -1301,7 +1288,7 @@ void flocal_kernel_symmetric(
         }
 
         // ---- aligned scratch tile (reused for all tiles of this label) ----
-        double* Cblk = alloc_aligned((size_t)B * B);
+        double* Cblk = aligned_alloc_64((size_t)B * B);
         if (!Cblk) throw std::bad_alloc();
 
         for (int i0 = 0; i0 < R; i0 += B) {
@@ -1501,8 +1488,8 @@ void fatomic_local_gradient_kernel(
                                               kernel_out, lj1, offs2, ncols_b, inv_2sigma2, inv_sigma2)
     {
         // thread-local scratch (aligned, reused)
-        double* D_scaled = alloc_aligned((size_t)rep_size * LDB);              // (rep_size x LDB)
-        double* H        = alloc_aligned((size_t)(3*max_atoms2) * LDC);        // (max ncols x LDC)
+        double* D_scaled = aligned_alloc_64((size_t)rep_size * LDB);              // (rep_size x LDB)
+        double* H        = aligned_alloc_64((size_t)(3*max_atoms2) * LDC);        // (max ncols x LDC)
 
         #pragma omp for schedule(dynamic)
         for (int b = 0; b < nm2; ++b) {
@@ -1599,8 +1586,8 @@ void fatomic_local_gradient_kernel(
             } // j2
         } // omp for
 
-        free_aligned(D_scaled);
-        free_aligned(H);
+        aligned_free_64(D_scaled);
+        aligned_free_64(H);
     } // omp parallel
 }
 
@@ -1900,11 +1887,11 @@ void fgdml_kernel_symmetric_lower(
         const int LDT = T;
 
         // Thread-local aligned scratch
-        double* D      = alloc_aligned((size_t)rep_size * LDT);        // (rep x T)
-        double* W      = alloc_aligned((size_t)ncols_b   * LDT);       // (ncols_b x T)
-        double* V      = alloc_aligned((size_t)ncols_max * LDT);       // (ncols_a x T in first rows)
-        double* S_sum  = alloc_aligned((size_t)rep_size * ncols_max);  // (rep x ncols_a)
-        double* xbv    = alloc_aligned((size_t)rep_size);              // x(b,i2,:)
+        double* D      = aligned_alloc_64((size_t)rep_size * LDT);        // (rep x T)
+        double* W      = aligned_alloc_64((size_t)ncols_b   * LDT);       // (ncols_b x T)
+        double* V      = aligned_alloc_64((size_t)ncols_max * LDT);       // (ncols_a x T in first rows)
+        double* S_sum  = aligned_alloc_64((size_t)rep_size * ncols_max);  // (rep x ncols_a)
+        double* xbv    = aligned_alloc_64((size_t)rep_size);              // x(b,i2,:)
 
         std::vector<double> sign(T);
         std::vector<double> expdiag(T);
@@ -2032,11 +2019,11 @@ void fgdml_kernel_symmetric_lower(
             }
         } // a
 
-        free_aligned(D);
-        free_aligned(W);
-        free_aligned(V);
-        free_aligned(S_sum);
-        free_aligned(xbv);
+        aligned_free_64(D);
+        aligned_free_64(W);
+        aligned_free_64(V);
+        aligned_free_64(S_sum);
+        aligned_free_64(xbv);
     } // b
 }
 
