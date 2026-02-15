@@ -108,6 +108,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["F401", "F811", "N803", "N806", "F841", "B017", "B023", "C408"]  # Test-specific ignores
 "python/kernelforge/cli.py" = ["N806", "F841", "B905"]  # CLI benchmarking code - allow scientific variable names
+"python/kernelforge/*.pyi" = ["N802", "N803", "N806"]  # Type stubs - allow scientific naming conventions
 
 [tool.mypy]
 python_version = "3.11"
