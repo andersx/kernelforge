@@ -25,6 +25,8 @@ extern "C" {
 }
 #endif
 
+namespace kf {
+
 void kernel_symm(
     const double* Xptr,
     int n,
@@ -565,3 +567,5 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
     //     }
     // }
 }
+
+}  // namespace kf

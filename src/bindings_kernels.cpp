@@ -45,7 +45,7 @@ py::array_t<double> kernel_symm_py(
     );
 
     // Compute
-    kernel_symm(Xptr, n, rep_size, alpha, Kptr);
+    kf::kernel_symm(Xptr, n, rep_size, alpha, Kptr);
 
     return K;
 }
@@ -79,7 +79,7 @@ py::array_t<double> kernel_asymm_py(
     auto X1v = X1.unchecked<2>();
     auto X2v = X2.unchecked<2>();
 
-    kernel_asymm(
+    kf::kernel_asymm(
         X1v.data(0,0), X2v.data(0,0),
         n1, n2, d1,
         alpha,
@@ -131,7 +131,7 @@ static py::array_t<double> gaussian_jacobian_batch_py(
     auto Kv = K.mutable_unchecked<2>();
     double* Kp = Kv.mutable_data(0,0);
 
-    gaussian_jacobian_batch(X1p, dX1p, X2p, N1, N2, M, D, sigma, Kp);
+    kf::gaussian_jacobian_batch(X1p, dX1p, X2p, N1, N2, M, D, sigma, Kp);
     return K;
 }
 
@@ -209,7 +209,7 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_py(
         capsule
     );
 
-    rbf_hessian_full_tiled_gemm(
+    kf::rbf_hessian_full_tiled_gemm(
         X1p, dX1p, X2p, dX2p,
         N1, N2, M, D1, D2,
         sigma, tile_B,
@@ -271,7 +271,7 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_py(
     const double* dXp = dX.unchecked<3>().data(0,0,0);
 
     // Call the C++ core
-    rbf_hessian_full_tiled_gemm_sym_fast(
+    kf::rbf_hessian_full_tiled_gemm_sym_fast(
         Xp, dXp,
         N, M, D,
         sigma, tile_B,

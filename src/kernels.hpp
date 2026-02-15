@@ -1,9 +1,7 @@
 #pragma once
 #include <cstddef>
 
-// Simple 64-byte aligned alloc/free (POSIX)
-double* aligned_alloc_64(std::size_t nelems);
-void aligned_free_64(void* p);
+namespace kf {
 
 void kernel_symm(
     const double* Xptr,
@@ -12,7 +10,6 @@ void kernel_symm(
     double alpha,
     double* Kptr
 );
-
 
 void kernel_asymm(
     const double* X1,
@@ -51,5 +48,4 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
     std::size_t tile_B,
     double* __restrict H_out);       // (N*D x N*D), row-major
 
-
-std::vector<double> solve_cholesky(double* K, const double* y, int n);
+}  // namespace kf
