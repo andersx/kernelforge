@@ -23,6 +23,9 @@ void dpotrs_(LAPACK_CHAR_ARG *uplo, const int *n, const int *nrhs, const double 
 }
 #endif
 
+// Project headers
+#include "constants.hpp"
+
 namespace kf {
 
 void kernel_symm(const double *Xptr, int n, int rep_size, double alpha, double *Kptr) {
@@ -279,7 +282,7 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
 
     // 6) Per-block: scale Gram by C[a,b], then rank-1 correction via GER
     if (tile_B == 0)
-        tile_B = std::min<std::size_t>(64, N2);  // reasonable default
+        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N2);  // reasonable default
 
     // If you can, make L1/L2 BLAS single-threaded here to avoid oversubscription:
     // int saved = mkl_get_max_threads();
@@ -432,7 +435,7 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
 
     // 6) Per-block (lower triangle only): scale Gram by C[a,b], then rank-1 correction via GER
     if (tile_B == 0)
-        tile_B = std::min<std::size_t>(64, N);  // sane default tile width
+        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);  // sane default tile width
 
 #pragma omp parallel
     {
