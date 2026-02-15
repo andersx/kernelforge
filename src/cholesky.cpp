@@ -16,13 +16,13 @@ extern "C" {
                  const int* ldb, int* info);
 
     void dpftrf_(const char* TRANSR, const char* UPLO, const int* N, double* A, int* INFO);
-    
+
     void dpftrs_(const char* TRANSR, const char* UPLO, const int* N, const int* NRHS,
              const double* A, double* B, const int* LDB, int* INFO);
 
     void dtrttf_(const char* TRANSR, const char* UPLO, const int* N,
              const double* A, const int* LDA, double* ARF, int* INFO);
-    
+
     void dtfttr_(const char* TRANSR, const char* UPLO, const int* N,
              const double* ARF, double* A, const int* LDA, int* INFO);
 
@@ -65,7 +65,7 @@ void solve_cholesky(double* K, const double* y, int n, double* alpha, double reg
 
     // reset diagonal
     for (int i = 0; i < n; ++i) K[i * n + i] = diagonal[i];
-    
+
     // restore symmetry by mirroring upper triangle to lower triangle
     auto start = std::chrono::high_resolution_clock::now();
     #pragma omp parallel for schedule(static)
@@ -197,36 +197,3 @@ int rfp_to_full(char transr, char uplo,
     }
     return 0;
 }
-
-// Solve K * alpha = y using Cholesky factorization.
-// K is symmetric positive-definite (will be overwritten).
-// std::vector<double> solve_cholesky_packed(double* K, const double* y, int n, const double regularize) {
-//     if ((int)y.size() != n) {
-//         throw std::runtime_error("Size mismatch: y must have length n");
-//     }
-//
-//     std::vector<double> alpha = y; // copy RHS
-//
-//     const char transr = 'N';  // not transposed
-//     const char uplo = 'U';  // use upper triangle
-//     int info;
-//
-//     // Factorization: K = U^T * U
-//     // call dpftrf("N", 'U', n, K, iostat)
-//     dpftrf_(&transr, &uplo, &n, K, &info);
-//     if (info != 0) {
-//         throw std::runtime_error("Cholesky decomposition failed, info=" +
-//                                  std::to_string(info));
-//     }
-//
-//     int nrhs = 1;
-//     // Solve system
-//     // call dpftrs("N", 'U', n, 1, K, y_pack, n, iostat)
-//     dpftrs_(&transr, &uplo, &n, &nrhs, K, alpha, &n, &info);
-//     if (info != 0) {
-//         throw std::runtime_error("Cholesky solve failed, info=" +
-//                                  std::to_string(info));
-//     }
-//
-//     return alpha;
-// }

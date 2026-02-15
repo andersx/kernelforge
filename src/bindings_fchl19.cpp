@@ -238,17 +238,7 @@ static py::tuple generate_fchl_acsf_rep_and_grad_py(
         for (std::size_t j=0;j<rep_size;++j)
             R(i,j) = rep[i*rep_size + j];
 
-    // py::array_t<double> grad_arr(py::array::ShapeContainer{
-    //     (py::ssize_t)natoms, (py::ssize_t)rep_size, (py::ssize_t)natoms, (py::ssize_t)3
-    // });
-    // auto G = grad_arr.mutable_unchecked<4>();
-    // std::size_t idx = 0;
-    // for (std::size_t i=0;i<natoms;++i)
-    //     for (std::size_t j=0;j<rep_size;++j)
-    //         for (std::size_t a=0;a<natoms;++a)
-    //             for (int d=0; d<3; ++d)
-    //                 G(i,j,a,d) = grad[idx++];
-    
+
     py::array_t<double> grad_arr(py::array::ShapeContainer{
     (py::ssize_t)natoms, (py::ssize_t)rep_size, (py::ssize_t)(3*natoms)
         });
@@ -742,10 +732,10 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
 PYBIND11_MODULE(_fchl19, m) {
     m.doc() = "Pybind11 bindings for FCHL-like ACSF generator";
     m.def("fgdml_kernel_symm", &fgdml_kernel_symm_py,
-      py::arg("x1"), 
+      py::arg("x1"),
       py::arg("dx1"),
-      py::arg("q1"), 
-      py::arg("n1"), 
+      py::arg("q1"),
+      py::arg("n1"),
       py::arg("sigma"),
       R"(Compute the FGDML Hessian kernel.
 
@@ -812,8 +802,8 @@ Returns:
     m.def("compute_rep_size", &fchl19::compute_rep_size,
     py::arg("nelements"), py::arg("nbasis2"), py::arg("nbasis3"), py::arg("nabasis"),
     "Compute the total representation size per-atom.");
-    
-    
+
+
     m.def("generate_fchl_acsf", &generate_fchl_acsf_py,
         py::arg("coords"),
         py::arg("nuclear_z"),
@@ -891,7 +881,7 @@ Returns
   rep : (n_atoms, rep_size)
   grad: (n_atoms, rep_size, n_atoms, 3)
 )pbdoc");
-    
+
     m.def("flocal_kernel", &flocal_kernel_py,
         py::arg("x1"), py::arg("x2"),
         py::arg("q1"), py::arg("q2"),
