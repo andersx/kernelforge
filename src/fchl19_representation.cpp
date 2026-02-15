@@ -1,23 +1,31 @@
+// Own header
+#include "fchl19_representation.hpp"
+
+// C++ standard library
 #include <algorithm>
 #include <array>
 #include <cmath>
-#if defined(__APPLE__)
-  #include <Accelerate/Accelerate.h>
-#else
-  #include <cblas.h>
-#endif
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <iostream>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+// Third-party libraries
 #include <omp.h>
-#include <iostream>
+#if defined(__APPLE__)
+  #include <Accelerate/Accelerate.h>
+#else
+  #include <cblas.h>
+#endif
+
+// Project headers
 #include "aligned_alloc64.hpp"
-#include "fchl19_representation.hpp"
 
 namespace fchl19 {
 

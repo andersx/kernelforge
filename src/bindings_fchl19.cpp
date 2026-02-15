@@ -1,9 +1,13 @@
+// C++ standard library
+#include <limits>
+
+// Third-party libraries
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
-#include <limits>
-#include "aligned_alloc64.hpp"
 
+// Project headers
+#include "aligned_alloc64.hpp"
 #include "fchl19_representation.hpp"
 
 namespace py = pybind11;

@@ -1,7 +1,8 @@
-#include <iostream>
-#include <vector>
+// C++ standard library
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
+#include <vector>
 
 // Declare Fortran LAPACK symbols (all vendors provide these)
 extern "C" {

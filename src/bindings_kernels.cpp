@@ -1,9 +1,13 @@
+// C++ standard library
+#include <stdexcept>
+
+// Third-party libraries
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+
+// Project headers
 #include "aligned_alloc64.hpp"
 #include "kernels.hpp"
-
-#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -189,13 +193,13 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_py(
 
     // Number of elements
     const std::size_t nelems = static_cast<std::size_t>(N1) * D1 * N2 * D2;
-    
+
     // Allocate aligned memory (e.g. 64-byte aligned)
     double* Hptr = aligned_alloc_64(nelems);
-    
+
     // Capsule to free when Python GC runs
     auto capsule = py::capsule(Hptr, [](void* p){ aligned_free_64(p); });
-    
+
     // Build NumPy array with shape (N1*D1, N2*D2)
     py::array_t<double> H(
         { static_cast<py::ssize_t>(N1*D1), static_cast<py::ssize_t>(N2*D2) },
@@ -300,6 +304,3 @@ PYBIND11_MODULE(_kernels, m) {
           py::arg("sigma"), py::arg("tile_B") = py::none(),
           "Compute symmetric RBF Hessian kernel (training version).");
 }
-
-
-

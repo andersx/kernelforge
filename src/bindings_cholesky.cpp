@@ -1,9 +1,13 @@
+// C++ standard library
+#include <stdexcept>
+
+// Third-party libraries
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+
+// Project headers
 #include "aligned_alloc64.hpp"
 #include "cholesky.hpp"
-
-#include <stdexcept>
 
 namespace py = pybind11;
 

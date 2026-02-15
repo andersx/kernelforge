@@ -1,13 +1,15 @@
+// C++ standard library
 #include <algorithm>
 #include <cmath>
-#include <cstring>   // std::memcpy
-#include <omp.h>
+#include <cstring>
 #include <iostream>
-#include <vector>
 #include <stdexcept>
+#include <vector>
 
+// Third-party libraries
+#include <omp.h>
 #if defined(__APPLE__)
-  #include <Accelerate/Accelerate.h>   // brings in clapack.h too
+  #include <Accelerate/Accelerate.h>
   #define LAPACK_CHAR_ARG char
 #else
   #include <cblas.h>

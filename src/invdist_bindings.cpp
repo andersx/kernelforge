@@ -1,9 +1,15 @@
 // invdist_bindings.cpp
+
+// C++ standard library
+#include <stdexcept>
+#include <vector>
+
+// Third-party libraries
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+
+// Project headers
 #include "invdist.hpp"
-#include <vector>
-#include <stdexcept>
 
 namespace py = pybind11;
 
@@ -93,4 +99,3 @@ PYBIND11_MODULE(_invdist, m) {
           py::arg("R"), py::arg("eps") = 1e-12,
           "Return (x, J) where x is (M,) upper-triangle and J is (M, 3N).");
 }
-
