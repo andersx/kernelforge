@@ -10,7 +10,7 @@ def _call_generate(coords, nuclear_z, **kwargs):
     Wrapper to call the extension using named args, handling either arg order
     (coords first or nuclear_z first) depending on how it was compiled.
     """
-    fn = getattr(_fchl, "generate_fchl_acsf")
+    fn = _fchl.generate_fchl_acsf
     params = dict(
         coords=np.asarray(coords, dtype=np.float64),
         nuclear_z=np.asarray(nuclear_z, dtype=np.int32),
@@ -35,9 +35,7 @@ def _descr_size(n_elements, nRs2, nRs3, nFourier):
 def test_shape_with_defaults_and_explicit_rep_size():
     # H-O-H linear-ish toy geometry
     coords = np.array(
-        [[-0.9572, 0.0, 0.0],
-         [ 0.0000, 0.0, 0.0],
-         [ 0.9572, 0.0, 0.0]], dtype=np.float64
+        [[-0.9572, 0.0, 0.0], [0.0000, 0.0, 0.0], [0.9572, 0.0, 0.0]], dtype=np.float64
     )
     Z = np.array([1, 8, 1], dtype=np.int32)
 
@@ -53,67 +51,116 @@ def test_shape_with_defaults_and_explicit_rep_size():
 
 
 def test_shape_with_explicit_basis_sizes_and_elements():
-    coords = np.array([[0.,0.,0.],
-                       [1.,0.,0.],
-                       [2.,0.,0.]], dtype=np.float64)
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=np.float64)
     Z = np.array([6, 1, 1], dtype=np.int32)  # CHH
 
-    elements = [1, 6]   # only H and C
+    elements = [1, 6]  # only H and C
     nRs2, nRs3, nFourier = 3, 2, 2
-    rep = _call_generate(coords, Z,
-                         elements=elements,
-                         nRs2=nRs2, nRs3=nRs3, nFourier=nFourier,
-                         eta2=0.32, eta3=2.7, zeta=np.pi,
-                         rcut=8.0, acut=8.0,
-                         two_body_decay=1.8, three_body_decay=0.57, three_body_weight=13.4)
+    rep = _call_generate(
+        coords,
+        Z,
+        elements=elements,
+        nRs2=nRs2,
+        nRs3=nRs3,
+        nFourier=nFourier,
+        eta2=0.32,
+        eta3=2.7,
+        zeta=np.pi,
+        rcut=8.0,
+        acut=8.0,
+        two_body_decay=1.8,
+        three_body_decay=0.57,
+        three_body_weight=13.4,
+    )
 
     expected_rep_size = _descr_size(len(elements), nRs2, nRs3, nFourier)
     assert rep.shape == (coords.shape[0], expected_rep_size)
 
 
 def test_translation_invariance():
-    coords = np.array([[0.,0.,0.],
-                       [1.,0.,0.]], dtype=np.float64)
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
     Z = np.array([1, 1], dtype=np.int32)
 
-    rep1 = _call_generate(coords, Z, elements=[1], nRs2=4, nRs3=2, nFourier=1,
-                          eta2=0.5, eta3=1.5, zeta=np.pi,
-                          rcut=4.0, acut=4.0,
-                          two_body_decay=1.0, three_body_decay=1.0, three_body_weight=1.0)
+    rep1 = _call_generate(
+        coords,
+        Z,
+        elements=[1],
+        nRs2=4,
+        nRs3=2,
+        nFourier=1,
+        eta2=0.5,
+        eta3=1.5,
+        zeta=np.pi,
+        rcut=4.0,
+        acut=4.0,
+        two_body_decay=1.0,
+        three_body_decay=1.0,
+        three_body_weight=1.0,
+    )
 
     shift = np.array([10.0, -5.0, 2.0])
-    rep2 = _call_generate(coords + shift, Z, elements=[1], nRs2=4, nRs3=2, nFourier=1,
-                          eta2=0.5, eta3=1.5, zeta=np.pi,
-                          rcut=4.0, acut=4.0,
-                          two_body_decay=1.0, three_body_decay=1.0, three_body_weight=1.0)
+    rep2 = _call_generate(
+        coords + shift,
+        Z,
+        elements=[1],
+        nRs2=4,
+        nRs3=2,
+        nFourier=1,
+        eta2=0.5,
+        eta3=1.5,
+        zeta=np.pi,
+        rcut=4.0,
+        acut=4.0,
+        two_body_decay=1.0,
+        three_body_decay=1.0,
+        three_body_weight=1.0,
+    )
 
     np.testing.assert_allclose(rep1, rep2, rtol=1e-10, atol=1e-12)
 
 
 def test_three_body_zeroing_block_when_weight_zero():
     # Geometry with angles so 3-body term would be nonzero when enabled
-    coords = np.array(
-        [[0.0, 0.0, 0.0],
-         [1.0, 0.0, 0.0],
-         [0.5, 0.8, 0.0]], dtype=np.float64
-    )
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 0.8, 0.0]], dtype=np.float64)
     Z = np.array([1, 1, 1], dtype=np.int32)
     elements = [1]
     nRs2, nRs3, nFourier = 4, 3, 2
 
     # With three_body_weight = 0 => 3-body block should be exactly zero
-    rep_zero = _call_generate(coords, Z, elements=elements,
-                              nRs2=nRs2, nRs3=nRs3, nFourier=nFourier,
-                              eta2=0.5, eta3=1.5, zeta=np.pi,
-                              rcut=6.0, acut=6.0,
-                              two_body_decay=1.0, three_body_decay=1.0, three_body_weight=0.0)
+    rep_zero = _call_generate(
+        coords,
+        Z,
+        elements=elements,
+        nRs2=nRs2,
+        nRs3=nRs3,
+        nFourier=nFourier,
+        eta2=0.5,
+        eta3=1.5,
+        zeta=np.pi,
+        rcut=6.0,
+        acut=6.0,
+        two_body_decay=1.0,
+        three_body_decay=1.0,
+        three_body_weight=0.0,
+    )
 
     # With a positive weight => 3-body block should generally be non-zero
-    rep_pos = _call_generate(coords, Z, elements=elements,
-                             nRs2=nRs2, nRs3=nRs3, nFourier=nFourier,
-                             eta2=0.5, eta3=1.5, zeta=np.pi,
-                             rcut=6.0, acut=6.0,
-                             two_body_decay=1.0, three_body_decay=1.0, three_body_weight=1.0)
+    rep_pos = _call_generate(
+        coords,
+        Z,
+        elements=elements,
+        nRs2=nRs2,
+        nRs3=nRs3,
+        nFourier=nFourier,
+        eta2=0.5,
+        eta3=1.5,
+        zeta=np.pi,
+        rcut=6.0,
+        acut=6.0,
+        two_body_decay=1.0,
+        three_body_decay=1.0,
+        three_body_weight=1.0,
+    )
 
     two_body_size = len(elements) * nRs2
     # Check 3-body block all zeros when weight=0
@@ -124,28 +171,31 @@ def test_three_body_zeroing_block_when_weight_zero():
 
 def test_defaults_match_manual_linspace_construction():
     # Ensure the binding’s internal linspace matches what we’d build in Python
-    coords = np.array([[0., 0., 0.],
-                       [1., 0., 0.],
-                       [0., 1., 0.]], dtype=np.float64)
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float64)
     Z = np.array([8, 1, 16], dtype=np.int32)  # O, H, S
 
 
 def test_rep_matches_between_functions():
     # small, simple triatomic
     coords = np.array(
-        [[-0.9572, 0.0, 0.0],
-         [ 0.0000, 0.0, 0.0],
-         [ 0.9572, 0.0, 0.0]], dtype=np.float64
+        [[-0.9572, 0.0, 0.0], [0.0000, 0.0, 0.0], [0.9572, 0.0, 0.0]], dtype=np.float64
     )
     Z = np.array([1, 8, 1], dtype=np.int32)
 
     # Keep basis sizes small for speed but nontrivial
     kw = dict(
         elements=[1, 8],
-        nRs2=4, nRs3=3, nFourier=1,
-        eta2=0.32, eta3=2.7, zeta=np.pi,
-        rcut=8.0, acut=8.0,
-        two_body_decay=1.8, three_body_decay=0.57, three_body_weight=13.4,
+        nRs2=4,
+        nRs3=3,
+        nFourier=1,
+        eta2=0.32,
+        eta3=2.7,
+        zeta=np.pi,
+        rcut=8.0,
+        acut=8.0,
+        two_body_decay=1.8,
+        three_body_decay=0.57,
+        three_body_weight=13.4,
     )
 
     rep_only = generate_fchl_acsf(coords, Z, **kw)
@@ -162,19 +212,24 @@ def test_rep_matches_between_functions():
 def test_analytic_grad_matches_finite_difference():
     # small CH2-like geometry (asymmetric to avoid accidental cancellations)
     coords = np.array(
-        [[ 0.00,  0.00, 0.00],   # C
-         [ 1.10,  0.00, 0.00],   # H
-         [-0.20,  0.95, 0.15]],  # H
-        dtype=np.float64
+        [[0.00, 0.00, 0.00], [1.10, 0.00, 0.00], [-0.20, 0.95, 0.15]],  # C  # H  # H
+        dtype=np.float64,
     )
     Z = np.array([6, 1, 1], dtype=np.int32)
 
     kw = dict(
         elements=np.asarray([1, 6]),
-        nRs2=4, nRs3=3, nFourier=1,  # keep tiny for speed
-        eta2=0.32, eta3=2.7, zeta=np.pi,
-        rcut=5.0, acut=5.0,
-        two_body_decay=1.3, three_body_decay=0.8, three_body_weight=2.5,
+        nRs2=4,
+        nRs3=3,
+        nFourier=1,  # keep tiny for speed
+        eta2=0.32,
+        eta3=2.7,
+        zeta=np.pi,
+        rcut=5.0,
+        acut=5.0,
+        two_body_decay=1.3,
+        three_body_decay=0.8,
+        three_body_weight=2.5,
     )
 
     rep, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)
@@ -187,12 +242,13 @@ def test_analytic_grad_matches_finite_difference():
     # loop is tiny (n=3, rep_size small), but keep it simple & explicit
     for a in range(n):
         for d in range(3):
-            cp = coords.copy(); cm = coords.copy()
+            cp = coords.copy()
+            cm = coords.copy()
             cp[a, d] += h
             cm[a, d] -= h
             rep_p = generate_fchl_acsf(cp, Z, **kw)
             rep_m = generate_fchl_acsf(cm, Z, **kw)
-            fd_grad[:, :, a*3 + d] = (rep_p - rep_m) / (2.0*h)
+            fd_grad[:, :, a * 3 + d] = (rep_p - rep_m) / (2.0 * h)
 
     # Compare analytic vs FD. Use slightly looser tolerances than for exact equality.
     # With smooth functions and h=1e-6, these tolerances are typically comfortable.
@@ -202,16 +258,22 @@ def test_analytic_grad_matches_finite_difference():
 def test_translation_invariance_and_zero_grad_under_uniform_shift():
     # two atoms; translation of all atoms should not change rep,
     # and gradient wrt a *uniform* shift of all atoms should sum to ~0
-    coords = np.array([[0.,0.,0.],
-                       [1.,0.,0.]], dtype=np.float64)
-    Z = np.array([1,1], dtype=np.int32)
+    coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
+    Z = np.array([1, 1], dtype=np.int32)
 
     kw = dict(
         elements=[1],
-        nRs2=4, nRs3=2, nFourier=1,
-        eta2=0.4, eta3=1.6, zeta=np.pi,
-        rcut=4.0, acut=4.0,
-        two_body_decay=1.0, three_body_decay=1.0, three_body_weight=1.0,
+        nRs2=4,
+        nRs3=2,
+        nFourier=1,
+        eta2=0.4,
+        eta3=1.6,
+        zeta=np.pi,
+        rcut=4.0,
+        acut=4.0,
+        two_body_decay=1.0,
+        three_body_decay=1.0,
+        three_body_weight=1.0,
     )
 
     rep1, grad1 = generate_fchl_acsf_and_gradients(coords, Z, **kw)
@@ -224,4 +286,3 @@ def test_translation_invariance_and_zero_grad_under_uniform_shift():
     # For a uniform translation, sum over atoms of d(rep)/d(coords) ≈ 0 (per feature and direction)
     summed = grad1.sum(axis=2)  # shape: (n, rep_size, 3)
     np.testing.assert_allclose(summed, 0.0, rtol=1e-9, atol=1e-10)
-

@@ -1,7 +1,7 @@
+# import your module
 import numpy as np
 import pytest
 
-# import your module
 import kernelforge._fchl19 as fchl
 
 
@@ -158,4 +158,3 @@ def test_shape_errors_raise_valueerror():
 
     with pytest.raises(ValueError):
         _ = fchl.fatomic_local_gradient_kernel(x1, x2, dX2_bad, q1, q2, n1, n2, sigma)
-
