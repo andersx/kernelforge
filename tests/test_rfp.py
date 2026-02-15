@@ -4,7 +4,7 @@ import pytest
 from kernelforge import _cholesky
 
 
-def _sym_from_triangle(A, uplo):
+def _sym_from_triangle(A, uplo):  # type: ignore
     """Build a symmetric matrix from only one triangle of A (ignores the other)."""
     if uplo == "U":
         T = np.triu(A)
@@ -17,7 +17,7 @@ def _sym_from_triangle(A, uplo):
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 8, 17, 32])
 @pytest.mark.parametrize("uplo", ["U", "L"])
 @pytest.mark.parametrize("transr", ["N", "T"])
-def test_roundtrip_symmetric(n, uplo, transr, seed=0):
+def test_roundtrip_symmetric(n, uplo, transr, seed=0) -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(seed)
     M = rng.standard_normal((n, n))
     A = (M + M.T) * 0.5  # symmetric
@@ -49,7 +49,7 @@ def test_roundtrip_symmetric(n, uplo, transr, seed=0):
 @pytest.mark.parametrize("n", [3, 7])
 @pytest.mark.parametrize("uplo", ["U", "L"])
 @pytest.mark.parametrize("transr", ["N", "T"])
-def test_nonsymmetric_triangle_semantics(n, uplo, transr, seed=123):
+def test_nonsymmetric_triangle_semantics(n, uplo, transr, seed=123) -> None:  # type: ignore[no-untyped-def]
     """Round-trip uses only one triangle. For a non-symmetric input,
     the returned matrix's specified triangle should match that triangle of the input.
     """
@@ -72,7 +72,7 @@ def test_nonsymmetric_triangle_semantics(n, uplo, transr, seed=123):
     np.testing.assert_allclose(Bs, expected, rtol=1e-13, atol=1e-13)
 
 
-def test_bad_length_raises():
+def test_bad_length_raises() -> None:
     n = 5
     good = np.zeros(n * (n + 1) // 2, dtype=np.float64)
     bad = np.zeros(good.size + 1, dtype=np.float64)
@@ -85,7 +85,7 @@ def test_bad_length_raises():
         _ = _cholesky.rfp_to_full(bad, n, uplo="U", transr="N")
 
 
-def test_c_contiguity_and_dtype():
+def test_c_contiguity_and_dtype() -> None:
     n = 6
     A = np.arange(n * n, dtype=np.float64).reshape(n, n)  # C-order by default
     arf = _cholesky.full_to_rfp(A, uplo="U", transr="N")

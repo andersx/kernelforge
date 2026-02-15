@@ -5,7 +5,7 @@ import pytest
 import kernelforge._fchl19 as fchl
 
 
-def slow_ref_grad(x1, x2, dX2, q1, q2, n1, n2, sigma):
+def slow_ref_grad(x1, x2, dX2, q1, q2, n1, n2, sigma):  # type: ignore
     """
     NumPy reference matching the Fortran logic:
       For each a,j1 and b,j2 with matching labels, accumulate:
@@ -60,7 +60,7 @@ def slow_ref_grad(x1, x2, dX2, q1, q2, n1, n2, sigma):
 
 
 @pytest.mark.parametrize("seed", [0, 1234])
-def test_fatomic_local_gradient_kernel_matches_reference(seed):
+def test_fatomic_local_gradient_kernel_matches_reference(seed) -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(seed)
 
     # modest sizes to keep test fast but non-trivial
@@ -96,7 +96,7 @@ def test_fatomic_local_gradient_kernel_matches_reference(seed):
     np.testing.assert_allclose(K, K_ref, rtol=1e-10, atol=1e-10)
 
 
-def test_no_matches_yields_zero_matrix():
+def test_no_matches_yields_zero_matrix() -> None:
     rng = np.random.default_rng(42)
     nm1, nm2 = 2, 2
     max_atoms1, max_atoms2 = 3, 3
@@ -118,7 +118,7 @@ def test_no_matches_yields_zero_matrix():
     assert np.allclose(K, 0.0)
 
 
-def test_empty_derivatives_returns_nm1_by_0():
+def test_empty_derivatives_returns_nm1_by_0() -> None:
     rng = np.random.default_rng(7)
     nm1, nm2 = 3, 2
     max_atoms1, max_atoms2 = 4, 3
@@ -140,7 +140,7 @@ def test_empty_derivatives_returns_nm1_by_0():
     assert K.size == 0
 
 
-def test_shape_errors_raise_valueerror():
+def test_shape_errors_raise_valueerror() -> None:
     rng = np.random.default_rng(9)
     nm1, nm2 = 2, 2
     max_atoms1, max_atoms2 = 3, 3

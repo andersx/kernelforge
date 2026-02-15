@@ -6,12 +6,12 @@ import pytest
 from kernelforge import _invdist as invdist
 
 
-def _strict_upper_pairs(N):
+def _strict_upper_pairs(N):  # type: ignore
     """[(0,1), (0,2), ..., (N-2,N-1)]"""
     return [(i, j) for i in range(N) for j in range(i + 1, N)]
 
 
-def test_shapes_and_ordering_and_sparsity():
+def test_shapes_and_ordering_and_sparsity() -> None:
     rng = np.random.default_rng(42)
     N = 5
     # well-separated random coords to avoid tiny distances
@@ -39,7 +39,7 @@ def test_shapes_and_ordering_and_sparsity():
 
 
 @pytest.mark.parametrize("N", [4, 5])
-def test_jacobian_central_difference(N):
+def test_jacobian_central_difference(N) -> None:  # type: ignore[no-untyped-def]
     rng = np.random.default_rng(123)
     # Spread atoms to avoid small r; linear ramp helps conditioning
     base = np.arange(N)[:, None] * np.array([1.5, 0.7, -0.6])
@@ -74,7 +74,7 @@ def test_jacobian_central_difference(N):
         np.testing.assert_allclose(ana_col, num_col, rtol=rtol, atol=atol)
 
 
-def test_eps_stability_no_nan_inf():
+def test_eps_stability_no_nan_inf() -> None:
     rng = np.random.default_rng(7)
     N = 4
     R = rng.normal(size=(N, 3)) * 1e-9  # nearly coincident (stress eps path)

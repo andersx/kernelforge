@@ -5,11 +5,11 @@ import pytest
 from kernelforge import _kernels
 
 
-def _strict_upper_pairs(N):
+def _strict_upper_pairs(N):  # type: ignore
     return [(i, j) for i in range(N) for j in range(i + 1, N)]
 
 
-def test_shapes_and_basic_values():
+def test_shapes_and_basic_values() -> None:
     rng = np.random.default_rng(0)
 
     N1, N2 = 3, 4
@@ -30,7 +30,7 @@ def test_shapes_and_basic_values():
     assert not np.allclose(K, 0.0)
 
 
-def test_formula_matches_numpy_reference():
+def test_formula_matches_numpy_reference() -> None:
     rng = np.random.default_rng(1)
 
     N1, N2 = 2, 3
@@ -64,7 +64,7 @@ def test_formula_matches_numpy_reference():
 
 
 @pytest.mark.parametrize("N1,N2,M,N", [(1, 2, 5, 3), (2, 1, 6, 2)])
-def test_finite_difference_linearized_feature_model(N1, N2, M, N):
+def test_finite_difference_linearized_feature_model(N1, N2, M, N) -> None:  # type: ignore[no-untyped-def]
     """
     Finite-difference check using a *linearized* feature->coordinate model:
       x1_a(r) = x1_a0 + J_a @ r
@@ -94,7 +94,7 @@ def test_finite_difference_linearized_feature_model(N1, N2, M, N):
         x2 = X2[b]
 
         # Define k_ab(r) with linearized feature model around r=0
-        def k_of_r(r_vec):
+        def k_of_r(r_vec):  # type: ignore
             x1_r = x1 + J @ r_vec  # (M,)
             diff = x1_r - x2
             return np.exp(-0.5 * inv_s2 * float(diff @ diff))
@@ -117,7 +117,7 @@ def test_finite_difference_linearized_feature_model(N1, N2, M, N):
         np.testing.assert_allclose(ana[coords_to_test], num[coords_to_test], rtol=rtol, atol=atol)
 
 
-def test_bad_sigma_raises():
+def test_bad_sigma_raises() -> None:
     rng = np.random.default_rng(3)
 
     N1, N2, M, D = 1, 1, 4, 6
@@ -132,7 +132,7 @@ def test_bad_sigma_raises():
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, -1.0)
 
 
-def test_input_shape_mismatch_errors():
+def test_input_shape_mismatch_errors() -> None:
     rng = np.random.default_rng(4)
 
     N1, N2, M, D = 2, 2, 5, 9
