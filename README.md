@@ -1,5 +1,12 @@
 # KernelForge - Optimized Kernels for ML
 
+[![CI](https://github.com/andersx/kernelforge/actions/workflows/ci.yml/badge.svg)](https://github.com/andersx/kernelforge/actions/workflows/ci.yml)
+[![Code Quality](https://github.com/andersx/kernelforge/actions/workflows/code-quality.yml/badge.svg)](https://github.com/andersx/kernelforge/actions/workflows/code-quality.yml)
+[![PyPI version](https://badge.fury.io/py/kernelforge.svg)](https://pypi.org/project/kernelforge/)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/kernelforge)](https://pypi.org/project/kernelforge/)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos-lightgrey)](https://github.com/andersx/kernelforge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 I really only care about writing optimized kernel code, so this project will be completed as I find additional time... XD
 
 I'm reviving this project to finish an old project using random Fourier features for kernel ML.
