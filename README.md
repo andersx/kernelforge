@@ -1,5 +1,12 @@
 # KernelForge - Optimized Kernels for ML
 
+[![CI](https://github.com/andersx/kernelforge/actions/workflows/ci.yml/badge.svg)](https://github.com/andersx/kernelforge/actions/workflows/ci.yml)
+[![Code Quality](https://github.com/andersx/kernelforge/actions/workflows/code-quality.yml/badge.svg)](https://github.com/andersx/kernelforge/actions/workflows/code-quality.yml)
+[![PyPI version](https://badge.fury.io/py/kernelforge.svg)](https://pypi.org/project/kernelforge/)
+[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos-lightgrey)](https://github.com/andersx/kernelforge)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 I really only care about writing optimized kernel code, so this project will be completed as I find additional time... XD
 
 I'm reviving this project to finish an old project using random Fourier features for kernel ML.
@@ -7,38 +14,76 @@ I'm reviving this project to finish an old project using random Fourier features
 
 # Installation
 
-```bash
-conda env create -f environments/environment-dev.yml
-pip install -e .
-pytest -v -s
-```
-## PyPI installation
+## Quick Start (Recommended)
 
-Install the requirements (e.g. the conda env above) and install from PyPI.
-This should work on both MacOS and Linux/PC:
+For most users, install from PyPI:
 
 ```bash
-conda activate kernelforge-dev
 pip install kernelforge
 ```
-This will install pre-compiled wheels with gfortran and linked againts OpenBLAS on Linux and Accelerate on MacOS.
-If you want to use MKL or other BLAS/LAPACK libraries, you need to compile from source, see below.
 
+This installs pre-compiled wheels with optimized BLAS libraries:
+- **Linux**: OpenBLAS
+- **macOS**: Apple Accelerate framework
 
-## Intel compilers and MKL
+**Requirements**: Python 3.10+
 
-It is 2025 so you can `sudo apt get install intel-basekit` on Linux/PC to get the compilers and MKL.
-Then set up the environment variables:
+## Development Installation
+
+### Linux
+
 ```bash
+# Create virtual environment with uv
+uv venv
+source .venv/bin/activate
+
+# Install in editable mode with test dependencies
+make install-linux
+
+# Or manually:
+CMAKE_ARGS="-DKF_USE_NATIVE=ON" uv pip install -e .[test] --verbose
+```
+
+### macOS
+
+macOS requires Homebrew LLVM for OpenMP support:
+
+```bash
+# Install dependencies
+brew install llvm libomp
+
+# Create virtual environment
+uv venv
+source .venv/bin/activate
+
+# Install in editable mode
+make install-macos
+
+# Or manually:
+CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DKF_USE_NATIVE=ON" uv pip install -e .[test] --verbose
+```
+
+**Note**: The `-DKF_USE_NATIVE=ON` flag enables `-march=native`/`-mcpu=native` optimizations for maximum performance on your specific CPU.
+
+## Advanced: Custom BLAS/LAPACK Libraries
+
+### Intel MKL (Linux)
+
+```bash
+# Install Intel oneAPI Base Toolkit
+sudo apt install intel-basekit
+
+# Set up environment
 source /opt/intel/oneapi/setvars.sh
-```
-In this case, MKL will be autodetected by some CMake magic. If you additionally want to compile with Intel compilers, you can set the environment variables when running `pip install`:
-```bash
-CC=icx CXX=icpx FC=ifx make install
+
+# Install (MKL will be auto-detected by CMake)
+uv pip install -e .[test] --verbose
+
+# Optional: Use Intel compilers
+CC=icx CXX=icpx uv pip install -e .[test] --verbose
 ```
 
-In my experience, GCC/G++/GFortran with OpenBLAS is very similar to Intel API alternatives in terms of performance, perhaps even better.
-On MacOS, GNU compilers with `-framework Accelerate` for BLAS/LAPACK is the default and is very fast on M-series macs.
+**Note**: In practice, GCC/G++ with OpenBLAS performs similarly to (or better than) Intel compilers with MKL. On macOS, LLVM with Accelerate framework is highly optimized for Apple Silicon.
 
 ## Timings
 I've rewritten a few of the kernels from the original QML code completely in C++.
