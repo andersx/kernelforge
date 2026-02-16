@@ -6,7 +6,7 @@ import pytest
 from kernelforge import _invdist as invdist
 
 
-def _strict_upper_pairs(N):  # type: ignore
+def _strict_upper_pairs(N: int) -> list[tuple[int, int]]:
     """[(0,1), (0,2), ..., (N-2,N-1)]"""
     return [(i, j) for i in range(N) for j in range(i + 1, N)]
 

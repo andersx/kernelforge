@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from kernelforge import _kernels  # adjust if your module is just `import _kernels`
 
@@ -46,7 +47,9 @@ def test_small_input() -> None:
     assert K[1, 1] == pytest.approx(1.0)
 
 
-def _ref_kernel_asymm(X1, X2, alpha):  # type: ignore
+def _ref_kernel_asymm(
+    X1: NDArray[np.float64], X2: NDArray[np.float64], alpha: float
+) -> NDArray[np.float64]:
     """Pure NumPy reference implementation."""
     n1, d = X1.shape
     n2, _ = X2.shape

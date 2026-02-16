@@ -1,31 +1,38 @@
+from typing import Any
+
 import numpy as np
+from numpy.typing import NDArray
 
 from kernelforge import _fchl19 as _fchl
 from kernelforge._fchl19 import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 
 
-def _call_generate(coords, nuclear_z, **kwargs):  # type: ignore
+def _call_generate(
+    coords: NDArray[np.float64], nuclear_z: NDArray[np.int32], **kwargs: Any
+) -> NDArray[np.float64]:
     """
     Wrapper to call the extension using named args, handling either arg order
     (coords first or nuclear_z first) depending on how it was compiled.
     """
     fn = _fchl.generate_fchl_acsf
-    params = dict(
-        coords=np.asarray(coords, dtype=np.float64),
-        nuclear_z=np.asarray(nuclear_z, dtype=np.int32),
-    )
+    params: dict[str, Any] = {
+        "coords": np.asarray(coords, dtype=np.float64),
+        "nuclear_z": np.asarray(nuclear_z, dtype=np.int32),
+    }
     params.update(kwargs)
     try:
         # Our binding signature: (coords, nuclear_z, ...)
-        return fn(**params)  # type: ignore[arg-type]
+        result: NDArray[np.float64] = fn(**params)
+        return result
     except TypeError:
         # Fallback if someone compiled as (nuclear_z, coords, ...)
         params2 = dict(params)
         params2["coords"], params2["nuclear_z"] = params["nuclear_z"], params["coords"]
-        return fn(**params2)  # type: ignore[arg-type]
+        result2: NDArray[np.float64] = fn(**params2)
+        return result2
 
 
-def _descr_size(n_elements, nRs2, nRs3, nFourier):  # type: ignore
+def _descr_size(n_elements: int, nRs2: int, nRs3: int, nFourier: int) -> int:
     # Matches the code in the binding:
     # rep_size = n_elements*nRs2 + (n_elements*(n_elements+1)) * nRs3 * nFourier
     return n_elements * nRs2 + (n_elements * (n_elements + 1)) * nRs3 * nFourier

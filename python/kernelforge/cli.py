@@ -6,8 +6,10 @@ import urllib.request
 import zipfile
 from importlib.metadata import version
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 
 from kernelforge._fchl19 import (
     fgdml_kernel,
@@ -51,10 +53,10 @@ def load_ethanol_raw_data() -> np.ndarray:
             print(f"  [Error downloading ethanol: {e}]", file=sys.stderr)
             raise
 
-    return np.load(npz_path, allow_pickle=True)
+    return np.load(npz_path, allow_pickle=True)  # type: ignore[no-any-return]
 
 
-def load_qm7b_raw_data() -> np.ndarray:
+def load_qm7b_raw_data() -> NDArray[Any]:
     """Load raw QM7b data from GitHub release. Auto-downloads if needed."""
     npz_path = CACHE_DIR / "qm7b_complete.npz"
 
@@ -73,32 +75,32 @@ def load_qm7b_raw_data() -> np.ndarray:
             print(f"  [Error downloading QM7b: {e}]", file=sys.stderr)
             raise
 
-    return np.load(npz_path, allow_pickle=True)
+    return np.load(npz_path, allow_pickle=True)  # type: ignore[no-any-return]
 
 
-def prepare_ethanol_fchl19(n_structures: int = 100) -> dict:
+def prepare_ethanol_fchl19(n_structures: int = 100) -> dict[str, Any]:
     """Prepare FCHL19 representations and gradients for ethanol."""
     data = load_ethanol_raw_data()
     R = data["R"][:n_structures]
     z = data["z"]
     elements = [1, 6, 8]
 
-    X = []
-    dX = []
+    X_list = []
+    dX_list = []
     for r in R:
         rep, grad = generate_fchl_acsf_and_gradients(r, z, elements=elements)
-        X.append(rep)
-        dX.append(grad)
+        X_list.append(rep)
+        dX_list.append(grad)
 
-    X = np.asarray(X)
-    dX = np.asarray(dX)
+    X = np.asarray(X_list)
+    dX = np.asarray(dX_list)
     N = np.asarray([len(z) for _ in range(n_structures)], dtype=np.int32)
     Q = np.asarray([z for _ in range(n_structures)], dtype=np.int32)
 
     return {"X": X, "dX": dX, "N": N, "Q": Q, "z": z}
 
 
-def prepare_qm7b_fchl19(n_structures: int = 100) -> dict:
+def prepare_qm7b_fchl19(n_structures: int = 100) -> dict[str, Any]:
     """Prepare FCHL19 representations for QM7b."""
     data = load_qm7b_raw_data()
     R = data["R"][:n_structures]
@@ -106,15 +108,15 @@ def prepare_qm7b_fchl19(n_structures: int = 100) -> dict:
     elements = [1, 6, 7, 8, 16, 17]
 
     X_list = []
-    N = []
+    N_list = []
     Q_list = []
     for i, r in enumerate(R):
         rep = generate_fchl_acsf(r, z_list[i], elements=elements)
         X_list.append(rep)
-        N.append(len(rep))
+        N_list.append(len(rep))
         Q_list.append(z_list[i])
 
-    N = np.asarray(N, dtype=np.int32)
+    N = np.asarray(N_list, dtype=np.int32)
     max_atoms = max(N)
     rep_dim = X_list[0].shape[1]
 
@@ -365,7 +367,7 @@ def print_footer(total_ms: float, count: int) -> None:
     print()
 
 
-def run(suite: str):
+def run(suite: str) -> None:
     """Run KernelForge benchmarks."""
     if suite not in SUITES:
         print(f"Error: Unknown suite '{suite}'", file=sys.stderr)
@@ -379,7 +381,7 @@ def run(suite: str):
 
     print_header(suite)
 
-    total_ms = 0
+    total_ms = 0.0
     results = []
 
     for bench_name in suite_benchmarks:
@@ -393,7 +395,7 @@ def run(suite: str):
     print_footer(total_ms, len(results))
 
 
-def main():
+def main() -> None:
     """Main entry point for the qmlbench command."""
     parser = argparse.ArgumentParser(
         prog="qmlbench",

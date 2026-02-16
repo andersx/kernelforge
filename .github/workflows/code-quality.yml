@@ -26,17 +26,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install code quality tools
-        run: uv pip install --system black isort ruff mypy numpy pytest
+        run: uv pip install --system ruff mypy numpy pytest
 
-      - name: Check formatting with Black
-        run: black --check python/ tests/
-
-      - name: Check import sorting with isort
-        run: isort --check-only python/ tests/
+      - name: Check formatting with Ruff
+        run: ruff format --check python/ tests/
 
       - name: Lint with Ruff
         run: ruff check python/ tests/
 
       - name: Type check with mypy
         run: mypy python/ tests/
-        continue-on-error: true  # Don't fail CI on mypy errors initially

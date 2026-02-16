@@ -1,11 +1,21 @@
 # import your module
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 import kernelforge._fchl19 as fchl
 
 
-def slow_ref_grad(x1, x2, dX2, q1, q2, n1, n2, sigma):  # type: ignore
+def slow_ref_grad(
+    x1: NDArray[np.float64],
+    x2: NDArray[np.float64],
+    dX2: NDArray[np.float64],
+    q1: NDArray[np.int32],
+    q2: NDArray[np.int32],
+    n1: NDArray[np.int32],
+    n2: NDArray[np.int32],
+    sigma: float,
+) -> NDArray[np.float64]:
     """
     NumPy reference matching the Fortran logic:
       For each a,j1 and b,j2 with matching labels, accumulate:

@@ -1,10 +1,17 @@
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from kernelforge import _kernels  # the module name from the pybind shim
 
 
-def ref_block(x1, J1, x2, J2, sigma):  # type: ignore
+def ref_block(
+    x1: NDArray[np.float64],
+    J1: NDArray[np.float64],
+    x2: NDArray[np.float64],
+    J2: NDArray[np.float64],
+    sigma: float,
+) -> NDArray[np.float64]:
     """
     Reference NumPy implementation for one (a,b) block:
     H = (k/s^2) * J1^T J2 - (k/s^4) * (J1^T d) (J2^T d)^T
@@ -19,10 +26,17 @@ def ref_block(x1, J1, x2, J2, sigma):  # type: ignore
     v1 = J1.T @ d
     v2 = J2.T @ d
     term2 = (k / (s2 * s2)) * (np.outer(v1, v2))
-    return term1 - term2
+    result: NDArray[np.float64] = term1 - term2
+    return result
 
 
-def assemble_ref_full(X1, dX1, X2, dX2, sigma):  # type: ignore
+def assemble_ref_full(
+    X1: NDArray[np.float64],
+    dX1: NDArray[np.float64],
+    X2: NDArray[np.float64],
+    dX2: NDArray[np.float64],
+    sigma: float,
+) -> NDArray[np.float64]:
     """
     Assemble full ((N1*D1) x (N2*D2)) Hessian by looping in Python
     and calling the closed-form block above.

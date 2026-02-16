@@ -1,17 +1,22 @@
+from typing import Literal
+
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from kernelforge import _cholesky
 
 
-def _sym_from_triangle(A, uplo):  # type: ignore
+def _sym_from_triangle(A: NDArray[np.float64], uplo: Literal["U", "L"]) -> NDArray[np.float64]:
     """Build a symmetric matrix from only one triangle of A (ignores the other)."""
     if uplo == "U":
         T = np.triu(A)
-        return T + np.triu(A, 1).T
+        result: NDArray[np.float64] = T + np.triu(A, 1).T
+        return result
     else:
         T = np.tril(A)
-        return T + np.tril(A, -1).T
+        result2: NDArray[np.float64] = T + np.tril(A, -1).T
+        return result2
 
 
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 8, 17, 32])
