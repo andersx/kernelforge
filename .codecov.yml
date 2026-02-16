@@ -1,0 +1,16 @@
+coverage:
+  precision: 2
+  round: down
+  status:
+    project: off  # Don't fail CI based on coverage
+    patch: off    # Don't fail CI on patch coverage
+
+comment:
+  layout: "reach,diff,files,footer"
+  behavior: default
+  require_changes: false
+
+ignore:
+  - "tests/"
+  - "examples/"
+  - "**/__init__.py"

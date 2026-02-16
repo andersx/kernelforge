@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/andersx/kernelforge/actions/workflows/ci.yml/badge.svg)](https://github.com/andersx/kernelforge/actions/workflows/ci.yml)
 [![Code Quality](https://github.com/andersx/kernelforge/actions/workflows/code-quality.yml/badge.svg)](https://github.com/andersx/kernelforge/actions/workflows/code-quality.yml)
+[![codecov](https://codecov.io/gh/andersx/kernelforge/branch/master/graph/badge.svg)](https://codecov.io/gh/andersx/kernelforge)
 [![PyPI version](https://badge.fury.io/py/kernelforge.svg)](https://pypi.org/project/kernelforge/)
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos-lightgrey)](https://github.com/andersx/kernelforge)
