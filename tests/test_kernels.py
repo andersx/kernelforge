@@ -33,8 +33,8 @@ def test_kernel_symm_against_numpy() -> None:
             dist2 = sq_norms[i] + sq_norms[j] - 2 * np.dot(X[i], X[j])
             K_ref[i, j] = np.exp(alpha * dist2)
 
-    i, j = np.tril_indices(K.shape[0])  # type: ignore[assignment]
-    assert np.allclose(K[i, j], K_ref[i, j])
+    i_arr, j_arr = np.tril_indices(K.shape[0])
+    assert np.allclose(K[i_arr, j_arr], K_ref[i_arr, j_arr])
 
 
 def test_small_input() -> None:

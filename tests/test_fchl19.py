@@ -189,23 +189,23 @@ def test_rep_matches_between_functions() -> None:
     Z = np.array([1, 8, 1], dtype=np.int32)
 
     # Keep basis sizes small for speed but nontrivial
-    kw = dict(
-        elements=[1, 8],
-        nRs2=4,
-        nRs3=3,
-        nFourier=1,
-        eta2=0.32,
-        eta3=2.7,
-        zeta=np.pi,
-        rcut=8.0,
-        acut=8.0,
-        two_body_decay=1.8,
-        three_body_decay=0.57,
-        three_body_weight=13.4,
-    )
+    kw: dict[str, Any] = {
+        "elements": [1, 8],
+        "nRs2": 4,
+        "nRs3": 3,
+        "nFourier": 1,
+        "eta2": 0.32,
+        "eta3": 2.7,
+        "zeta": np.pi,
+        "rcut": 8.0,
+        "acut": 8.0,
+        "two_body_decay": 1.8,
+        "three_body_decay": 0.57,
+        "three_body_weight": 13.4,
+    }
 
-    rep_only = generate_fchl_acsf(coords, Z, **kw)  # type: ignore[arg-type]
-    rep_both, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)  # type: ignore[arg-type]
+    rep_only = generate_fchl_acsf(coords, Z, **kw)
+    rep_both, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)
 
     assert rep_only.shape == rep_both.shape
     np.testing.assert_allclose(rep_only, rep_both, rtol=1e-12, atol=1e-14)
@@ -223,22 +223,22 @@ def test_analytic_grad_matches_finite_difference() -> None:
     )
     Z = np.array([6, 1, 1], dtype=np.int32)
 
-    kw = dict(
-        elements=np.asarray([1, 6]),
-        nRs2=4,
-        nRs3=3,
-        nFourier=1,  # keep tiny for speed
-        eta2=0.32,
-        eta3=2.7,
-        zeta=np.pi,
-        rcut=5.0,
-        acut=5.0,
-        two_body_decay=1.3,
-        three_body_decay=0.8,
-        three_body_weight=2.5,
-    )
+    kw: dict[str, Any] = {
+        "elements": np.asarray([1, 6]),
+        "nRs2": 4,
+        "nRs3": 3,
+        "nFourier": 1,  # keep tiny for speed
+        "eta2": 0.32,
+        "eta3": 2.7,
+        "zeta": np.pi,
+        "rcut": 5.0,
+        "acut": 5.0,
+        "two_body_decay": 1.3,
+        "three_body_decay": 0.8,
+        "three_body_weight": 2.5,
+    }
 
-    rep, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)  # type: ignore[arg-type]
+    rep, grad = generate_fchl_acsf_and_gradients(coords, Z, **kw)
     n, rep_size = rep.shape
 
     # central finite-difference using the rep-only function
@@ -252,8 +252,8 @@ def test_analytic_grad_matches_finite_difference() -> None:
             cm = coords.copy()
             cp[a, d] += h
             cm[a, d] -= h
-            rep_p = generate_fchl_acsf(cp, Z, **kw)  # type: ignore[arg-type]
-            rep_m = generate_fchl_acsf(cm, Z, **kw)  # type: ignore[arg-type]
+            rep_p = generate_fchl_acsf(cp, Z, **kw)
+            rep_m = generate_fchl_acsf(cm, Z, **kw)
             fd_grad[:, :, a * 3 + d] = (rep_p - rep_m) / (2.0 * h)
 
     # Compare analytic vs FD. Use slightly looser tolerances than for exact equality.
@@ -267,25 +267,25 @@ def test_translation_invariance_and_zero_grad_under_uniform_shift() -> None:
     coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
     Z = np.array([1, 1], dtype=np.int32)
 
-    kw = dict(
-        elements=[1],
-        nRs2=4,
-        nRs3=2,
-        nFourier=1,
-        eta2=0.4,
-        eta3=1.6,
-        zeta=np.pi,
-        rcut=4.0,
-        acut=4.0,
-        two_body_decay=1.0,
-        three_body_decay=1.0,
-        three_body_weight=1.0,
-    )
+    kw: dict[str, Any] = {
+        "elements": [1],
+        "nRs2": 4,
+        "nRs3": 2,
+        "nFourier": 1,
+        "eta2": 0.4,
+        "eta3": 1.6,
+        "zeta": np.pi,
+        "rcut": 4.0,
+        "acut": 4.0,
+        "two_body_decay": 1.0,
+        "three_body_decay": 1.0,
+        "three_body_weight": 1.0,
+    }
 
-    rep1, grad1 = generate_fchl_acsf_and_gradients(coords, Z, **kw)  # type: ignore[arg-type]
+    rep1, grad1 = generate_fchl_acsf_and_gradients(coords, Z, **kw)
 
     shift = np.array([+3.2, -1.1, +0.7])
-    rep2, grad2 = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)  # type: ignore[arg-type]
+    rep2, grad2 = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)
 
     np.testing.assert_allclose(rep1, rep2, rtol=1e-12, atol=1e-14)
 

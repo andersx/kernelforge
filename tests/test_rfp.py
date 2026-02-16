@@ -22,7 +22,9 @@ def _sym_from_triangle(A: NDArray[np.float64], uplo: Literal["U", "L"]) -> NDArr
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 8, 17, 32])
 @pytest.mark.parametrize("uplo", ["U", "L"])
 @pytest.mark.parametrize("transr", ["N", "T"])
-def test_roundtrip_symmetric(n, uplo, transr, seed=0) -> None:  # type: ignore[no-untyped-def]
+def test_roundtrip_symmetric(
+    n: int, uplo: Literal["U", "L"], transr: Literal["N", "T"], seed: int = 0
+) -> None:
     rng = np.random.default_rng(seed)
     M = rng.standard_normal((n, n))
     A = (M + M.T) * 0.5  # symmetric
@@ -54,7 +56,9 @@ def test_roundtrip_symmetric(n, uplo, transr, seed=0) -> None:  # type: ignore[n
 @pytest.mark.parametrize("n", [3, 7])
 @pytest.mark.parametrize("uplo", ["U", "L"])
 @pytest.mark.parametrize("transr", ["N", "T"])
-def test_nonsymmetric_triangle_semantics(n, uplo, transr, seed=123) -> None:  # type: ignore[no-untyped-def]
+def test_nonsymmetric_triangle_semantics(
+    n: int, uplo: Literal["U", "L"], transr: Literal["N", "T"], seed: int = 123
+) -> None:
     """Round-trip uses only one triangle. For a non-symmetric input,
     the returned matrix's specified triangle should match that triangle of the input.
     """

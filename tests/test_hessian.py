@@ -66,7 +66,7 @@ def assemble_ref_full(
         (1, 1, 6, 5, 5),
     ],
 )
-def test_shapes_and_values(N1, N2, M, D1, D2) -> None:  # type: ignore[no-untyped-def]
+def test_shapes_and_values(N1: int, N2: int, M: int, D1: int, D2: int) -> None:
     rng = np.random.default_rng(0)
     X1 = rng.normal(size=(N1, M))
     X2 = rng.normal(size=(N2, M))
@@ -83,7 +83,7 @@ def test_shapes_and_values(N1, N2, M, D1, D2) -> None:  # type: ignore[no-untype
 
 
 @pytest.mark.parametrize("tile_B", [1, 2, 4, 7, 0])  # 0 => auto
-def test_various_tile_sizes(tile_B) -> None:  # type: ignore[no-untyped-def]
+def test_various_tile_sizes(tile_B: int) -> None:
     rng = np.random.default_rng(1)
     N1, N2, M, D1, D2 = 2, 5, 8, 3, 4
     X1 = rng.normal(size=(N1, M))

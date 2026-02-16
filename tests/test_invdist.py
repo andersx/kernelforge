@@ -39,7 +39,7 @@ def test_shapes_and_ordering_and_sparsity() -> None:
 
 
 @pytest.mark.parametrize("N", [4, 5])
-def test_jacobian_central_difference(N) -> None:  # type: ignore[no-untyped-def]
+def test_jacobian_central_difference(N: int) -> None:
     rng = np.random.default_rng(123)
     # Spread atoms to avoid small r; linear ramp helps conditioning
     base = np.arange(N)[:, None] * np.array([1.5, 0.7, -0.6])

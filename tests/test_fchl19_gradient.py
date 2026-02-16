@@ -70,7 +70,7 @@ def slow_ref_grad(
 
 
 @pytest.mark.parametrize("seed", [0, 1234])
-def test_fatomic_local_gradient_kernel_matches_reference(seed) -> None:  # type: ignore[no-untyped-def]
+def test_fatomic_local_gradient_kernel_matches_reference(seed: int) -> None:
     rng = np.random.default_rng(seed)
 
     # modest sizes to keep test fast but non-trivial
