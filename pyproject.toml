@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "pytest-xdist", "pytest-cov", "pytest-timeout"]
+test = ["pytest>=8", "pytest-xdist", "pytest-timeout"]
 dev = [
     "ruff>=0.8.0",
     "mypy>=1.9.0",
