@@ -19,7 +19,7 @@ jobs:
         os: [ubuntu-22.04, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Fetch all history for setuptools-scm to detect version from tags
 
