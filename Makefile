@@ -15,8 +15,8 @@ environment:
 .PHONY: format lint typecheck check
 
 format:
-	black python/ tests/
-	isort python/ tests/
+	ruff format python/ tests/
+	ruff check --select I --fix python/ tests/
 
 lint:
 	ruff check python/ tests/

@@ -6,7 +6,7 @@ import pytest
 from kernelforge import _invdist as invdist
 
 
-def _strict_upper_pairs(N):  # type: ignore
+def _strict_upper_pairs(N: int) -> list[tuple[int, int]]:
     """[(0,1), (0,2), ..., (N-2,N-1)]"""
     return [(i, j) for i in range(N) for j in range(i + 1, N)]
 
@@ -39,7 +39,7 @@ def test_shapes_and_ordering_and_sparsity() -> None:
 
 
 @pytest.mark.parametrize("N", [4, 5])
-def test_jacobian_central_difference(N) -> None:  # type: ignore[no-untyped-def]
+def test_jacobian_central_difference(N: int) -> None:
     rng = np.random.default_rng(123)
     # Spread atoms to avoid small r; linear ramp helps conditioning
     base = np.arange(N)[:, None] * np.array([1.5, 0.7, -0.6])

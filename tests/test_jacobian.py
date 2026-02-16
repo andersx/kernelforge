@@ -1,11 +1,14 @@
+from typing import Any
+
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 # adjust import if your module name/path differs
 from kernelforge import _kernels
 
 
-def _strict_upper_pairs(N):  # type: ignore
+def _strict_upper_pairs(N: int) -> list[tuple[int, int]]:
     return [(i, j) for i in range(N) for j in range(i + 1, N)]
 
 
@@ -64,7 +67,7 @@ def test_formula_matches_numpy_reference() -> None:
 
 
 @pytest.mark.parametrize("N1,N2,M,N", [(1, 2, 5, 3), (2, 1, 6, 2)])
-def test_finite_difference_linearized_feature_model(N1, N2, M, N) -> None:  # type: ignore[no-untyped-def]
+def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N: int) -> None:
     """
     Finite-difference check using a *linearized* feature->coordinate model:
       x1_a(r) = x1_a0 + J_a @ r
@@ -94,10 +97,11 @@ def test_finite_difference_linearized_feature_model(N1, N2, M, N) -> None:  # ty
         x2 = X2[b]
 
         # Define k_ab(r) with linearized feature model around r=0
-        def k_of_r(r_vec):  # type: ignore
+        def k_of_r(r_vec: NDArray[np.float64]) -> np.floating[Any]:
             x1_r = x1 + J @ r_vec  # (M,)
             diff = x1_r - x2
-            return np.exp(-0.5 * inv_s2 * float(diff @ diff))
+            result: np.floating[Any] = np.exp(-0.5 * inv_s2 * float(diff @ diff))
+            return result
 
         # Numerical derivative per-coordinate via central difference at r=0
         num = np.zeros(D)

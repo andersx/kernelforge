@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from kernelforge import _kernels  # adjust if your module is just `import _kernels`
 
@@ -32,8 +33,8 @@ def test_kernel_symm_against_numpy() -> None:
             dist2 = sq_norms[i] + sq_norms[j] - 2 * np.dot(X[i], X[j])
             K_ref[i, j] = np.exp(alpha * dist2)
 
-    i, j = np.tril_indices(K.shape[0])  # type: ignore[assignment]
-    assert np.allclose(K[i, j], K_ref[i, j])
+    i_arr, j_arr = np.tril_indices(K.shape[0])
+    assert np.allclose(K[i_arr, j_arr], K_ref[i_arr, j_arr])
 
 
 def test_small_input() -> None:
@@ -46,7 +47,9 @@ def test_small_input() -> None:
     assert K[1, 1] == pytest.approx(1.0)
 
 
-def _ref_kernel_asymm(X1, X2, alpha):  # type: ignore
+def _ref_kernel_asymm(
+    X1: NDArray[np.float64], X2: NDArray[np.float64], alpha: float
+) -> NDArray[np.float64]:
     """Pure NumPy reference implementation."""
     n1, d = X1.shape
     n2, _ = X2.shape
