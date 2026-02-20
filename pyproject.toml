@@ -103,9 +103,6 @@ ignore = [
     "N802",   # Function name should be lowercase (scientific functions use uppercase)
     "N803",   # Argument name should be lowercase (X, Y, K are scientific standards)
     "N806",   # Variable name should be lowercase (scientific notation)
-    
-    # Type annotation exceptions
-    "ANN401", # Dynamically typed expressions (Any)
 ]
 
 [tool.ruff.lint.isort]

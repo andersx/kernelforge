@@ -1,4 +1,4 @@
-from typing import Any
+from typing import TypedDict, Unpack
 
 import numpy as np
 from numpy.typing import NDArray
@@ -7,19 +7,37 @@ from kernelforge import _fchl19 as _fchl
 from kernelforge._fchl19 import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 
 
+class FCHL19Params(TypedDict, total=False):
+    """Optional parameters for generate_fchl_acsf."""
+
+    elements: list[int]
+    nRs2: int
+    nRs3: int
+    nFourier: int
+    eta2: float
+    eta3: float
+    zeta: float
+    rcut: float
+    acut: float
+    two_body_decay: float
+    three_body_decay: float
+    three_body_weight: float
+
+
 def _call_generate(
-    coords: NDArray[np.float64], nuclear_z: NDArray[np.int32], **kwargs: Any
+    coords: NDArray[np.float64], nuclear_z: NDArray[np.int32], **kwargs: Unpack[FCHL19Params]
 ) -> NDArray[np.float64]:
     """
     Wrapper to call the extension using named args, handling either arg order
     (coords first or nuclear_z first) depending on how it was compiled.
     """
     fn = _fchl.generate_fchl_acsf
-    params: dict[str, Any] = {
+    # Build params dict with coords/nuclear_z plus any optional kwargs
+    params = {
         "coords": np.asarray(coords, dtype=np.float64),
         "nuclear_z": np.asarray(nuclear_z, dtype=np.int32),
+        **kwargs,
     }
-    params.update(kwargs)
     try:
         # Our binding signature: (coords, nuclear_z, ...)
         result: NDArray[np.float64] = fn(**params)
@@ -188,7 +206,7 @@ def test_rep_matches_between_functions() -> None:
     Z = np.array([1, 8, 1], dtype=np.int32)
 
     # Keep basis sizes small for speed but nontrivial
-    kw: dict[str, Any] = {
+    kw: FCHL19Params = {
         "elements": [1, 8],
         "nRs2": 4,
         "nRs3": 3,
@@ -222,8 +240,8 @@ def test_analytic_grad_matches_finite_difference() -> None:
     )
     Z = np.array([6, 1, 1], dtype=np.int32)
 
-    kw: dict[str, Any] = {
-        "elements": np.asarray([1, 6]),
+    kw: FCHL19Params = {
+        "elements": [1, 6],
         "nRs2": 4,
         "nRs3": 3,
         "nFourier": 1,  # keep tiny for speed
@@ -266,7 +284,7 @@ def test_translation_invariance_and_zero_grad_under_uniform_shift() -> None:
     coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
     Z = np.array([1, 1], dtype=np.int32)
 
-    kw: dict[str, Any] = {
+    kw: FCHL19Params = {
         "elements": [1],
         "nRs2": 4,
         "nRs3": 2,
