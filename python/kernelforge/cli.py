@@ -46,7 +46,7 @@ def load_ethanol_raw_data() -> np.ndarray:
 
                 with zipfile.ZipFile(zip_path) as z:
                     z.extractall(tmpdir)
-                extracted = list(Path(tmpdir).glob("*.npz"))[0]
+                extracted = next(iter(Path(tmpdir).glob("*.npz")))
                 extracted.rename(npz_path)
         except Exception as e:
             print(f"  [Error downloading ethanol: {e}]", file=sys.stderr)

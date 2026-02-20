@@ -119,20 +119,16 @@ known-first-party = ["kernelforge"]
     "B023",   # Function uses loop variable
     "C408",   # Unnecessary dict call
     "PT028",  # Fixtures with default args are acceptable
-    "ANN",    # Type annotations not required in tests
     "ERA001", # Allow explanatory comments (not all are commented code)
 ]
 
-# CLI can print and has relaxed type annotation requirements
+# CLI can print
 "python/kernelforge/cli.py" = [
     "T201",   # Print statements (CLI tool)
-    "ANN",    # Type annotations not required in CLI
-    "RUF015", # List indexing is clearer than next(iter(...))
 ]
 
 # Type stubs have different conventions
 "python/kernelforge/*.pyi" = [
-    "ANN",    # Type annotations are the stub itself
 ]
 # 
 [tool.mypy]
