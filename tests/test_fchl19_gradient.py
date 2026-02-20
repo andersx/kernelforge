@@ -87,12 +87,12 @@ def test_fatomic_local_gradient_kernel_matches_reference(seed: int) -> None:
     # dX2 shape: nm2 molecules, max_atoms2 atoms, rep features, 3*max_atoms2 derivative dims
     dX2 = rng.normal(size=(nm2, max_atoms2, rep, 3 * max_atoms2)).astype(np.float64)
 
-    q1 = rng.integers(0, n_species, size=(nm1, max_atoms1), dtype=np.int32)
-    q2 = rng.integers(0, n_species, size=(nm2, max_atoms2), dtype=np.int32)
+    q1 = rng.integers(0, n_species, size=(nm1, max_atoms1)).astype(np.int32)
+    q2 = rng.integers(0, n_species, size=(nm2, max_atoms2)).astype(np.int32)
 
     # ensure at least 1 atom in many molecules
-    n1 = rng.integers(1, max_atoms1 + 1, size=(nm1,), dtype=np.int32)
-    n2 = rng.integers(1, max_atoms2 + 1, size=(nm2,), dtype=np.int32)
+    n1 = rng.integers(1, max_atoms1 + 1, size=(nm1,)).astype(np.int32)
+    n2 = rng.integers(1, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
 
     # compute with binding
     K = fchl.fatomic_local_gradient_kernel(x1, x2, dX2, q1, q2, n1, n2, sigma)
@@ -139,11 +139,11 @@ def test_empty_derivatives_returns_nm1_by_0() -> None:
     x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
     dX2 = rng.normal(size=(nm2, max_atoms2, rep, 3 * max_atoms2)).astype(np.float64)
 
-    q1 = rng.integers(0, 2, size=(nm1, max_atoms1), dtype=np.int32)
-    q2 = rng.integers(0, 2, size=(nm2, max_atoms2), dtype=np.int32)
+    q1 = rng.integers(0, 2, size=(nm1, max_atoms1)).astype(np.int32)
+    q2 = rng.integers(0, 2, size=(nm2, max_atoms2)).astype(np.int32)
 
-    n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,), dtype=np.int32)
-    n2 = np.zeros((nm2,), dtype=np.int32)  # <- no atoms in set-2 => naq2 = 0
+    n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,)).astype(np.int32)
+    n2 = np.zeros((nm2,), dtype=np.int32)
 
     K = fchl.fatomic_local_gradient_kernel(x1, x2, dX2, q1, q2, n1, n2, sigma)
     assert K.shape == (nm1, 0)
@@ -161,10 +161,10 @@ def test_shape_errors_raise_valueerror() -> None:
     x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
     # wrong last dimension in dX2
     dX2_bad = rng.normal(size=(nm2, max_atoms2, rep, 3 * max_atoms2 - 1)).astype(np.float64)
-    q1 = rng.integers(0, 2, size=(nm1, max_atoms1), dtype=np.int32)
-    q2 = rng.integers(0, 2, size=(nm2, max_atoms2), dtype=np.int32)
-    n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,), dtype=np.int32)
-    n2 = rng.integers(0, max_atoms2 + 1, size=(nm2,), dtype=np.int32)
+    q1 = rng.integers(0, 2, size=(nm1, max_atoms1)).astype(np.int32)
+    q2 = rng.integers(0, 2, size=(nm2, max_atoms2)).astype(np.int32)
+    n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,)).astype(np.int32)
+    n2 = rng.integers(0, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
 
     with pytest.raises(ValueError, match=r".*"):
         _ = fchl.fatomic_local_gradient_kernel(x1, x2, dX2_bad, q1, q2, n1, n2, sigma)

@@ -52,7 +52,7 @@ def load_ethanol_raw_data() -> np.ndarray:
             print(f"  [Error downloading ethanol: {e}]", file=sys.stderr)
             raise
 
-    return np.load(npz_path, allow_pickle=True)  # type: ignore[no-any-return]
+    return np.load(npz_path, allow_pickle=True)
 
 
 def load_qm7b_raw_data() -> NDArray[Any]:
@@ -73,7 +73,7 @@ def load_qm7b_raw_data() -> NDArray[Any]:
             print(f"  [Error downloading QM7b: {e}]", file=sys.stderr)
             raise
 
-    return np.load(npz_path, allow_pickle=True)  # type: ignore[no-any-return]
+    return np.load(npz_path, allow_pickle=True)
 
 
 def prepare_ethanol_fchl19(n_structures: int = 100) -> dict[str, Any]:

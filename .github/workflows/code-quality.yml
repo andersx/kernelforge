@@ -31,7 +31,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install code quality tools
-        run: uv pip install --system ruff mypy numpy pytest
+        run: uv pip install --system ruff ty numpy pytest
 
       - name: Check formatting with Ruff
         run: ruff format --check python/ tests/
@@ -39,5 +39,5 @@ jobs:
       - name: Lint with Ruff
         run: ruff check python/ tests/
 
-      - name: Type check with mypy
-        run: mypy python/ tests/
+      - name: Type check with ty
+        run: ty check python/ tests/
