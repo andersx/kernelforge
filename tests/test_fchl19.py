@@ -33,21 +33,16 @@ def _call_generate(
     (coords first or nuclear_z first) depending on how it was compiled.
     """
     fn = _fchl.generate_fchl_acsf
-    # Build params dict with coords/nuclear_z plus any optional kwargs
-    params = {
-        "coords": np.asarray(coords, dtype=np.float64),
-        "nuclear_z": np.asarray(nuclear_z, dtype=np.int32),
-        **kwargs,
-    }
+    coords_typed = np.asarray(coords, dtype=np.float64)
+    nuclear_z_typed = np.asarray(nuclear_z, dtype=np.int32)
+
     try:
         # Our binding signature: (coords, nuclear_z, ...)
-        result: NDArray[np.float64] = fn(**params)
+        result: NDArray[np.float64] = fn(coords_typed, nuclear_z_typed, **kwargs)
         return result
     except TypeError:
         # Fallback if someone compiled as (nuclear_z, coords, ...)
-        params2 = dict(params)
-        params2["coords"], params2["nuclear_z"] = params["nuclear_z"], params["coords"]
-        result2: NDArray[np.float64] = fn(**params2)
+        result2: NDArray[np.float64] = fn(nuclear_z_typed, coords_typed, **kwargs)  # type: ignore[arg-type]
         return result2
 
 
