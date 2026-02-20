@@ -66,7 +66,7 @@ def test_formula_matches_numpy_reference() -> None:
     np.testing.assert_allclose(K, K_ref, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("N1,N2,M,N", [(1, 2, 5, 3), (2, 1, 6, 2)])
+@pytest.mark.parametrize(("N1", "N2", "M", "N"), [(1, 2, 5, 3), (2, 1, 6, 2)])
 def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N: int) -> None:
     """
     Finite-difference check using a *linearized* feature->coordinate model:

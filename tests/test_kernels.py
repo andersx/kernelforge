@@ -51,7 +51,7 @@ def _ref_kernel_asymm(
     X1: NDArray[np.float64], X2: NDArray[np.float64], alpha: float
 ) -> NDArray[np.float64]:
     """Pure NumPy reference implementation."""
-    n1, d = X1.shape
+    n1, _ = X1.shape
     n2, _ = X2.shape
     sq1 = np.sum(X1**2, axis=1)  # (n1,)
     sq2 = np.sum(X2**2, axis=1)  # (n2,)

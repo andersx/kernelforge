@@ -41,7 +41,7 @@ def assemble_ref_full(
     Assemble full ((N1*D1) x (N2*D2)) Hessian by looping in Python
     and calling the closed-form block above.
     """
-    N1, M = X1.shape
+    N1, _ = X1.shape
     N2, _ = X2.shape
     D1 = dX1.shape[2]
     D2 = dX2.shape[2]
@@ -60,7 +60,7 @@ def assemble_ref_full(
 
 
 @pytest.mark.parametrize(
-    "N1,N2,M,D1,D2",
+    ("N1", "N2", "M", "D1", "D2"),
     [
         (2, 3, 5, 4, 3),
         (1, 1, 6, 5, 5),

@@ -34,7 +34,6 @@ def _call_generate(
 
 def _descr_size(n_elements: int, nRs2: int, nRs3: int, nFourier: int) -> int:
     # Matches the code in the binding:
-    # rep_size = n_elements*nRs2 + (n_elements*(n_elements+1)) * nRs3 * nFourier
     return n_elements * nRs2 + (n_elements * (n_elements + 1)) * nRs3 * nFourier
 
 
@@ -285,7 +284,7 @@ def test_translation_invariance_and_zero_grad_under_uniform_shift() -> None:
     rep1, grad1 = generate_fchl_acsf_and_gradients(coords, Z, **kw)
 
     shift = np.array([+3.2, -1.1, +0.7])
-    rep2, grad2 = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)
+    rep2, _ = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)
 
     np.testing.assert_allclose(rep1, rep2, rtol=1e-12, atol=1e-14)
 
