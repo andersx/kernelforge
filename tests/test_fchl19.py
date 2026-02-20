@@ -42,7 +42,7 @@ def _call_generate(
         return result
     except TypeError:
         # Fallback if someone compiled as (nuclear_z, coords, ...)
-        result2: NDArray[np.float64] = fn(nuclear_z_typed, coords_typed, **kwargs)  # type: ignore[arg-type]
+        result2: NDArray[np.float64] = fn(nuclear_z_typed, coords_typed, **kwargs)
         return result2
 
 

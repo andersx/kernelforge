@@ -35,7 +35,7 @@ dependencies = [
 test = ["pytest>=8", "pytest-xdist", "pytest-timeout"]
 dev = [
     "ruff>=0.8.0",
-    "mypy>=1.9.0",
+    "ty",
     "pre-commit>=3.6.0",
 ]
 
@@ -108,6 +108,4 @@ ignore = [
     "T201",   # Print statements (CLI tool)
 ]
 
-[tool.mypy]
-python_version = "3.10"
-strict = true
+
