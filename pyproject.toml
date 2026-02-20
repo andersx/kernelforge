@@ -99,6 +99,11 @@ ignore = [
     # Security exceptions
     "S310",   # urllib.request.urlopen - needed for downloads
     
+    # Scientific naming conventions
+    "N802",   # Function name should be lowercase (scientific functions use uppercase)
+    "N803",   # Argument name should be lowercase (X, Y, K are scientific standards)
+    "N806",   # Variable name should be lowercase (scientific notation)
+    
     # Type annotation exceptions
     "ANN401", # Dynamically typed expressions (Any)
 ]
@@ -109,34 +114,24 @@ known-first-party = ["kernelforge"]
 [tool.ruff.lint.per-file-ignores]
 # Tests can be less strict
 "tests/*" = [
-    "N803",   # Argument name conventions (X, Y, K are scientific)
-    "N806",   # Variable name conventions
     "S101",   # Use of assert (fine in tests)
     "B017",   # pytest.raises(Exception) with too broad exception
     "B023",   # Function uses loop variable
     "C408",   # Unnecessary dict call
-    "PT011",  # pytest.raises without match parameter
-    "PT018",  # Composite assertions are fine in tests
     "PT028",  # Fixtures with default args are acceptable
     "ANN",    # Type annotations not required in tests
     "ERA001", # Allow explanatory comments (not all are commented code)
 ]
 
-# CLI can print and use scientific naming
+# CLI can print and has relaxed type annotation requirements
 "python/kernelforge/cli.py" = [
-    "N806",   # Non-lowercase variable (scientific notation)
     "T201",   # Print statements (CLI tool)
     "ANN",    # Type annotations not required in CLI
-    "PTH123", # open() is fine for simple file operations
     "RUF015", # List indexing is clearer than next(iter(...))
-    "B905",   # zip without strict is acceptable in benchmarks
 ]
 
 # Type stubs have different conventions
 "python/kernelforge/*.pyi" = [
-    "N802",   # Function name should be lowercase
-    "N803",   # Argument name conventions
-    "N806",   # Variable name conventions
     "ANN",    # Type annotations are the stub itself
 ]
 # 

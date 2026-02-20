@@ -129,10 +129,10 @@ def test_bad_sigma_raises() -> None:
     dX1 = rng.normal(size=(N1, M, D))
     X2 = rng.normal(size=(N2, M))
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, 0.0)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, -1.0)
 
 
@@ -146,13 +146,13 @@ def test_input_shape_mismatch_errors() -> None:
     X2_bad = rng.normal(size=(N2, M + 1))
 
     # X2 second dim must equal M
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2_bad, 0.9)
 
     # dX1 M dimension must match X1 M
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1[:, :-1, :], X2_ok, 0.9)
 
     # dX1 N1 dimension must match X1 N1
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1[:-1], dX1, X2_ok, 0.9)

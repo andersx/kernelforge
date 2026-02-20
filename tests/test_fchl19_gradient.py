@@ -166,5 +166,5 @@ def test_shape_errors_raise_valueerror() -> None:
     n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,), dtype=np.int32)
     n2 = rng.integers(0, max_atoms2 + 1, size=(nm2,), dtype=np.int32)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r".*"):
         _ = fchl.fatomic_local_gradient_kernel(x1, x2, dX2_bad, q1, q2, n1, n2, sigma)

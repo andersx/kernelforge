@@ -42,8 +42,7 @@ def load_ethanol_raw_data() -> np.ndarray:
                 with urllib.request.urlopen(req) as response:
                     if response.status != 200:
                         raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
-                    with open(zip_path, "wb") as f:
-                        f.write(response.read())
+                    zip_path.write_bytes(response.read())
 
                 with zipfile.ZipFile(zip_path) as z:
                     z.extractall(tmpdir)
@@ -69,8 +68,7 @@ def load_qm7b_raw_data() -> NDArray[Any]:
             with urllib.request.urlopen(req) as response:
                 if response.status != 200:
                     raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
-                with open(npz_path, "wb") as f:
-                    f.write(response.read())
+                npz_path.write_bytes(response.read())
         except Exception as e:
             print(f"  [Error downloading QM7b: {e}]", file=sys.stderr)
             raise
@@ -187,7 +185,7 @@ def benchmark_qm7b_fchl19_gradients() -> tuple[float, str]:
     elements = [1, 6, 7, 8, 16, 17]
 
     start = time.perf_counter()
-    for r, z in zip(R, z_list):
+    for r, z in zip(R, z_list, strict=True):
         _, _ = generate_fchl_acsf_and_gradients(r, z, elements=elements)
     elapsed = (time.perf_counter() - start) * 1000
 

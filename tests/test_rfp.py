@@ -98,10 +98,12 @@ def test_c_contiguity_and_dtype() -> None:
     n = 6
     A = np.arange(n * n, dtype=np.float64).reshape(n, n)  # C-order by default
     arf = _cholesky.full_to_rfp(A, uplo="U", transr="N")
-    assert arf.dtype == np.float64 and arf.flags["C_CONTIGUOUS"]
+    assert arf.dtype == np.float64
+    assert arf.flags["C_CONTIGUOUS"]
 
     B = _cholesky.rfp_to_full(arf, n, uplo="U", transr="N")
-    assert B.dtype == np.float64 and B.flags["C_CONTIGUOUS"]
+    assert B.dtype == np.float64
+    assert B.flags["C_CONTIGUOUS"]
 
     # Triangle must match original's triangle
     np.testing.assert_allclose(np.triu(B), np.triu(A), rtol=0, atol=0)

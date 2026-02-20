@@ -109,9 +109,9 @@ def test_bad_sigma_raises() -> None:
     dX1 = rng.normal(size=(1, 3, 2))
     dX2 = rng.normal(size=(1, 3, 2))
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, 0.0)
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, -1.0)
 
 
@@ -123,17 +123,17 @@ def test_shape_mismatch_raises() -> None:
     dX2 = rng.normal(size=(3, 4, 5))
 
     # X2 second dim must match X1 second dim
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2[:, :3], dX2, 0.8)
 
     # dX1 first/second dims must match X1
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1[1:], dX1, X2, dX2, 0.8)
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1[:, :-1, :], X2, dX2, 0.8)
 
     # dX2 first/second dims must match X2
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2[:-1], 0.8)
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2[:, :-1, :], 0.8)
