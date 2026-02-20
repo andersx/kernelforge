@@ -1,8 +1,7 @@
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
-from typing_extensions import Unpack
 
 from kernelforge import _fchl19 as _fchl
 from kernelforge._fchl19 import generate_fchl_acsf, generate_fchl_acsf_and_gradients
@@ -26,7 +25,7 @@ class FCHL19Params(TypedDict, total=False):
 
 
 def _call_generate(
-    coords: NDArray[np.float64], nuclear_z: NDArray[np.int32], **kwargs: Unpack[FCHL19Params]
+    coords: NDArray[np.float64], nuclear_z: NDArray[np.int32], **kwargs: Any
 ) -> NDArray[np.float64]:
     """
     Wrapper to call the extension using named args, handling either arg order
