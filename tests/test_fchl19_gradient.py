@@ -84,7 +84,7 @@ def test_fatomic_local_gradient_kernel_matches_reference(seed: int) -> None:
     x1 = rng.normal(size=(nm1, max_atoms1, rep)).astype(np.float64)
     x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
 
-    # dX2: (nm2, max_atoms2, rep, 3*max_atoms2)
+    # dX2 shape: nm2 molecules, max_atoms2 atoms, rep features, 3*max_atoms2 derivative dims
     dX2 = rng.normal(size=(nm2, max_atoms2, rep, 3 * max_atoms2)).astype(np.float64)
 
     q1 = rng.integers(0, n_species, size=(nm1, max_atoms1), dtype=np.int32)
