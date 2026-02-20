@@ -1,5 +1,3 @@
-"""Type stubs for _fchl19 C++ extension module."""
-
 import numpy as np
 from numpy.typing import NDArray
 

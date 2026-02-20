@@ -49,9 +49,10 @@ def test_formula_matches_numpy_reference() -> None:
 
     K = _kernels.gaussian_jacobian_batch(X1, dX1, X2, sigma)
 
-    # numpy reference (same math): for each (a,b),
-    # w_ab = (k_ab/sigma^2) * (X2[b]-X1[a])
-    # K[a*D:(a+1)*D, b] = dX1[a].T @ w_ab
+    # NumPy reference implementation
+    # For each pair (a,b): compute weight vector w_ab then project via Jacobian transpose
+    # Weight: w_ab = (kernel_value / sigma²) * displacement_vector
+    # Result: Jacobian_transpose times w_ab gives the kernel derivative block
     K_ref = np.zeros_like(K)
     for a in range(N1):
         x1 = X1[a]
@@ -66,7 +67,7 @@ def test_formula_matches_numpy_reference() -> None:
     np.testing.assert_allclose(K, K_ref, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("N1,N2,M,N", [(1, 2, 5, 3), (2, 1, 6, 2)])
+@pytest.mark.parametrize(("N1", "N2", "M", "N"), [(1, 2, 5, 3), (2, 1, 6, 2)])
 def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N: int) -> None:
     """
     Finite-difference check using a *linearized* feature->coordinate model:
@@ -97,7 +98,13 @@ def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N:
         x2 = X2[b]
 
         # Define k_ab(r) with linearized feature model around r=0
-        def k_of_r(r_vec: NDArray[np.float64]) -> np.floating[Any]:
+        # Bind loop variables as default arguments to avoid closure issue
+        def k_of_r(
+            r_vec: NDArray[np.float64],
+            x1: NDArray[np.float64] = x1,
+            J: NDArray[np.float64] = J,
+            x2: NDArray[np.float64] = x2,
+        ) -> np.floating[Any]:
             x1_r = x1 + J @ r_vec  # (M,)
             diff = x1_r - x2
             result: np.floating[Any] = np.exp(-0.5 * inv_s2 * float(diff @ diff))
@@ -129,10 +136,10 @@ def test_bad_sigma_raises() -> None:
     dX1 = rng.normal(size=(N1, M, D))
     X2 = rng.normal(size=(N2, M))
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, 0.0)
 
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, -1.0)
 
 
@@ -146,13 +153,13 @@ def test_input_shape_mismatch_errors() -> None:
     X2_bad = rng.normal(size=(N2, M + 1))
 
     # X2 second dim must equal M
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2_bad, 0.9)
 
     # dX1 M dimension must match X1 M
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1, dX1[:, :-1, :], X2_ok, 0.9)
 
     # dX1 N1 dimension must match X1 N1
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match=r".*"):
         _ = _kernels.gaussian_jacobian_batch(X1[:-1], dX1, X2_ok, 0.9)

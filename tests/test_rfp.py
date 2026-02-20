@@ -22,8 +22,9 @@ def _sym_from_triangle(A: NDArray[np.float64], uplo: Literal["U", "L"]) -> NDArr
 @pytest.mark.parametrize("n", [1, 2, 3, 5, 8, 17, 32])
 @pytest.mark.parametrize("uplo", ["U", "L"])
 @pytest.mark.parametrize("transr", ["N", "T"])
+@pytest.mark.parametrize("seed", [0])
 def test_roundtrip_symmetric(
-    n: int, uplo: Literal["U", "L"], transr: Literal["N", "T"], seed: int = 0
+    n: int, uplo: Literal["U", "L"], transr: Literal["N", "T"], seed: int
 ) -> None:
     rng = np.random.default_rng(seed)
     M = rng.standard_normal((n, n))
@@ -56,8 +57,9 @@ def test_roundtrip_symmetric(
 @pytest.mark.parametrize("n", [3, 7])
 @pytest.mark.parametrize("uplo", ["U", "L"])
 @pytest.mark.parametrize("transr", ["N", "T"])
+@pytest.mark.parametrize("seed", [123])
 def test_nonsymmetric_triangle_semantics(
-    n: int, uplo: Literal["U", "L"], transr: Literal["N", "T"], seed: int = 123
+    n: int, uplo: Literal["U", "L"], transr: Literal["N", "T"], seed: int
 ) -> None:
     """Round-trip uses only one triangle. For a non-symmetric input,
     the returned matrix's specified triangle should match that triangle of the input.
@@ -98,10 +100,12 @@ def test_c_contiguity_and_dtype() -> None:
     n = 6
     A = np.arange(n * n, dtype=np.float64).reshape(n, n)  # C-order by default
     arf = _cholesky.full_to_rfp(A, uplo="U", transr="N")
-    assert arf.dtype == np.float64 and arf.flags["C_CONTIGUOUS"]
+    assert arf.dtype == np.float64
+    assert arf.flags["C_CONTIGUOUS"]
 
     B = _cholesky.rfp_to_full(arf, n, uplo="U", transr="N")
-    assert B.dtype == np.float64 and B.flags["C_CONTIGUOUS"]
+    assert B.dtype == np.float64
+    assert B.flags["C_CONTIGUOUS"]
 
     # Triangle must match original's triangle
     np.testing.assert_allclose(np.triu(B), np.triu(A), rtol=0, atol=0)

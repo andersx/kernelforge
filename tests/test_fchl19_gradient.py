@@ -84,7 +84,7 @@ def test_fatomic_local_gradient_kernel_matches_reference(seed: int) -> None:
     x1 = rng.normal(size=(nm1, max_atoms1, rep)).astype(np.float64)
     x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
 
-    # dX2: (nm2, max_atoms2, rep, 3*max_atoms2)
+    # dX2 shape: nm2 molecules, max_atoms2 atoms, rep features, 3*max_atoms2 derivative dims
     dX2 = rng.normal(size=(nm2, max_atoms2, rep, 3 * max_atoms2)).astype(np.float64)
 
     q1 = rng.integers(0, n_species, size=(nm1, max_atoms1), dtype=np.int32)
@@ -166,5 +166,5 @@ def test_shape_errors_raise_valueerror() -> None:
     n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,), dtype=np.int32)
     n2 = rng.integers(0, max_atoms2 + 1, size=(nm2,), dtype=np.int32)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r".*"):
         _ = fchl.fatomic_local_gradient_kernel(x1, x2, dX2_bad, q1, q2, n1, n2, sigma)

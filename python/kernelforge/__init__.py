@@ -1,8 +1,8 @@
 """KernelForge - Optimized kernels for machine learning."""
 
 try:
-    from importlib.metadata import version
+    from importlib.metadata import PackageNotFoundError, version
 
     __version__ = version("kernelforge")
-except Exception:
+except PackageNotFoundError:
     __version__ = "unknown"

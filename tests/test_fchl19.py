@@ -1,40 +1,53 @@
-from typing import Any
+from typing import TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
+from typing_extensions import Unpack
 
 from kernelforge import _fchl19 as _fchl
 from kernelforge._fchl19 import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 
 
+class FCHL19Params(TypedDict, total=False):
+    """Optional parameters for generate_fchl_acsf."""
+
+    elements: list[int]
+    nRs2: int
+    nRs3: int
+    nFourier: int
+    eta2: float
+    eta3: float
+    zeta: float
+    rcut: float
+    acut: float
+    two_body_decay: float
+    three_body_decay: float
+    three_body_weight: float
+
+
 def _call_generate(
-    coords: NDArray[np.float64], nuclear_z: NDArray[np.int32], **kwargs: Any
+    coords: NDArray[np.float64], nuclear_z: NDArray[np.int32], **kwargs: Unpack[FCHL19Params]
 ) -> NDArray[np.float64]:
     """
     Wrapper to call the extension using named args, handling either arg order
     (coords first or nuclear_z first) depending on how it was compiled.
     """
     fn = _fchl.generate_fchl_acsf
-    params: dict[str, Any] = {
-        "coords": np.asarray(coords, dtype=np.float64),
-        "nuclear_z": np.asarray(nuclear_z, dtype=np.int32),
-    }
-    params.update(kwargs)
+    coords_typed = np.asarray(coords, dtype=np.float64)
+    nuclear_z_typed = np.asarray(nuclear_z, dtype=np.int32)
+
     try:
         # Our binding signature: (coords, nuclear_z, ...)
-        result: NDArray[np.float64] = fn(**params)
+        result: NDArray[np.float64] = fn(coords_typed, nuclear_z_typed, **kwargs)
         return result
     except TypeError:
         # Fallback if someone compiled as (nuclear_z, coords, ...)
-        params2 = dict(params)
-        params2["coords"], params2["nuclear_z"] = params["nuclear_z"], params["coords"]
-        result2: NDArray[np.float64] = fn(**params2)
+        result2: NDArray[np.float64] = fn(nuclear_z_typed, coords_typed, **kwargs)  # type: ignore[arg-type]
         return result2
 
 
 def _descr_size(n_elements: int, nRs2: int, nRs3: int, nFourier: int) -> int:
     # Matches the code in the binding:
-    # rep_size = n_elements*nRs2 + (n_elements*(n_elements+1)) * nRs3 * nFourier
     return n_elements * nRs2 + (n_elements * (n_elements + 1)) * nRs3 * nFourier
 
 
@@ -189,7 +202,7 @@ def test_rep_matches_between_functions() -> None:
     Z = np.array([1, 8, 1], dtype=np.int32)
 
     # Keep basis sizes small for speed but nontrivial
-    kw: dict[str, Any] = {
+    kw: FCHL19Params = {
         "elements": [1, 8],
         "nRs2": 4,
         "nRs3": 3,
@@ -223,8 +236,8 @@ def test_analytic_grad_matches_finite_difference() -> None:
     )
     Z = np.array([6, 1, 1], dtype=np.int32)
 
-    kw: dict[str, Any] = {
-        "elements": np.asarray([1, 6]),
+    kw: FCHL19Params = {
+        "elements": [1, 6],
         "nRs2": 4,
         "nRs3": 3,
         "nFourier": 1,  # keep tiny for speed
@@ -267,7 +280,7 @@ def test_translation_invariance_and_zero_grad_under_uniform_shift() -> None:
     coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
     Z = np.array([1, 1], dtype=np.int32)
 
-    kw: dict[str, Any] = {
+    kw: FCHL19Params = {
         "elements": [1],
         "nRs2": 4,
         "nRs3": 2,
@@ -285,7 +298,7 @@ def test_translation_invariance_and_zero_grad_under_uniform_shift() -> None:
     rep1, grad1 = generate_fchl_acsf_and_gradients(coords, Z, **kw)
 
     shift = np.array([+3.2, -1.1, +0.7])
-    rep2, grad2 = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)
+    rep2, _ = generate_fchl_acsf_and_gradients(coords + shift, Z, **kw)
 
     np.testing.assert_allclose(rep1, rep2, rtol=1e-12, atol=1e-14)
 

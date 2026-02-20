@@ -42,12 +42,11 @@ def load_ethanol_raw_data() -> np.ndarray:
                 with urllib.request.urlopen(req) as response:
                     if response.status != 200:
                         raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
-                    with open(zip_path, "wb") as f:
-                        f.write(response.read())
+                    zip_path.write_bytes(response.read())
 
                 with zipfile.ZipFile(zip_path) as z:
                     z.extractall(tmpdir)
-                extracted = list(Path(tmpdir).glob("*.npz"))[0]
+                extracted = next(iter(Path(tmpdir).glob("*.npz")))
                 extracted.rename(npz_path)
         except Exception as e:
             print(f"  [Error downloading ethanol: {e}]", file=sys.stderr)
@@ -69,8 +68,7 @@ def load_qm7b_raw_data() -> NDArray[Any]:
             with urllib.request.urlopen(req) as response:
                 if response.status != 200:
                     raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
-                with open(npz_path, "wb") as f:
-                    f.write(response.read())
+                npz_path.write_bytes(response.read())
         except Exception as e:
             print(f"  [Error downloading QM7b: {e}]", file=sys.stderr)
             raise
@@ -124,7 +122,7 @@ def prepare_qm7b_fchl19(n_structures: int = 100) -> dict[str, Any]:
     X = np.zeros((len(X_list), max_atoms, rep_dim), dtype=np.float64)
     Q = np.zeros((len(Q_list), max_atoms), dtype=np.int32)
 
-    for i, (x_i, q_i) in enumerate(zip(X_list, Q_list)):
+    for i, (x_i, q_i) in enumerate(zip(X_list, Q_list, strict=True)):
         n_atoms = len(x_i)
         X[i, :n_atoms, :] = x_i
         Q[i, :n_atoms] = q_i
@@ -187,7 +185,7 @@ def benchmark_qm7b_fchl19_gradients() -> tuple[float, str]:
     elements = [1, 6, 7, 8, 16, 17]
 
     start = time.perf_counter()
-    for r, z in zip(R, z_list):
+    for r, z in zip(R, z_list, strict=True):
         _, _ = generate_fchl_acsf_and_gradients(r, z, elements=elements)
     elapsed = (time.perf_counter() - start) * 1000
 
@@ -203,7 +201,7 @@ def benchmark_kernel_symm_ethanol() -> tuple[float, str]:
     sigma = 2.0
 
     start = time.perf_counter()
-    K = flocal_kernel_symm(X, Q, N, sigma)
+    _ = flocal_kernel_symm(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel symmetric (Ethanol, N=100)"
@@ -223,7 +221,7 @@ def benchmark_kernel_asymm_ethanol() -> tuple[float, str]:
     N_train, N_test = N[:n_train], N[n_train:]
 
     start = time.perf_counter()
-    K = flocal_kernel(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
+    _ = flocal_kernel(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel asymmetric (Ethanol, N=20)"
@@ -238,7 +236,7 @@ def benchmark_kernel_symm_qm7b() -> tuple[float, str]:
     sigma = 2.0
 
     start = time.perf_counter()
-    K = flocal_kernel_symm(X, Q, N, sigma)
+    _ = flocal_kernel_symm(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel symmetric (QM7b, N=100)"
@@ -258,7 +256,7 @@ def benchmark_kernel_asymm_qm7b() -> tuple[float, str]:
     N_train, N_test = N[:n_train], N[n_train:]
 
     start = time.perf_counter()
-    K = flocal_kernel(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
+    _ = flocal_kernel(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel asymmetric (QM7b, N=100)"
@@ -275,7 +273,7 @@ def benchmark_kernel_gdml_ethanol() -> tuple[float, str]:
     sigma = 2.5
 
     start = time.perf_counter()
-    K = fgdml_kernel(X, X, dX, dX, Q, Q, N, N, sigma)
+    _ = fgdml_kernel(X, X, dX, dX, Q, Q, N, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "GDML kernel symmetric (Ethanol, N=n)"
@@ -292,7 +290,7 @@ def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
     sigma = 2.5
 
     start = time.perf_counter()
-    K = fgdml_kernel_symm(X, dX, Q, N, sigma)
+    _ = fgdml_kernel_symm(X, dX, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "GDML kernel symmetric (Ethanol, N=n)"

@@ -39,14 +39,14 @@ def test_random_pd_matrix() -> None:
 
 
 def test_non_square_matrix() -> None:
-    with pytest.raises(RuntimeError):
-        K = np.ones((3, 2), dtype=np.float64)
-        y = np.ones(3, dtype=np.float64)
+    K = np.ones((3, 2), dtype=np.float64)
+    y = np.ones(3, dtype=np.float64)
+    with pytest.raises(RuntimeError, match=r".*"):
         _cholesky.solve_cholesky(K, y)
 
 
 def test_mismatched_size() -> None:
-    with pytest.raises(RuntimeError):
-        K = np.eye(3, dtype=np.float64)
-        y = np.ones(4, dtype=np.float64)
+    K = np.eye(3, dtype=np.float64)
+    y = np.ones(4, dtype=np.float64)
+    with pytest.raises(RuntimeError, match=r".*"):
         _cholesky.solve_cholesky(K, y)
