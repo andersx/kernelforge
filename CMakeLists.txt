@@ -53,10 +53,6 @@ endif()
 if(APPLE)
   find_library(ACCELERATE Accelerate REQUIRED)
 else()
-  # Prefer sequential MKL to avoid dual-OpenMP-runtime conflicts.
-  # GCC's -fopenmp links libgomp, while threaded MKL links libiomp5;
-  # mixing both causes undefined behavior in threaded BLAS calls.
-  # With sequential MKL, we still get our own OMP parallelism via libgomp.
   find_package(BLAS REQUIRED)
 endif()
 

@@ -39,11 +39,17 @@ void rff_features_elemental(
 
     // For each element e:
     //   1. Count atoms of element e per molecule, build per-mol start/count
-    //   2. Gather those atoms into Xsort (total_e, rep_size)
-    //   3. Ze = sqrt(2/D) * cos(Xsort @ W[e] + b[e])
-    //   4. Scatter-add Ze rows back into LZ per molecule
+    //   2. Gather those atoms into Xsort (total_e, rep_size) — OMP over molecules
+    //   3. Ze = Xsort @ W[e] + b[e]  via one DGEMM from the main thread
+    //   4. cos + normalization — OMP over total_e * D elements
+    //   5. Scatter-add Ze rows back into LZ per molecule — OMP over molecules
+    //
+    // BLAS (step 3) is called from the main thread only, never inside an OMP
+    // parallel region, so any threaded BLAS backend works without conflict.
+
     for (std::size_t e = 0; e < nelements; ++e) {
 
+        // --- Step 1: count atoms of type e per molecule (cheap, keep serial) ---
         std::vector<std::size_t> mol_start(nmol);
         std::vector<std::size_t> mol_count(nmol);
         std::size_t total_e = 0;
@@ -53,9 +59,7 @@ void rff_features_elemental(
             std::size_t cnt = 0;
             const int natoms_i = sizes[i];
             for (int j = 0; j < natoms_i; ++j) {
-                if (Q[i * max_atoms + j] == static_cast<int>(e)) {
-                    ++cnt;
-                }
+                if (Q[i * max_atoms + j] == static_cast<int>(e)) ++cnt;
             }
             mol_count[i] = cnt;
             total_e += cnt;
@@ -63,24 +67,25 @@ void rff_features_elemental(
 
         if (total_e == 0) continue;
 
-        // Gather: Xsort (total_e, rep_size) row-major
+        // --- Step 2: Gather Xsort (total_e, rep_size) — OMP over molecules ---
         double *Xsort = aligned_alloc_64(total_e * rep_size);
-        std::size_t idx = 0;
 
+        #pragma omp parallel for schedule(dynamic)
         for (std::size_t i = 0; i < nmol; ++i) {
+            if (mol_count[i] == 0) continue;
             const int natoms_i = sizes[i];
+            std::size_t local_idx = mol_start[i];
             for (int j = 0; j < natoms_i; ++j) {
                 if (Q[i * max_atoms + j] == static_cast<int>(e)) {
-                    const double *src = X + (i * max_atoms + j) * rep_size;
-                    double *dst = Xsort + idx * rep_size;
-                    std::memcpy(dst, src, rep_size * sizeof(double));
-                    ++idx;
+                    std::memcpy(Xsort + local_idx * rep_size,
+                                X     + (i * max_atoms + j) * rep_size,
+                                rep_size * sizeof(double));
+                    ++local_idx;
                 }
             }
         }
 
-        // Ze = Xsort @ W[e]:  (total_e, D)
-        // W layout: (nelements, rep_size, D) row-major; W[e] at W + e*rep_size*D
+        // --- Step 3: Ze = Xsort @ W[e]  (main thread, let BLAS use its own threads) ---
         double *Ze = aligned_alloc_64(total_e * D);
         const double *We = W + e * rep_size * D;
         const double *be = b + e * D;
@@ -90,19 +95,21 @@ void rff_features_elemental(
                     static_cast<int>(D),
                     static_cast<int>(rep_size),
                     1.0, Xsort, static_cast<int>(rep_size),
-                    We, static_cast<int>(D),
-                    0.0, Ze, static_cast<int>(D));
+                    We,    static_cast<int>(D),
+                    0.0, Ze,    static_cast<int>(D));
 
         aligned_free_64(Xsort);
 
-        // Apply cos + bias: Ze[i,d] = cos(Ze[i,d] + b[e][d]) * normalization
-        for (std::size_t i = 0; i < total_e; ++i) {
+        // --- Step 4: Ze[row,d] = cos(Ze[row,d] + be[d]) * norm — OMP over rows ---
+        #pragma omp parallel for schedule(static)
+        for (std::size_t row = 0; row < total_e; ++row) {
+            double *ze = Ze + row * D;
             for (std::size_t d = 0; d < D; ++d) {
-                Ze[i * D + d] = std::cos(Ze[i * D + d] + be[d]) * normalization;
+                ze[d] = std::cos(ze[d] + be[d]) * normalization;
             }
         }
 
-        // Scatter-add: for each molecule, sum Ze rows into LZ
+        // --- Step 5: Scatter-add Ze rows into LZ per molecule — OMP over molecules ---
         #pragma omp parallel for schedule(dynamic)
         for (std::size_t i = 0; i < nmol; ++i) {
             if (mol_count[i] == 0) continue;
@@ -147,14 +154,14 @@ void rff_gramian_elemental(
         double *LZ = aligned_alloc_64(this_chunk * D);
 
         rff_features_elemental(
-            X + chunk_start * max_atoms * rep_size,
-            Q + chunk_start * max_atoms,
+            X     + chunk_start * max_atoms * rep_size,
+            Q     + chunk_start * max_atoms,
             sizes + chunk_start,
             W, b,
             this_chunk, max_atoms, rep_size, nelements, D,
             LZ);
 
-        // LZtLZ += LZ^T @ LZ  (upper triangle via DSYRK)
+        // LZtLZ += LZ^T @ LZ  (upper triangle via DSYRK, main thread)
         cblas_dsyrk(CblasRowMajor, CblasUpper, CblasTrans,
                     static_cast<int>(D),
                     static_cast<int>(this_chunk),
@@ -173,6 +180,7 @@ void rff_gramian_elemental(
     }
 
     // Symmetrize: copy upper triangle to lower
+    #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
             LZtLZ[j * D + i] = LZtLZ[i * D + j];
@@ -206,8 +214,8 @@ void rff_gramian_elemental_gradient(
         double *LZ = aligned_alloc_64(nc * D);
 
         rff_features_elemental(
-            X + cs * max_atoms * rep_size,
-            Q + cs * max_atoms,
+            X     + cs * max_atoms * rep_size,
+            Q     + cs * max_atoms,
             sizes + cs,
             W, b,
             nc, max_atoms, rep_size, nelements, D,
@@ -231,33 +239,31 @@ void rff_gramian_elemental_gradient(
     // Precompute cumulative atom offsets for F indexing
     std::vector<std::size_t> cum_atoms(nmol + 1);
     cum_atoms[0] = 0;
-    for (std::size_t i = 0; i < nmol; ++i) {
+    for (std::size_t i = 0; i < nmol; ++i)
         cum_atoms[i + 1] = cum_atoms[i] + static_cast<std::size_t>(sizes[i]);
-    }
 
     for (std::size_t cs = 0; cs < nmol; cs += force_chunk) {
         const std::size_t ce = std::min(cs + force_chunk, nmol);
         const std::size_t nc = ce - cs;
 
         std::size_t ngrads_chunk = 0;
-        for (std::size_t i = cs; i < ce; ++i) {
+        for (std::size_t i = cs; i < ce; ++i)
             ngrads_chunk += 3 * static_cast<std::size_t>(sizes[i]);
-        }
         if (ngrads_chunk == 0) continue;
 
         double *G = aligned_alloc_64(D * ngrads_chunk);
 
         rff_gradient_elemental(
-            X + cs * max_atoms * rep_size,
+            X  + cs * max_atoms * rep_size,
             dX + cs * max_atoms * rep_size * max_atoms * 3,
-            Q + cs * max_atoms,
+            Q  + cs * max_atoms,
             sizes + cs,
             W, b,
             nc, max_atoms, rep_size, nelements, D,
             ngrads_chunk,
             G);
 
-        // LZtLZ += G @ G^T (upper triangle via DSYRK, NoTrans since G is (D, ngrads))
+        // LZtLZ += G @ G^T  (upper triangle, main thread)
         cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),
                     1.0, G, static_cast<int>(ngrads_chunk),
@@ -274,6 +280,7 @@ void rff_gramian_elemental_gradient(
     }
 
     // Symmetrize
+    #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
             LZtLZ[j * D + i] = LZtLZ[i * D + j];
@@ -310,82 +317,89 @@ void rff_gradient_elemental(
         }
     }
 
-    // dZ: (D,) — forward pass scratch for one atom
-    // dg: (D, rep_size) row-major — gradient kernel matrix for one atom
-    std::vector<double> dZ(D);
-    double *dg = aligned_alloc_64(D * rep_size);
+    // Strides for dX (nmol, max_atoms, rep_size, max_atoms, 3) row-major
+    const std::size_t dX_mol_stride  = max_atoms * rep_size * max_atoms * 3;
+    const std::size_t dX_atom_stride = rep_size  * max_atoms * 3;
 
-    for (std::size_t i = 0; i < nmol; ++i) {
-        const int natoms = sizes[i];
-        if (natoms == 0) continue;
+    // Parallelize over molecules. Each thread gets its own scratch buffers
+    // (dZ, dg, dX_atom) to avoid races. BLAS calls (dgemv + dgemm) are made
+    // from within each OMP thread but on per-molecule sub-problems — these are
+    // small enough that single-threaded execution inside the thread is optimal.
+    // Note: this does call BLAS inside an OMP region. On systems where BLAS is
+    // internally threaded (e.g. threaded MKL), set BLAS thread count to 1 via
+    // environment: MKL_NUM_THREADS=1 or OPENBLAS_NUM_THREADS=1.
+    // In CI we set OMP_NUM_THREADS=1 and OPENBLAS_NUM_THREADS=1, so no conflict.
+    #pragma omp parallel
+    {
+        // Per-thread scratch: dZ (D,), dg (D, rep_size), dX_atom allocated per mol
+        std::vector<double> dZ(D);
+        double *dg = aligned_alloc_64(D * rep_size);
 
-        const std::size_t ncols = 3 * static_cast<std::size_t>(natoms);
+        #pragma omp for schedule(dynamic)
+        for (std::size_t i = 0; i < nmol; ++i) {
+            const int natoms = sizes[i];
+            if (natoms == 0) continue;
 
-        // dX_atom (rep_size, 3*natoms): reshaped derivatives for atom j
-        double *dX_atom = aligned_alloc_64(rep_size * ncols);
+            const std::size_t ncols = 3 * static_cast<std::size_t>(natoms);
 
-        // Strides for dX (nmol, max_atoms, rep_size, max_atoms, 3) row-major
-        const std::size_t dX_mol_stride  = max_atoms * rep_size * max_atoms * 3;
-        const std::size_t dX_atom_stride = rep_size  * max_atoms * 3;
+            // dX_atom (rep_size, 3*natoms): gathered derivatives for atom j
+            double *dX_atom = aligned_alloc_64(rep_size * ncols);
 
-        for (int j = 0; j < natoms; ++j) {
-            const int e = Q[i * max_atoms + j];
-            const double *We  = W + static_cast<std::size_t>(e) * rep_size * D;
-            const double *be  = b + static_cast<std::size_t>(e) * D;
-            const double *Xij = X + (i * max_atoms + j) * rep_size;
+            for (int j = 0; j < natoms; ++j) {
+                const int e         = Q[i * max_atoms + j];
+                const double *We    = W + static_cast<std::size_t>(e) * rep_size * D;
+                const double *be    = b + static_cast<std::size_t>(e) * D;
+                const double *Xij   = X + (i * max_atoms + j) * rep_size;
 
-            // dZ = b[e] + X[i,j,:] @ W[e]
-            std::memcpy(dZ.data(), be, D * sizeof(double));
-            cblas_dgemv(CblasRowMajor, CblasTrans,
-                        static_cast<int>(rep_size), static_cast<int>(D),
-                        1.0, We, static_cast<int>(D),
-                        Xij, 1,
-                        1.0, dZ.data(), 1);
+                // dZ = be + Xij @ We^T   (We is rep_size × D, stored row-major)
+                std::memcpy(dZ.data(), be, D * sizeof(double));
+                cblas_dgemv(CblasRowMajor, CblasTrans,
+                            static_cast<int>(rep_size), static_cast<int>(D),
+                            1.0, We, static_cast<int>(D),
+                            Xij, 1,
+                            1.0, dZ.data(), 1);
 
-            // dg[d, r] = sin(dZ[d]) * normalization * We[r, d]
-            for (std::size_t d = 0; d < D; ++d) {
-                const double factor = std::sin(dZ[d]) * normalization;
-                for (std::size_t r = 0; r < rep_size; ++r) {
-                    dg[d * rep_size + r] = factor * We[r * D + d];
-                }
-            }
-
-            // Gather dX_atom[r, k*3+xyz] = dX[i, j, r, k, xyz]
-            for (std::size_t r = 0; r < rep_size; ++r) {
-                for (int k = 0; k < natoms; ++k) {
-                    for (int xyz = 0; xyz < 3; ++xyz) {
-                        const std::size_t src_idx =
-                            i * dX_mol_stride +
-                            static_cast<std::size_t>(j) * dX_atom_stride +
-                            r * (max_atoms * 3) +
-                            static_cast<std::size_t>(k) * 3 +
-                            static_cast<std::size_t>(xyz);
-                        dX_atom[r * ncols +
-                                static_cast<std::size_t>(k) * 3 +
-                                static_cast<std::size_t>(xyz)] = dX[src_idx];
+                // dg[d, r] = sin(dZ[d]) * normalization * We[r, d]
+                for (std::size_t d = 0; d < D; ++d) {
+                    const double factor = std::sin(dZ[d]) * normalization;
+                    for (std::size_t r = 0; r < rep_size; ++r) {
+                        dg[d * rep_size + r] = factor * We[r * D + d];
                     }
                 }
+
+                // Gather dX_atom[r, k*3+xyz] = dX[i, j, r, k, xyz]
+                for (std::size_t r = 0; r < rep_size; ++r) {
+                    for (int k = 0; k < natoms; ++k) {
+                        for (int xyz = 0; xyz < 3; ++xyz) {
+                            dX_atom[r * ncols + static_cast<std::size_t>(k) * 3 + xyz] =
+                                dX[i * dX_mol_stride +
+                                   static_cast<std::size_t>(j) * dX_atom_stride +
+                                   r * (max_atoms * 3) +
+                                   static_cast<std::size_t>(k) * 3 + xyz];
+                        }
+                    }
+                }
+
+                // G[:, g_start[i] : g_start[i]+ncols] += dg @ dX_atom
+                // dg (D, rep_size) @ dX_atom (rep_size, ncols) → (D, ncols)
+                // G is (D, ngrads) row-major; write into column slice starting at g_start[i]
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                            static_cast<int>(D),
+                            static_cast<int>(ncols),
+                            static_cast<int>(rep_size),
+                            -1.0,
+                            dg,      static_cast<int>(rep_size),
+                            dX_atom, static_cast<int>(ncols),
+                            1.0,
+                            G + g_start[i],
+                            static_cast<int>(ngrads));
             }
 
-            // G[:, g_start[i] : g_start[i]+3*natoms] += -1 * dg @ dX_atom
-            // dg (D, rep_size) @ dX_atom (rep_size, 3*natoms) -> (D, 3*natoms)
-            // G is (D, ngrads) row-major, ldc = ngrads
-            cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                        static_cast<int>(D),
-                        static_cast<int>(ncols),
-                        static_cast<int>(rep_size),
-                        -1.0,
-                        dg,      static_cast<int>(rep_size),
-                        dX_atom, static_cast<int>(ncols),
-                        1.0,
-                        G + g_start[i],
-                        static_cast<int>(ngrads));
+            aligned_free_64(dX_atom);
         }
 
-        aligned_free_64(dX_atom);
-    }
-
-    aligned_free_64(dg);
+        aligned_free_64(dg);
+    } // end omp parallel
 }
 
 }  // namespace kf::rff
