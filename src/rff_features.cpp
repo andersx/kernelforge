@@ -3,14 +3,8 @@
 #include <cstddef>
 #include <stdexcept>
 
-// Third-party libraries
-#if defined(__APPLE__)
-    #include <Accelerate/Accelerate.h>
-#else
-    #include <cblas.h>
-#endif
-
 // Project headers
+#include "blas_config.h"
 #include "rff_features.hpp"
 
 namespace kf::rff {

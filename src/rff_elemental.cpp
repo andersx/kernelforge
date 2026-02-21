@@ -8,14 +8,10 @@
 
 // Third-party libraries
 #include <omp.h>
-#if defined(__APPLE__)
-    #include <Accelerate/Accelerate.h>
-#else
-    #include <cblas.h>
-#endif
 
 // Project headers
 #include "aligned_alloc64.hpp"
+#include "blas_config.h"
 #include "rff_elemental.hpp"
 
 namespace kf::rff {

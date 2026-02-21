@@ -7,22 +7,10 @@
 
 // Third-party libraries
 #include <omp.h>
-#if defined(__APPLE__)
-    #ifdef KF_BLAS_ILP64
-        #define ACCELERATE_BLAS_ILP64
-        #define ACCELERATE_LAPACK_ILP64
-    #endif
-    #include <Accelerate/Accelerate.h>
-#else
-    #ifdef KF_BLAS_ILP64
-        #define OPENBLAS_USE64BITINT
-    #endif
-    #include <cblas.h>
-#endif
 
 // Project headers
 #include "aligned_alloc64.hpp"
-#include "blas_int.h"
+#include "blas_config.h"
 #include "constants.hpp"
 
 namespace kf {

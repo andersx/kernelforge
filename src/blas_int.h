@@ -14,6 +14,7 @@
         using blas_int = long;
     #else
         // OpenBLAS ILP64: 'blasint' = BLASLONG = 'long long' (int64_t)
+        // Intel MKL ILP64: 'MKL_INT' = 'long long int' (equivalent to int64_t on x86-64)
         using blas_int = std::int64_t;
     #endif
 #else
