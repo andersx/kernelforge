@@ -57,7 +57,6 @@ else()
   # GCC's -fopenmp links libgomp, while threaded MKL links libiomp5;
   # mixing both causes undefined behavior in threaded BLAS calls.
   # With sequential MKL, we still get our own OMP parallelism via libgomp.
-  set(BLA_VENDOR Intel10_64lp_seq)
   find_package(BLAS REQUIRED)
 endif()
 

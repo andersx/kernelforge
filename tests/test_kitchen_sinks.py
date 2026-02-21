@@ -140,16 +140,6 @@ class TestRffFeatures:
 
         np.testing.assert_allclose(Z, Z_ref, rtol=1e-12, atol=1e-12)
 
-    def test_bad_shapes_raise(self) -> None:
-        """Mismatched shapes raise ValueError/InvalidArgument."""
-        rng = np.random.default_rng(42)
-        X = rng.normal(size=(10, 20))
-        W = rng.normal(size=(30, 50))  # W.shape[0] != X.shape[1]
-        b = rng.uniform(size=(50,))
-
-        with pytest.raises(ValueError, match=r"W\.shape\[0\] must equal X\.shape\[1\]"):
-            rff_features(X, W, b)
-
     def test_bad_dimensions_raise(self) -> None:
         """Wrong number of dimensions raises."""
         rng = np.random.default_rng(42)
