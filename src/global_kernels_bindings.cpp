@@ -7,7 +7,7 @@
 
 // Project headers
 #include "aligned_alloc64.hpp"
-#include "kernels.hpp"
+#include "global_kernels.hpp"
 
 namespace py = pybind11;
 
@@ -40,7 +40,7 @@ py::array_t<double> kernel_symm_py(py::array_t<double, py::array::c_style | py::
                           Kptr, capsule);
 
     // Compute
-    kf::kernel_symm(Xptr, n, rep_size, alpha, Kptr);
+    kf::kernel_gaussian_symm(Xptr, n, rep_size, alpha, Kptr);
 
     return K;
 }
@@ -72,7 +72,7 @@ py::array_t<double> kernel_asymm_py(
     auto X1v = X1.unchecked<2>();
     auto X2v = X2.unchecked<2>();
 
-    kf::kernel_asymm(X1v.data(0, 0), X2v.data(0, 0), n1, n2, d1, alpha, Kptr);
+    kf::kernel_gaussian(X1v.data(0, 0), X2v.data(0, 0), n1, n2, d1, alpha, Kptr);
 
     return K;
 }
@@ -122,7 +122,7 @@ static py::array_t<double> gaussian_jacobian_batch_py(
     auto Kv = K.mutable_unchecked<2>();
     double *Kp = Kv.mutable_data(0, 0);
 
-    kf::gaussian_jacobian_batch(X1p, dX1p, X2p, N1, N2, M, D, sigma, Kp);
+    kf::kernel_gaussian_jacobian(X1p, dX1p, X2p, N1, N2, M, D, sigma, Kp);
     return K;
 }
 
@@ -203,7 +203,7 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_py(
                            static_cast<py::ssize_t>(sizeof(double))},           // col stride
                           Hptr, capsule);
 
-    kf::rbf_hessian_full_tiled_gemm(X1p, dX1p, X2p, dX2p, N1, N2, M, D1, D2, sigma, tile_B, Hptr);
+    kf::kernel_gaussian_hessian(X1p, dX1p, X2p, dX2p, N1, N2, M, D1, D2, sigma, tile_B, Hptr);
     return H;
 }
 
@@ -260,27 +260,27 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_py(
     const double *dXp = dX.unchecked<3>().data(0, 0, 0);
 
     // Call the C++ core
-    kf::rbf_hessian_full_tiled_gemm_sym_fast(Xp, dXp, N, M, D, sigma, tile_B, Hptr);
+    kf::kernel_gaussian_hessian_symm(Xp, dXp, N, M, D, sigma, tile_B, Hptr);
 
     return H;
 }
 
-PYBIND11_MODULE(_kernels, m) {
-    m.doc() = "Symmetric Gaussian kernel via BLAS (row-major), with 64-byte aligned output buffer.";
-    m.def("kernel_symm", &kernel_symm_py, py::arg("X"), py::arg("alpha"),
+PYBIND11_MODULE(global_kernels, m) {
+    m.doc() = "Global (structure-wise) Gaussian kernels via BLAS (row-major), with 64-byte aligned output buffer.";
+    m.def("kernel_gaussian_symm", &kernel_symm_py, py::arg("X"), py::arg("alpha"),
           "Compute K = exp(alpha*(||x_i||^2 + ||x_j||^2 - 2 x_i·x_j)) over the lower triangle.\n"
           "X is (n, rep_size) in row-major; returns K as an (n,n) NumPy array.");
-    m.def("kernel_asymm", &kernel_asymm_py, py::arg("X1"), py::arg("X2"), py::arg("alpha"),
+    m.def("kernel_gaussian", &kernel_asymm_py, py::arg("X1"), py::arg("X2"), py::arg("alpha"),
           "Return K (n2, n1) where K[i2,i1] = exp(alpha*(||x2||^2 + ||x1||^2 - 2 x2·x1)).");
-    m.def("gaussian_jacobian_batch", &gaussian_jacobian_batch_py, py::arg("X1"), py::arg("dX1"),
+    m.def("kernel_gaussian_jacobian", &gaussian_jacobian_batch_py, py::arg("X1"), py::arg("dX1"),
           py::arg("X2"), py::arg("sigma"));
-    m.def("rbf_hessian_full_tiled_gemm", &rbf_hessian_full_tiled_gemm_py, py::arg("X1"),
+    m.def("kernel_gaussian_hessian", &rbf_hessian_full_tiled_gemm_py, py::arg("X1"),
           py::arg("dX1"), py::arg("X2"), py::arg("dX2"), py::arg("sigma"),
           py::arg("tile_B") = py::none(),
-          "Compute the full mixed Hessian with DGEMM tiling.\n"
+          "Compute the full Gaussian Hessian/GDML kernel with DGEMM tiling.\n"
           "Shapes: X1(N1,M), dX1(N1,M,D1), X2(N2,M), dX2(N2,M,D2) -> H((N1*D1),(N2*D2)).\n"
           "tile_B: refs per tile (0 = auto).");
-    m.def("rbf_hessian_full_tiled_gemm_sym", &rbf_hessian_full_tiled_gemm_sym_py, py::arg("X"),
+    m.def("kernel_gaussian_hessian_symm", &rbf_hessian_full_tiled_gemm_sym_py, py::arg("X"),
           py::arg("dX"), py::arg("sigma"), py::arg("tile_B") = py::none(),
-          "Compute symmetric RBF Hessian kernel (training version).");
+          "Compute symmetric Gaussian Hessian/GDML kernel (training version).");
 }

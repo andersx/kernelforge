@@ -1,6 +1,9 @@
 #pragma once
 #include <cstddef>
 
+namespace kf {
+namespace math {
+
 void solve_cholesky(double *K, const double *y, int n, double *alpha, const double regularize);
 
 // void solve_cholesky_rfp_L(double* K_arf, const double* y, int n, double* alpha, double
@@ -15,3 +18,6 @@ int full_to_rfp(char transr, char uplo, int n, const double *A_colmaj, int lda, 
 
 // RFP (length n*(n+1)/2) -> Full (column-major A with lda >= n). Returns LAPACK info.
 int rfp_to_full(char transr, char uplo, int n, const double *ARF, double *A_colmaj, int lda);
+
+}  // namespace math
+}  // namespace kf

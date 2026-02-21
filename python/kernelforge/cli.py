@@ -11,13 +11,12 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from kernelforge._fchl19 import (
-    fgdml_kernel,
-    fgdml_kernel_symm,
-    flocal_kernel,
-    flocal_kernel_symm,
-    generate_fchl_acsf,
-    generate_fchl_acsf_and_gradients,
+from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
+from kernelforge.local_kernels import (
+    kernel_gaussian,
+    kernel_gaussian_hessian,
+    kernel_gaussian_hessian_symm,
+    kernel_gaussian_symm,
 )
 
 PROGRAM_NAME = "KernelForge Benchmarks"
@@ -201,7 +200,7 @@ def benchmark_kernel_symm_ethanol() -> tuple[float, str]:
     sigma = 2.0
 
     start = time.perf_counter()
-    _ = flocal_kernel_symm(X, Q, N, sigma)
+    _ = kernel_gaussian_symm(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel symmetric (Ethanol, N=100)"
@@ -221,7 +220,7 @@ def benchmark_kernel_asymm_ethanol() -> tuple[float, str]:
     N_train, N_test = N[:n_train], N[n_train:]
 
     start = time.perf_counter()
-    _ = flocal_kernel(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
+    _ = kernel_gaussian(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel asymmetric (Ethanol, N=20)"
@@ -236,7 +235,7 @@ def benchmark_kernel_symm_qm7b() -> tuple[float, str]:
     sigma = 2.0
 
     start = time.perf_counter()
-    _ = flocal_kernel_symm(X, Q, N, sigma)
+    _ = kernel_gaussian_symm(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel symmetric (QM7b, N=100)"
@@ -256,7 +255,7 @@ def benchmark_kernel_asymm_qm7b() -> tuple[float, str]:
     N_train, N_test = N[:n_train], N[n_train:]
 
     start = time.perf_counter()
-    _ = flocal_kernel(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
+    _ = kernel_gaussian(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "Local kernel asymmetric (QM7b, N=100)"
@@ -273,7 +272,7 @@ def benchmark_kernel_gdml_ethanol() -> tuple[float, str]:
     sigma = 2.5
 
     start = time.perf_counter()
-    _ = fgdml_kernel(X, X, dX, dX, Q, Q, N, N, sigma)
+    _ = kernel_gaussian_hessian(X, X, dX, dX, Q, Q, N, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "GDML kernel symmetric (Ethanol, N=n)"
@@ -290,7 +289,7 @@ def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
     sigma = 2.5
 
     start = time.perf_counter()
-    _ = fgdml_kernel_symm(X, dX, Q, N, sigma)
+    _ = kernel_gaussian_hessian_symm(X, dX, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, "GDML kernel symmetric (Ethanol, N=n)"

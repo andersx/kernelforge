@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -10,17 +9,8 @@
 #include <omp.h>
 #if defined(__APPLE__)
     #include <Accelerate/Accelerate.h>
-    #define LAPACK_CHAR_ARG char
 #else
     #include <cblas.h>
-    #define LAPACK_CHAR_ARG const char
-// Fortran LAPACK declarations
-extern "C" {
-void dpotrf_(LAPACK_CHAR_ARG *uplo, const int *n, double *a, const int *lda, int *info);
-
-void dpotrs_(LAPACK_CHAR_ARG *uplo, const int *n, const int *nrhs, const double *a, const int *lda,
-             double *b, const int *ldb, int *info);
-}
 #endif
 
 // Project headers
@@ -28,7 +18,7 @@ void dpotrs_(LAPACK_CHAR_ARG *uplo, const int *n, const int *nrhs, const double 
 
 namespace kf {
 
-void kernel_symm(const double *Xptr, int n, int rep_size, double alpha, double *Kptr) {
+void kernel_gaussian_symm(const double *Xptr, int n, int rep_size, double alpha, double *Kptr) {
     // 1) DSYRK (RowMajor, lower triangle): K = (-2*alpha) * X * X^T + 0*K
     cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, n, rep_size, -2.0 * alpha, Xptr, rep_size,
                 0.0, Kptr, n);
@@ -63,8 +53,8 @@ static inline void rowwise_self_norms(const double *X, std::size_t n, std::size_
     }
 }
 
-void kernel_asymm(const double *X1, const double *X2, std::size_t n1, std::size_t n2, std::size_t d,
-                  double alpha, double *K) {
+void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::size_t n2, std::size_t d,
+                     double alpha, double *K) {
     // 1) K = (-2*alpha) * X1 * X2^T
     // RowMajor: A=X1 (n1 x d), B=X2 (n2 x d) but we pass Trans(B) => (d x n2)
     // lda = d, ldb = d, ldc = n1
@@ -102,7 +92,7 @@ void kernel_asymm(const double *X1, const double *X2, std::size_t n1, std::size_
     }
 }
 
-void gaussian_jacobian_batch(const double *X1, const double *dX1, const double *X2, std::size_t N1,
+void kernel_gaussian_jacobian(const double *X1, const double *dX1, const double *X2, std::size_t N1,
                              std::size_t N2, std::size_t M, std::size_t D, double sigma,
                              double *K_out) {
     if (!X1 || !dX1 || !X2 || !K_out)
@@ -161,7 +151,7 @@ static inline void row_axpy(std::size_t n, double alpha, const double *x, double
 // If using MKL and you want local control of threads around level-1/2 ops:
 // #include <mkl.h>
 
-void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__restrict dX1,
+void kernel_gaussian_hessian(const double *__restrict X1, const double *__restrict dX1,
                                  const double *__restrict X2, const double *__restrict dX2,
                                  std::size_t N1, std::size_t N2, std::size_t M, std::size_t D1,
                                  std::size_t D2, double sigma,
@@ -343,7 +333,7 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
 // X: (N, M) row-major          – descriptor vectors
 // dX: (N, M, D) row-major      – Jacobians wrt descriptor coords (M x D) per sample
 // Output H_out: (N*D, N*D) row-major, symmetric
-void rbf_hessian_full_tiled_gemm_sym_fast(
+void kernel_gaussian_hessian_symm(
     // Symmetric (training) RBF Hessian, Gaussian kernel.
     // Assumes: X2==X1 (same set), dX2==dX1, N1==N2, D1==D2.
     // Builds only the lower triangle and mirrors to upper.

@@ -7,7 +7,7 @@
 
 // Project headers
 #include "aligned_alloc64.hpp"
-#include "cholesky.hpp"
+#include "math.hpp"
 
 namespace py = pybind11;
 
@@ -30,7 +30,7 @@ py::array_t<double> solve_cholesky_py(
     double *alpha_ptr = aligned_alloc_64(n);
 
     // Compute directly into the aligned buffer
-    solve_cholesky(K, y, n, alpha_ptr, regularize);
+    kf::math::solve_cholesky(K, y, n, alpha_ptr, regularize);
 
     auto free_capsule =
         py::capsule(alpha_ptr, [](void *p) { aligned_free_64(static_cast<double *>(p)); });
@@ -61,7 +61,7 @@ static py::array_t<double> solve_cholesky_rfp_py(
     if (!alpha_ptr)
         throw std::bad_alloc();
 
-    solve_cholesky_rfp(K_arf, y, n, alpha_ptr, regularize, uplo, transr);
+    kf::math::solve_cholesky_rfp(K_arf, y, n, alpha_ptr, regularize, uplo, transr);
 
     auto cap = py::capsule(alpha_ptr, [](void *p) { aligned_free_64(p); });
     return py::array_t<double>({(py::ssize_t)n}, {(py::ssize_t)sizeof(double)}, alpha_ptr, cap);
@@ -101,7 +101,7 @@ py::array_t<double> full_to_rfp_py(
 
     // Treat Arow as column-major A^T; swap UPLO so the intended triangle is used
     const int lda = n;
-    const int info = full_to_rfp(transr, swap_uplo(uplo), n, Arow, lda, ARF);
+    const int info = kf::math::full_to_rfp(transr, swap_uplo(uplo), n, Arow, lda, ARF);
     if (info != 0) {
         aligned_free_64(ARF);
         throw std::runtime_error("dtrttf_ failed, info=" + std::to_string(info));
@@ -140,7 +140,7 @@ py::array_t<double> rfp_to_full_py(
 
     // Fortran writes treating A as column-major; swap UPLO to compensate
     const int lda = n;
-    const int info = rfp_to_full(transr, swap_uplo(uplo), n, ARF, A, lda);
+    const int info = kf::math::rfp_to_full(transr, swap_uplo(uplo), n, ARF, A, lda);
     if (info != 0) {
         aligned_free_64(A);
         throw std::runtime_error("dtfttr_ failed, info=" + std::to_string(info));
@@ -155,8 +155,8 @@ py::array_t<double> rfp_to_full_py(
         /* base    */ cap);
 }
 
-PYBIND11_MODULE(_cholesky, m) {
-    m.doc() = "Cholesky solvers";
+PYBIND11_MODULE(kernelmath, m) {
+    m.doc() = "Mathematical utilities (Cholesky solvers, etc.)";
     m.def("solve_cholesky", &solve_cholesky_py, py::arg("K"), py::arg("y"),
           py::arg("regularize") = 0.0,
           "Solve Kx=y using Cholesky factorization.\n"

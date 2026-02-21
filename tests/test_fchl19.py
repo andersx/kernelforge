@@ -3,8 +3,8 @@ from typing import Any, TypedDict
 import numpy as np
 from numpy.typing import NDArray
 
-from kernelforge import _fchl19 as _fchl
-from kernelforge._fchl19 import generate_fchl_acsf, generate_fchl_acsf_and_gradients
+from kernelforge import fchl19_repr as _fchl
+from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 
 
 class FCHL19Params(TypedDict, total=False):

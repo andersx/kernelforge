@@ -68,21 +68,21 @@ set(_KF_ALL_OBJLIBS "")
 # Create a C++ object library + pybind11 module pair:
 #   kf_add_cpp_module(<base> <obj_src> <binding_src>)
 #   -> object lib: kf_<base>
-#   -> module target: _<base>
+#   -> module target: <base> (no underscore prefix)
 function(kf_add_cpp_module base obj_src bind_src)
   set(obj kf_${base})
   add_library(${obj} OBJECT ${obj_src})
   target_link_libraries(${obj} PRIVATE kf_common)
   target_link_libraries(${obj} PRIVATE OpenMP::OpenMP_CXX) # <-- compile flags propagate
 
-  pybind11_add_module(_${base} MODULE
+  pybind11_add_module(${base} MODULE
     ${bind_src}
     $<TARGET_OBJECTS:${obj}>
   )
-  set_target_properties(_${base} PROPERTIES OUTPUT_NAME "_${base}")
-  target_link_libraries(_${base} PRIVATE OpenMP::OpenMP_CXX) # <-- link flags
+  set_target_properties(${base} PROPERTIES OUTPUT_NAME "${base}")
+  target_link_libraries(${base} PRIVATE OpenMP::OpenMP_CXX) # <-- link flags
 
-  list(APPEND _KF_ALL_MODULES _${base})
+  list(APPEND _KF_ALL_MODULES ${base})
   list(APPEND _KF_ALL_OBJLIBS ${obj})
   set(_KF_ALL_MODULES "${_KF_ALL_MODULES}" PARENT_SCOPE)
   set(_KF_ALL_OBJLIBS "${_KF_ALL_OBJLIBS}" PARENT_SCOPE)
@@ -106,10 +106,12 @@ function(kf_apply_cxx_flags tgt)
 endfunction()
 
 # ---- C++ modules -------------------------------------------------------------
-kf_add_cpp_module(kernels  src/kernels.cpp                src/bindings_kernels.cpp)
-kf_add_cpp_module(invdist  src/invdist.cpp                src/invdist_bindings.cpp)
-kf_add_cpp_module(fchl19   src/fchl19_representation.cpp  src/bindings_fchl19.cpp)
-kf_add_cpp_module(cholesky src/cholesky.cpp               src/bindings_cholesky.cpp)
+kf_add_cpp_module(global_kernels  src/global_kernels.cpp  src/global_kernels_bindings.cpp)
+# FCHL19 is split into two modules: repr and local_kernels
+kf_add_cpp_module(local_kernels   src/local_kernels.cpp   src/local_kernels_bindings.cpp)
+kf_add_cpp_module(fchl19_repr     src/fchl19_repr.cpp     src/fchl19_repr_bindings.cpp)
+kf_add_cpp_module(invdist_repr    src/invdist_repr.cpp    src/invdist_repr_bindings.cpp)
+kf_add_cpp_module(kernelmath      src/math.cpp            src/math_bindings.cpp)
 
 # Apply C++ flags to the object libs (not to the module targets)
 foreach(obj ${_KF_ALL_OBJLIBS})
@@ -118,10 +120,11 @@ endforeach()
 
 # ---- OpenMP (C++) ------------------------------------------------------------
 if (OpenMP_CXX_FOUND)
-  target_link_libraries(_cholesky PRIVATE OpenMP::OpenMP_CXX)
-  target_link_libraries(_kernels PRIVATE OpenMP::OpenMP_CXX)
-  target_link_libraries(_fchl19 PRIVATE OpenMP::OpenMP_CXX)
-  target_link_libraries(_invdist PRIVATE OpenMP::OpenMP_CXX)
+  target_link_libraries(kernelmath PRIVATE OpenMP::OpenMP_CXX)
+  target_link_libraries(global_kernels PRIVATE OpenMP::OpenMP_CXX)
+  target_link_libraries(local_kernels PRIVATE OpenMP::OpenMP_CXX)
+  target_link_libraries(fchl19_repr PRIVATE OpenMP::OpenMP_CXX)
+  target_link_libraries(invdist_repr PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
 # ---- BLAS/LAPACK backend selection (link all modules) -----------------------
@@ -136,7 +139,7 @@ foreach(m ${_KF_ALL_MODULES})
 endforeach()
 
 # ---- Install ----------------------------------------------------------------
-install(TARGETS _kernels _invdist _fchl19 _cholesky
+install(TARGETS global_kernels local_kernels fchl19_repr invdist_repr kernelmath
   LIBRARY DESTINATION kernelforge   # Linux/macOS
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )

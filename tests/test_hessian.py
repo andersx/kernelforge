@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from kernelforge import _kernels  # the module name from the pybind shim
+from kernelforge import global_kernels as _kernels
 
 
 def ref_block(
@@ -74,7 +74,7 @@ def test_shapes_and_values(N1: int, N2: int, M: int, D1: int, D2: int) -> None:
     dX2 = rng.normal(size=(N2, M, D2))
     sigma = 0.7
 
-    H = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, sigma)
+    H = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma)
     assert H.shape == (N1 * D1, N2 * D2)
     assert np.isfinite(H).all()
 
@@ -94,9 +94,9 @@ def test_various_tile_sizes(tile_B: int) -> None:
 
     # Call with explicit tile size (or None)
     if tile_B == 0:
-        H = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, sigma, None)
+        H = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma, None)
     else:
-        H = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, sigma, tile_B)
+        H = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma, tile_B)
 
     H_ref = assemble_ref_full(X1, dX1, X2, dX2, sigma)
     np.testing.assert_allclose(H, H_ref, rtol=1e-12, atol=1e-12)
@@ -110,9 +110,9 @@ def test_bad_sigma_raises() -> None:
     dX2 = rng.normal(size=(1, 3, 2))
 
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, 0.0)
+        _ = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, 0.0)
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2, -1.0)
+        _ = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, -1.0)
 
 
 def test_shape_mismatch_raises() -> None:
@@ -124,16 +124,16 @@ def test_shape_mismatch_raises() -> None:
 
     # X2 second dim must match X1 second dim
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2[:, :3], dX2, 0.8)
+        _ = _kernels.kernel_gaussian_hessian(X1, dX1, X2[:, :3], dX2, 0.8)
 
     # dX1 first/second dims must match X1
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.rbf_hessian_full_tiled_gemm(X1[1:], dX1, X2, dX2, 0.8)
+        _ = _kernels.kernel_gaussian_hessian(X1[1:], dX1, X2, dX2, 0.8)
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1[:, :-1, :], X2, dX2, 0.8)
+        _ = _kernels.kernel_gaussian_hessian(X1, dX1[:, :-1, :], X2, dX2, 0.8)
 
     # dX2 first/second dims must match X2
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2[:-1], 0.8)
+        _ = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2[:-1], 0.8)
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.rbf_hessian_full_tiled_gemm(X1, dX1, X2, dX2[:, :-1, :], 0.8)
+        _ = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2[:, :-1, :], 0.8)

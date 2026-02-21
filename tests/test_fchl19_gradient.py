@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-import kernelforge._fchl19 as fchl
+import kernelforge.local_kernels as fchl
 
 
 def slow_ref_grad(
@@ -95,7 +95,7 @@ def test_fatomic_local_gradient_kernel_matches_reference(seed: int) -> None:
     n2 = rng.integers(1, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
 
     # compute with binding
-    K = fchl.fatomic_local_gradient_kernel(x1, x2, dX2, q1, q2, n1, n2, sigma)
+    K = fchl.kernel_gaussian_jacobian(x1, x2, dX2, q1, q2, n1, n2, sigma)
     assert K.shape[0] == nm1
 
     # reference
@@ -123,7 +123,7 @@ def test_no_matches_yields_zero_matrix() -> None:
     n1 = np.full((nm1,), max_atoms1, dtype=np.int32)
     n2 = np.full((nm2,), max_atoms2, dtype=np.int32)
 
-    K = fchl.fatomic_local_gradient_kernel(x1, x2, dX2, q1, q2, n1, n2, sigma)
+    K = fchl.kernel_gaussian_jacobian(x1, x2, dX2, q1, q2, n1, n2, sigma)
     assert K.shape == (nm1, 3 * nm2 * max_atoms2)
     assert np.allclose(K, 0.0)
 
@@ -145,7 +145,7 @@ def test_empty_derivatives_returns_nm1_by_0() -> None:
     n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,)).astype(np.int32)
     n2 = np.zeros((nm2,), dtype=np.int32)
 
-    K = fchl.fatomic_local_gradient_kernel(x1, x2, dX2, q1, q2, n1, n2, sigma)
+    K = fchl.kernel_gaussian_jacobian(x1, x2, dX2, q1, q2, n1, n2, sigma)
     assert K.shape == (nm1, 0)
     assert K.size == 0
 
@@ -167,4 +167,4 @@ def test_shape_errors_raise_valueerror() -> None:
     n2 = rng.integers(0, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
 
     with pytest.raises(ValueError, match=r".*"):
-        _ = fchl.fatomic_local_gradient_kernel(x1, x2, dX2_bad, q1, q2, n1, n2, sigma)
+        _ = fchl.kernel_gaussian_jacobian(x1, x2, dX2_bad, q1, q2, n1, n2, sigma)
