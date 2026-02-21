@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+
 from kernelforge.kitchen_sinks import (
     rff_features,
     rff_features_elemental,
