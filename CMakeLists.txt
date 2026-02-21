@@ -53,6 +53,11 @@ endif()
 if(APPLE)
   find_library(ACCELERATE Accelerate REQUIRED)
 else()
+  # Prefer sequential MKL to avoid dual-OpenMP-runtime conflicts.
+  # GCC's -fopenmp links libgomp, while threaded MKL links libiomp5;
+  # mixing both causes undefined behavior in threaded BLAS calls.
+  # With sequential MKL, we still get our own OMP parallelism via libgomp.
+  set(BLA_VENDOR Intel10_64lp_seq)
   find_package(BLAS REQUIRED)
 endif()
 
@@ -113,6 +118,20 @@ kf_add_cpp_module(fchl19_repr     src/fchl19_repr.cpp     src/fchl19_repr_bindin
 kf_add_cpp_module(invdist_repr    src/invdist_repr.cpp    src/invdist_repr_bindings.cpp)
 kf_add_cpp_module(kernelmath      src/math.cpp            src/math_bindings.cpp)
 
+# Kitchen sinks (Random Fourier Features) — split across two obj/binding sources;
+# handled manually so we can pass multiple files without extending the macro.
+add_library(kf_kitchen_sinks OBJECT
+  src/rff_features.cpp
+  src/rff_elemental.cpp)
+target_link_libraries(kf_kitchen_sinks PRIVATE kf_common OpenMP::OpenMP_CXX)
+kf_apply_cxx_flags(kf_kitchen_sinks)
+
+pybind11_add_module(kitchen_sinks MODULE
+  src/rff_features_bindings.cpp
+  src/rff_elemental_bindings.cpp
+  $<TARGET_OBJECTS:kf_kitchen_sinks>)
+set_target_properties(kitchen_sinks PROPERTIES OUTPUT_NAME "kitchen_sinks")
+
 # Apply C++ flags to the object libs (not to the module targets)
 foreach(obj ${_KF_ALL_OBJLIBS})
   kf_apply_cxx_flags(${obj})
@@ -125,10 +144,13 @@ if (OpenMP_CXX_FOUND)
   target_link_libraries(local_kernels PRIVATE OpenMP::OpenMP_CXX)
   target_link_libraries(fchl19_repr PRIVATE OpenMP::OpenMP_CXX)
   target_link_libraries(invdist_repr PRIVATE OpenMP::OpenMP_CXX)
+  # kitchen_sinks already links OpenMP via kf_kitchen_sinks object lib above
+  target_link_libraries(kitchen_sinks PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
 # ---- BLAS/LAPACK backend selection (link all modules) -----------------------
-foreach(m ${_KF_ALL_MODULES})
+# kitchen_sinks is managed manually (not in _KF_ALL_MODULES), so append it here.
+foreach(m ${_KF_ALL_MODULES} kitchen_sinks)
   if(APPLE)
     target_link_libraries(${m} PRIVATE ${ACCELERATE})
   elseif(WIN32)
@@ -139,7 +161,7 @@ foreach(m ${_KF_ALL_MODULES})
 endforeach()
 
 # ---- Install ----------------------------------------------------------------
-install(TARGETS global_kernels local_kernels fchl19_repr invdist_repr kernelmath
+install(TARGETS global_kernels local_kernels fchl19_repr invdist_repr kernelmath kitchen_sinks
   LIBRARY DESTINATION kernelforge   # Linux/macOS
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )

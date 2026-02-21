@@ -12,6 +12,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
+from kernelforge.kitchen_sinks import (
+    rff_features,
+    rff_features_elemental,
+    rff_gradient_elemental,
+    rff_gramian_elemental,
+    rff_gramian_elemental_gradient,
+)
 from kernelforge.local_kernels import (
     kernel_gaussian,
     kernel_gaussian_hessian,
@@ -295,6 +302,120 @@ def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
     return elapsed, "GDML kernel symmetric (Ethanol, N=n)"
 
 
+def benchmark_rff_features() -> tuple[float, str]:
+    """Benchmark rff_features on synthetic data (N=1000, rep_size=200, D=4000)."""
+    rng = np.random.default_rng(42)
+    N, rep_size, D = 1000, 200, 4000
+    X = rng.standard_normal((N, rep_size))
+    W = rng.standard_normal((rep_size, D))
+    b = rng.uniform(0.0, 2.0 * np.pi, D)
+
+    start = time.perf_counter()
+    _ = rff_features(X, W, b)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"rff_features (N={N}, rep_size={rep_size}, D={D})"
+
+
+def _make_qm7b_elemental_inputs(n_mols: int, D: int, rng: np.random.Generator) -> dict[str, Any]:
+    """Prepare inputs for elemental RFF benchmarks from QM7b-like data.
+
+    Atomic numbers in the QM7b data are remapped to 0-based element indices
+    matching the W/b stack order (elements = [1, 6, 7, 8, 16, 17]).
+    """
+    elements = [1, 6, 7, 8, 16, 17]
+    anum_to_idx = {anum: idx for idx, anum in enumerate(elements)}
+    nelements = len(elements)
+
+    data = prepare_qm7b_fchl19(n_mols)
+    X = data["X"]
+    N = data["N"]
+    Q_padded = data["Q"]
+    n_mols_actual, max_atoms, rep_size = X.shape
+
+    # Build ragged Q with 0-based element indices (no padding entries)
+    Q = [
+        np.array([anum_to_idx[a] for a in Q_padded[i, : N[i]]], dtype=np.int32)
+        for i in range(n_mols_actual)
+    ]
+
+    W = rng.standard_normal((nelements, rep_size, D))
+    b = rng.uniform(0.0, 2.0 * np.pi, (nelements, D))
+
+    return {"X": X, "N": N, "Q": Q, "W": W, "b": b, "max_atoms": max_atoms}
+
+
+def benchmark_rff_features_elemental() -> tuple[float, str]:
+    """Benchmark rff_features_elemental on synthetic QM7b-like data (N=100 molecules)."""
+    rng = np.random.default_rng(42)
+    D = 2000
+    inputs = _make_qm7b_elemental_inputs(100, D, rng)
+    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
+
+    start = time.perf_counter()
+    _ = rff_features_elemental(X, Q, W, b)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"rff_features_elemental (N=100, D={D}, QM7b-like)"
+
+
+def benchmark_rff_gradient_elemental() -> tuple[float, str]:
+    """Benchmark rff_gradient_elemental on synthetic QM7b-like data (N=10 molecules)."""
+    rng = np.random.default_rng(42)
+    D = 500
+    n_mols = 10
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
+    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
+    n_mols_actual, max_atoms, rep_size = X.shape
+    # dX shape: (nmol, max_atoms, rep_size, max_atoms, 3)
+    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
+
+    start = time.perf_counter()
+    _ = rff_gradient_elemental(X, dX, Q, W, b)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"rff_gradient_elemental (N={n_mols}, D={D}, QM7b-like)"
+
+
+def benchmark_rff_gramian_elemental() -> tuple[float, str]:
+    """Benchmark rff_gramian_elemental on synthetic QM7b-like data (N=100 molecules)."""
+    rng = np.random.default_rng(42)
+    D = 2000
+    n_mols = 100
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
+    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
+    n_mols_actual = X.shape[0]
+    Y = rng.standard_normal(n_mols_actual)
+
+    start = time.perf_counter()
+    _ = rff_gramian_elemental(X, Q, W, b, Y)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"rff_gramian_elemental (N={n_mols}, D={D}, QM7b-like)"
+
+
+def benchmark_rff_gramian_elemental_gradient() -> tuple[float, str]:
+    """Benchmark rff_gramian_elemental_gradient on synthetic QM7b-like data (N=10)."""
+    rng = np.random.default_rng(42)
+    D = 500
+    n_mols = 10
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
+    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
+    n_mols_actual, max_atoms, rep_size = X.shape
+    # dX shape: (nmol, max_atoms, rep_size, max_atoms, 3)
+    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
+    Y = rng.standard_normal(n_mols_actual)
+    # F is 1D, shape (ngrads,) where ngrads = 3 * sum(natoms per mol)
+    ngrads = 3 * sum(len(q) for q in Q)
+    F = rng.standard_normal(ngrads)
+
+    start = time.perf_counter()
+    _ = rff_gramian_elemental_gradient(X, dX, Q, W, b, Y, F)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"rff_gramian_elemental_gradient (N={n_mols}, D={D}, QM7b-like)"
+
+
 BENCHMARKS = {
     "ethanol_fchl19_repr": benchmark_ethanol_fchl19_representations,
     "ethanol_fchl19_grad": benchmark_ethanol_fchl19_gradients,
@@ -306,6 +427,11 @@ BENCHMARKS = {
     "kernel_asymm_qm7b": benchmark_kernel_asymm_qm7b,
     "kernel_gdml_ethanol": benchmark_kernel_gdml_ethanol,
     "kernel_gdml_symm_ethanol": benchmark_kernel_gdml_symm_ethanol,
+    "rff_features": benchmark_rff_features,
+    "rff_features_elemental": benchmark_rff_features_elemental,
+    "rff_gradient_elemental": benchmark_rff_gradient_elemental,
+    "rff_gramian_elemental": benchmark_rff_gramian_elemental,
+    "rff_gramian_elemental_gradient": benchmark_rff_gramian_elemental_gradient,
 }
 
 # Named benchmark suites
@@ -327,6 +453,13 @@ SUITES = {
     "gdml-kernels": [
         "kernel_gdml_ethanol",
         "kernel_gdml_symm_ethanol",
+    ],
+    "kitchen-sinks": [
+        "rff_features",
+        "rff_features_elemental",
+        "rff_gradient_elemental",
+        "rff_gramian_elemental",
+        "rff_gramian_elemental_gradient",
     ],
 }
 
