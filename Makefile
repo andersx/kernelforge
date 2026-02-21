@@ -1,8 +1,15 @@
 install-linux:
 	CMAKE_ARGS="-DKF_USE_NATIVE=ON" uv pip install -e .[test] --verbose
 
+install-linux-ilp64:
+	@echo "Note: Requires libopenblas64-dev (apt install libopenblas64-dev libopenblas64-pthread-dev)"
+	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_ILP64=ON" uv pip install -e .[test] --verbose
+
 install-macos:
 	CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DKF_USE_NATIVE=ON " uv pip install -e .[test] --verbose
+
+install-macos-ilp64:
+	CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DKF_USE_NATIVE=ON -DKF_BLAS_ILP64=ON" uv pip install -e .[test] --verbose
 
 test:
 	uv run pytest

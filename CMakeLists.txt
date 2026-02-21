@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ILP64 BLAS/LAPACK support (64-bit integers)
+option(KF_BLAS_ILP64 "Use 64-bit integers for BLAS/LAPACK (ILP64)" OFF)
+
 # Platform tweaks
 if(APPLE)
 
@@ -46,6 +49,20 @@ if (OpenMP_CXX_FOUND)
   else()
     add_compile_options(${OpenMP_CXX_FLAGS})
     add_link_options(${OpenMP_CXX_FLAGS})
+  endif()
+endif()
+
+# ILP64 configuration (must be done before finding BLAS/LAPACK)
+if(KF_BLAS_ILP64)
+  add_compile_definitions(KF_BLAS_ILP64)
+  if(APPLE)
+    # Apple Accelerate ILP64: requires ACCELERATE_BLAS_ILP64 and ACCELERATE_LAPACK_ILP64
+    add_compile_definitions(ACCELERATE_BLAS_ILP64)
+    add_compile_definitions(ACCELERATE_LAPACK_ILP64)
+  else()
+    # Linux/OpenBLAS ILP64: requires BLA_SIZEOF_INTEGER=8 and OPENBLAS_USE64BITINT
+    set(BLA_SIZEOF_INTEGER 8)
+    add_compile_definitions(OPENBLAS_USE64BITINT)
   endif()
 endif()
 

@@ -7,6 +7,7 @@
 
 // Project headers
 #include "aligned_alloc64.hpp"
+#include "blas_int.h"
 #include "math.hpp"
 
 namespace py = pybind11;
@@ -22,12 +23,13 @@ py::array_t<double> solve_cholesky_py(
     if (ybuf.ndim != 1 || ybuf.shape[0] != Kbuf.shape[0])
         throw std::runtime_error("y must have length n.");
 
-    const int n = static_cast<int>(Kbuf.shape[0]);
+    const blas_int n = static_cast<blas_int>(Kbuf.shape[0]);
     auto *K = static_cast<double *>(Kbuf.ptr);
     const auto *y = static_cast<const double *>(ybuf.ptr);
 
     // 64-byte aligned buffer that NumPy will own
-    double *alpha_ptr = aligned_alloc_64(n);
+    const std::size_t n_size = static_cast<std::size_t>(n);
+    double *alpha_ptr = aligned_alloc_64(n_size);
 
     // Compute directly into the aligned buffer
     kf::math::solve_cholesky(K, y, n, alpha_ptr, regularize);
@@ -49,15 +51,16 @@ static py::array_t<double> solve_cholesky_rfp_py(
 
     if (Kbuf.ndim != 1 || ybuf.ndim != 1)
         throw std::runtime_error("K_arf must be 1D RFP and y must be 1D");
-    const int n = (int)ybuf.shape[0];
-    const std::size_t need = (std::size_t)n * (n + 1ull) / 2ull;
-    if ((std::size_t)Kbuf.shape[0] != need)
+    const blas_int n = static_cast<blas_int>(ybuf.shape[0]);
+    const std::size_t n_size = static_cast<std::size_t>(n);
+    const std::size_t need = n_size * (n_size + 1) / 2;
+    if (static_cast<std::size_t>(Kbuf.shape[0]) != need)
         throw std::runtime_error("K_arf length must be n*(n+1)/2");
 
     auto *K_arf = static_cast<double *>(Kbuf.ptr);
     const auto *y = static_cast<const double *>(ybuf.ptr);
 
-    double *alpha_ptr = aligned_alloc_64((std::size_t)n);
+    double *alpha_ptr = aligned_alloc_64(n_size);
     if (!alpha_ptr)
         throw std::bad_alloc();
 
@@ -90,18 +93,19 @@ py::array_t<double> full_to_rfp_py(
     uplo = norm_uplo(uplo);
     transr = norm_tr(transr);
 
-    const int n = static_cast<int>(Abuf.shape[0]);
+    const blas_int n = static_cast<blas_int>(Abuf.shape[0]);
     const double *Arow = static_cast<const double *>(Abuf.ptr);
 
     // Output RFP buffer
-    const size_t nt = (size_t)n * (n + 1ull) / 2ull;
+    const std::size_t n_size = static_cast<std::size_t>(n);
+    const std::size_t nt = n_size * (n_size + 1) / 2;
     double *ARF = aligned_alloc_64(nt);
     if (!ARF)
         throw std::bad_alloc();
 
     // Treat Arow as column-major A^T; swap UPLO so the intended triangle is used
-    const int lda = n;
-    const int info = kf::math::full_to_rfp(transr, swap_uplo(uplo), n, Arow, lda, ARF);
+    const blas_int lda = n;
+    const blas_int info = kf::math::full_to_rfp(transr, swap_uplo(uplo), n, Arow, lda, ARF);
     if (info != 0) {
         aligned_free_64(ARF);
         throw std::runtime_error("dtrttf_ failed, info=" + std::to_string(info));
@@ -116,15 +120,16 @@ py::array_t<double> full_to_rfp_py(
 // then **expose the same buffer as C-order**. Because the matrix is symmetric,
 // the transpose view is identical, and swapping UPLO ensures the expected triangle is filled.
 py::array_t<double> rfp_to_full_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> ARF_in, int n, char uplo = 'L',
-    char transr = 'N') {
+    py::array_t<double, py::array::c_style | py::array::forcecast> ARF_in, blas_int n,
+    char uplo = 'L', char transr = 'N') {
     if (n <= 0)
         throw std::runtime_error("n must be > 0");
     py::buffer_info Rbuf = ARF_in.request();
     if (Rbuf.ndim != 1)
         throw std::runtime_error("ARF must be a 1-D array.");
-    const size_t need = (size_t)n * (n + 1ull) / 2ull;
-    if ((size_t)Rbuf.shape[0] != need)
+    const std::size_t n_size = static_cast<std::size_t>(n);
+    const std::size_t need = n_size * (n_size + 1) / 2;
+    if (static_cast<std::size_t>(Rbuf.shape[0]) != need)
         throw std::runtime_error("ARF length must be n*(n+1)/2.");
 
     uplo = norm_uplo(uplo);
@@ -133,14 +138,14 @@ py::array_t<double> rfp_to_full_py(
     const double *ARF = static_cast<const double *>(Rbuf.ptr);
 
     // Allocate full matrix buffer once; we will *return it as C-order*
-    const size_t nn = (size_t)n * (size_t)n;
+    const std::size_t nn = n_size * n_size;
     double *A = aligned_alloc_64(nn);
     if (!A)
         throw std::bad_alloc();
 
     // Fortran writes treating A as column-major; swap UPLO to compensate
-    const int lda = n;
-    const int info = kf::math::rfp_to_full(transr, swap_uplo(uplo), n, ARF, A, lda);
+    const blas_int lda = n;
+    const blas_int info = kf::math::rfp_to_full(transr, swap_uplo(uplo), n, ARF, A, lda);
     if (info != 0) {
         aligned_free_64(A);
         throw std::runtime_error("dtfttr_ failed, info=" + std::to_string(info));
