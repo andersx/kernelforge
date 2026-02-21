@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -10,25 +9,17 @@
 #include <omp.h>
 #if defined(__APPLE__)
     #include <Accelerate/Accelerate.h>
-    #define LAPACK_CHAR_ARG char
 #else
     #include <cblas.h>
-    #define LAPACK_CHAR_ARG const char
-// Fortran LAPACK declarations
-extern "C" {
-void dpotrf_(LAPACK_CHAR_ARG *uplo, const int *n, double *a, const int *lda, int *info);
-
-void dpotrs_(LAPACK_CHAR_ARG *uplo, const int *n, const int *nrhs, const double *a, const int *lda,
-             double *b, const int *ldb, int *info);
-}
 #endif
 
 // Project headers
+#include "aligned_alloc64.hpp"
 #include "constants.hpp"
 
 namespace kf {
 
-void kernel_symm(const double *Xptr, int n, int rep_size, double alpha, double *Kptr) {
+void kernel_gaussian_symm(const double *Xptr, int n, int rep_size, double alpha, double *Kptr) {
     // 1) DSYRK (RowMajor, lower triangle): K = (-2*alpha) * X * X^T + 0*K
     cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, n, rep_size, -2.0 * alpha, Xptr, rep_size,
                 0.0, Kptr, n);
@@ -63,8 +54,8 @@ static inline void rowwise_self_norms(const double *X, std::size_t n, std::size_
     }
 }
 
-void kernel_asymm(const double *X1, const double *X2, std::size_t n1, std::size_t n2, std::size_t d,
-                  double alpha, double *K) {
+void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::size_t n2, std::size_t d,
+                     double alpha, double *K) {
     // 1) K = (-2*alpha) * X1 * X2^T
     // RowMajor: A=X1 (n1 x d), B=X2 (n2 x d) but we pass Trans(B) => (d x n2)
     // lda = d, ldb = d, ldc = n1
@@ -102,7 +93,7 @@ void kernel_asymm(const double *X1, const double *X2, std::size_t n1, std::size_
     }
 }
 
-void gaussian_jacobian_batch(const double *X1, const double *dX1, const double *X2, std::size_t N1,
+void kernel_gaussian_jacobian(const double *X1, const double *dX1, const double *X2, std::size_t N1,
                              std::size_t N2, std::size_t M, std::size_t D, double sigma,
                              double *K_out) {
     if (!X1 || !dX1 || !X2 || !K_out)
@@ -115,7 +106,7 @@ void gaussian_jacobian_batch(const double *X1, const double *dX1, const double *
     const double inv_s2 = 1.0 / (sigma * sigma);
 
     // scratch for W_a: (M x N2) row-major, and a column diff
-    std::vector<double> W(static_cast<size_t>(M) * N2);
+    double *W = aligned_alloc_64(static_cast<size_t>(M) * N2);
     std::vector<double> diff(M);
 
     for (std::size_t a = 0; a < N1; ++a) {
@@ -150,8 +141,10 @@ void gaussian_jacobian_batch(const double *X1, const double *dX1, const double *
         // ldc=N2
         cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, static_cast<int>(D),
                     static_cast<int>(N2), static_cast<int>(M), 1.0, J1a, static_cast<int>(D),
-                    W.data(), static_cast<int>(N2), 0.0, Kblock, static_cast<int>(N2));
+                    W, static_cast<int>(N2), 0.0, Kblock, static_cast<int>(N2));
     }
+
+    aligned_free_64(W);
 }
 
 static inline void row_axpy(std::size_t n, double alpha, const double *x, double *y) {
@@ -161,7 +154,7 @@ static inline void row_axpy(std::size_t n, double alpha, const double *x, double
 // If using MKL and you want local control of threads around level-1/2 ops:
 // #include <mkl.h>
 
-void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__restrict dX1,
+void kernel_gaussian_hessian(const double *__restrict X1, const double *__restrict dX1,
                                  const double *__restrict X2, const double *__restrict dX2,
                                  std::size_t N1, std::size_t N2, std::size_t M, std::size_t D1,
                                  std::size_t D2, double sigma,
@@ -204,12 +197,13 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
     }
 
     // S = X1 @ X2^T  (N1 x N2)  ← let BLAS thread this
-    std::vector<double> S(N1 * N2);
+    double *S = aligned_alloc_64(N1 * N2);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)N1, (int)N2, (int)M, 1.0, X1, (int)M,
-                X2, (int)M, 0.0, S.data(), (int)N2);
+                X2, (int)M, 0.0, S, (int)N2);
 
     // C, C4
-    std::vector<double> C(N1 * N2), C4(N1 * N2);
+    double *C = aligned_alloc_64(N1 * N2);
+    double *C4 = aligned_alloc_64(N1 * N2);
 #pragma omp parallel for collapse(2) schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
         for (std::size_t b = 0; b < N2; ++b) {
@@ -221,12 +215,12 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
     }
 
     // 2) Pack J1_hat (N1*D1 x M),  J2_all_cat (M x N2*D2)
-    std::vector<double> J1_hat(big_rows * M);
+    double *J1_hat = aligned_alloc_64(big_rows * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
         const double *__restrict J1 = dX1 + (a * M) * D1;  // (M x D1)
         for (std::size_t dj = 0; dj < D1; ++dj) {
-            double *__restrict row = J1_hat.data() + (a * D1 + dj) * M;
+            double *__restrict row = J1_hat + (a * D1 + dj) * M;
 // transpose column dj of (M x D1) → row of length M
 #pragma omp simd
             for (std::size_t i = 0; i < M; ++i)
@@ -234,13 +228,13 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
         }
     }
 
-    std::vector<double> J2_all_cat(M * big_cols);
+    double *J2_all_cat = aligned_alloc_64(M * big_cols);
 // Parallelize outer over b to keep writes mostly contiguous per thread
 #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
         const double *__restrict J2 = dX2 + (b * M) * D2;  // (M x D2)
         for (std::size_t i = 0; i < M; ++i) {
-            std::memcpy(J2_all_cat.data() + i * big_cols + b * D2, J2 + i * D2,
+            std::memcpy(J2_all_cat + i * big_cols + b * D2, J2 + i * D2,
                         D2 * sizeof(double));
         }
     }
@@ -250,16 +244,16 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
 
     // 3) Base Gram for ALL blocks once: H_out = J1_hat @ J2_all_cat  (threaded BLAS)
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, (int)big_rows, (int)big_cols, (int)M,
-                1.0, J1_hat.data(), lda_J1, J2_all_cat.data(), ldb_J2cat, 0.0, H_out, ldc_H);
+                1.0, J1_hat, lda_J1, J2_all_cat, ldb_J2cat, 0.0, H_out, ldc_H);
 
     // 4) Projection tables: V1X2_all and V2X1_all  (threaded BLAS)
-    std::vector<double> V1X2_all(big_rows * N2);
+    double *V1X2_all = aligned_alloc_64(big_rows * N2);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)big_rows, (int)N2, (int)M, 1.0,
-                J1_hat.data(), (int)M, X2, (int)M, 0.0, V1X2_all.data(), (int)N2);
+                J1_hat, (int)M, X2, (int)M, 0.0, V1X2_all, (int)N2);
 
-    std::vector<double> V2X1_all(big_cols * N1);
+    double *V2X1_all = aligned_alloc_64(big_cols * N1);
     cblas_dgemm(CblasRowMajor, CblasTrans, CblasTrans, (int)big_cols, (int)N1, (int)M, 1.0,
-                J2_all_cat.data(), (int)big_cols, X1, (int)M, 0.0, V2X1_all.data(), (int)N1);
+                J2_all_cat, (int)big_cols, X1, (int)M, 0.0, V2X1_all, (int)N1);
 
     // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b  (parallelize outer loops)
     std::vector<double> U1(N1 * D1), U2(N2 * D2);
@@ -296,7 +290,7 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
         for (std::size_t a = 0; a < N1; ++a) {
             const double *__restrict U1a = U1.data() + a * D1;
             const double *__restrict V1X2a =
-                V1X2_all.data() + (a * D1) * N2;  // (D1 x N2), row-major
+                V1X2_all + (a * D1) * N2;  // (D1 x N2), row-major
 
             for (std::size_t b0 = 0; b0 < N2; b0 += tile_B) {
                 const std::size_t bend = std::min(N2, b0 + tile_B);
@@ -321,7 +315,7 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
                     // v2 = V2X1_all[bD2:(b+1)D2, a] - U2[b]
                     const double *__restrict U2b = U2.data() + b * D2;
                     const double *__restrict V2X1col =
-                        V2X1_all.data() + (b * D2) * N1 + a;  // column 'a' in row-major
+                        V2X1_all + (b * D2) * N1 + a;  // column 'a' in row-major
 #pragma omp simd
                     for (std::size_t j = 0; j < D2; ++j) {
                         v2[j] = V2X1col[j * N1] - U2b[j];
@@ -337,13 +331,22 @@ void rbf_hessian_full_tiled_gemm(const double *__restrict X1, const double *__re
     }
 
     // mkl_set_num_threads_local(saved);
+
+    // Free aligned allocations
+    aligned_free_64(V2X1_all);
+    aligned_free_64(V1X2_all);
+    aligned_free_64(J2_all_cat);
+    aligned_free_64(J1_hat);
+    aligned_free_64(C4);
+    aligned_free_64(C);
+    aligned_free_64(S);
 }
 
 // Symmetric (training) RBF Hessian kernel, Gaussian.
 // X: (N, M) row-major          – descriptor vectors
 // dX: (N, M, D) row-major      – Jacobians wrt descriptor coords (M x D) per sample
 // Output H_out: (N*D, N*D) row-major, symmetric
-void rbf_hessian_full_tiled_gemm_sym_fast(
+void kernel_gaussian_hessian_symm(
     // Symmetric (training) RBF Hessian, Gaussian kernel.
     // Assumes: X2==X1 (same set), dX2==dX1, N1==N2, D1==D2.
     // Builds only the lower triangle and mirrors to upper.
@@ -380,9 +383,10 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
     }
 
     // S = X1 @ X1^T (lower) via DSYRK, then mirror to upper for convenient reads
-    std::vector<double> S(N * N, 0.0);
+    double *S = aligned_alloc_64(N * N);
+    std::memset(S, 0, N * N * sizeof(double));
     cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, (int)N, (int)M, 1.0, X1, (int)M, 0.0,
-                S.data(), (int)N);
+                S, (int)N);
 #pragma omp parallel for
     for (std::size_t i = 0; i < N; ++i) {
         for (std::size_t j = i + 1; j < N; ++j) {
@@ -390,7 +394,8 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
         }
     }
 
-    std::vector<double> C(N * N), C4(N * N);
+    double *C = aligned_alloc_64(N * N);
+    double *C4 = aligned_alloc_64(N * N);
 #pragma omp parallel for collapse(2) schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
         for (std::size_t b = 0; b < N; ++b) {
@@ -402,12 +407,12 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
     }
 
     // 2) Pack J_hat (N*D x M) from dX1 (N,M,D): row i=(a*D+dj) is column dj of (M x D)
-    std::vector<double> J_hat(BIG * M);
+    double *J_hat = aligned_alloc_64(BIG * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
         const double *__restrict J = dX1 + (a * M) * D;  // (M x D)
         for (std::size_t dj = 0; dj < D; ++dj) {
-            double *__restrict row = J_hat.data() + (a * D + dj) * M;
+            double *__restrict row = J_hat + (a * D + dj) * M;
 #pragma omp simd
             for (std::size_t i = 0; i < M; ++i)
                 row[i] = J[i * D + dj];
@@ -415,13 +420,13 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
     }
 
     // 3) Base Gram only lower: H_out := J_hat @ J_hat^T  via DSYRK (lower)
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, (int)BIG, (int)M, 1.0, J_hat.data(),
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, (int)BIG, (int)M, 1.0, J_hat,
                 (int)M, 0.0, H_out, (int)BIG);
 
     // 4) Projection table V = J_hat @ X1^T  (BIG x N)
-    std::vector<double> V(BIG * N);
+    double *V = aligned_alloc_64(BIG * N);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)BIG, (int)N, (int)M, 1.0,
-                J_hat.data(), (int)M, X1, (int)M, 0.0, V.data(), (int)N);
+                J_hat, (int)M, X1, (int)M, 0.0, V, (int)N);
 
     // 5) Self projections: U[a] = J_a^T x_a  (N x D)
     std::vector<double> U(N * D);
@@ -444,7 +449,7 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
 #pragma omp for schedule(static)
         for (std::size_t a = 0; a < N; ++a) {
             const double *__restrict Ua = U.data() + a * D;
-            const double *__restrict Va = V.data() + (a * D) * N;  // (D x N), row-major
+            const double *__restrict Va = V + (a * D) * N;  // (D x N), row-major
 
             for (std::size_t b0 = 0; b0 < a + 1; b0 += tile_B) {
                 const std::size_t bend = std::min<std::size_t>(a + 1, b0 + tile_B);
@@ -469,7 +474,7 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
 
                     // v2 = V[bD:(b+1)D, a] - U[b]
                     const double *__restrict Ub = U.data() + b * D;
-                    const double *__restrict Vb = V.data() + (b * D) * N;
+                    const double *__restrict Vb = V + (b * D) * N;
 #pragma omp simd
                     for (std::size_t j = 0; j < D; ++j) {
                         v2[j] = Vb[j * N + a] - Ub[j];
@@ -490,6 +495,13 @@ void rbf_hessian_full_tiled_gemm_sym_fast(
     //         H_out[j*BIG + i] = src[j];
     //     }
     // }
+
+    // Free aligned allocations
+    aligned_free_64(V);
+    aligned_free_64(J_hat);
+    aligned_free_64(C4);
+    aligned_free_64(C);
+    aligned_free_64(S);
 }
 
 }  // namespace kf

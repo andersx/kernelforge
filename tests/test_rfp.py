@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from kernelforge import _cholesky
+from kernelforge import kernelmath
 
 
 def _sym_from_triangle(A: NDArray[np.float64], uplo: Literal["U", "L"]) -> NDArray[np.float64]:
@@ -33,13 +33,13 @@ def test_roundtrip_symmetric(
     assert A.flags["C_CONTIGUOUS"]
 
     # full -> rfp
-    arf = _cholesky.full_to_rfp(A, uplo=uplo, transr=transr)
+    arf = kernelmath.full_to_rfp(A, uplo=uplo, transr=transr)
     assert arf.ndim == 1
     assert arf.shape[0] == n * (n + 1) // 2
     assert arf.flags["C_CONTIGUOUS"]  # 1D contiguous
 
     # rfp -> full (C-order, no copy)
-    B = _cholesky.rfp_to_full(arf, n=n, uplo=uplo, transr=transr)
+    B = kernelmath.rfp_to_full(arf, n=n, uplo=uplo, transr=transr)
     assert B.shape == (n, n)
     assert B.flags["C_CONTIGUOUS"]
 
@@ -69,8 +69,8 @@ def test_nonsymmetric_triangle_semantics(
     A = np.ascontiguousarray(A)
     assert A.flags["C_CONTIGUOUS"]
 
-    arf = _cholesky.full_to_rfp(A, uplo=uplo, transr=transr)
-    B = _cholesky.rfp_to_full(arf, n=n, uplo=uplo, transr=transr)
+    arf = kernelmath.full_to_rfp(A, uplo=uplo, transr=transr)
+    B = kernelmath.rfp_to_full(arf, n=n, uplo=uplo, transr=transr)
 
     if uplo == "U":
         np.testing.assert_allclose(np.triu(B), np.triu(A), rtol=1e-13, atol=1e-13)
@@ -89,21 +89,21 @@ def test_bad_length_raises() -> None:
     bad = np.zeros(good.size + 1, dtype=np.float64)
 
     # Good length works
-    _ = _cholesky.rfp_to_full(good, n, uplo="U", transr="N")
+    _ = kernelmath.rfp_to_full(good, n, uplo="U", transr="N")
 
     # Bad length should raise
     with pytest.raises((RuntimeError, ValueError, AssertionError)):
-        _ = _cholesky.rfp_to_full(bad, n, uplo="U", transr="N")
+        _ = kernelmath.rfp_to_full(bad, n, uplo="U", transr="N")
 
 
 def test_c_contiguity_and_dtype() -> None:
     n = 6
     A = np.arange(n * n, dtype=np.float64).reshape(n, n)  # C-order by default
-    arf = _cholesky.full_to_rfp(A, uplo="U", transr="N")
+    arf = kernelmath.full_to_rfp(A, uplo="U", transr="N")
     assert arf.dtype == np.float64
     assert arf.flags["C_CONTIGUOUS"]
 
-    B = _cholesky.rfp_to_full(arf, n, uplo="U", transr="N")
+    B = kernelmath.rfp_to_full(arf, n, uplo="U", transr="N")
     assert B.dtype == np.float64
     assert B.flags["C_CONTIGUOUS"]
 

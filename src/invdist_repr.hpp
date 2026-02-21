@@ -2,6 +2,7 @@
 #pragma once
 #include <cstddef>  // size_t
 
+namespace kf {
 namespace invdist {
 
 // Number of i<j pairs for N atoms
@@ -27,3 +28,4 @@ void inverse_distance_upper_and_jacobian(const double *R_flat, std::size_t N, do
                                          double *J);
 
 }  // namespace invdist
+}  // namespace kf

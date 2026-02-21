@@ -1,8 +1,10 @@
 // C++ standard library
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 #include <vector>
+
+namespace kf {
+namespace math {
 
 // Declare Fortran LAPACK symbols (all vendors provide these)
 extern "C" {
@@ -180,3 +182,6 @@ int rfp_to_full(char transr, char uplo, int n, const double *ARF, double *A_colm
     }
     return 0;
 }
+
+}  // namespace math
+}  // namespace kf

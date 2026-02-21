@@ -16,7 +16,6 @@ constexpr std::size_t DEFAULT_TILE_SIZE = 64;
 constexpr double EPS = 1e-12;
 
 // Mathematical constants
-constexpr double PI = 3.141592653589793238462643383279502884;
 constexpr double SQRT_2PI = 2.5066282746310005;  // sqrt(2*pi)
 
 }  // namespace kf

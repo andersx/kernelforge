@@ -3,7 +3,7 @@ import pytest
 
 # adjust import to however you expose the module;
 # below assumes you installed as kernelforge.invdist per your CMake
-from kernelforge import _invdist as invdist
+from kernelforge import invdist_repr as invdist
 
 
 def _strict_upper_pairs(N: int) -> list[tuple[int, int]]:
