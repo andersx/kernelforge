@@ -74,7 +74,7 @@ static py::array_t<double> py_rff_features_elemental(
     if (static_cast<std::size_t>(b_arr.shape(0)) != nelements)
         throw std::invalid_argument("b.shape[0] must equal W.shape[0] (nelements)");
     if (Q_list.size() != nmol)
-        throw std::invalid_argument("len(Q) must equal nmol");
+        throw std::invalid_argument("len(Q) must equal X.shape[0]");
 
     std::vector<int> Q_flat, sizes;
     unpack_Q(Q_list, nmol, max_atoms, Q_flat, sizes);
@@ -123,7 +123,7 @@ static py::tuple py_rff_gramian_elemental(
     if (static_cast<std::size_t>(Y_arr.shape(0)) != nmol)
         throw std::invalid_argument("Y.shape[0] must equal nmol");
     if (Q_list.size() != nmol)
-        throw std::invalid_argument("len(Q) must equal nmol");
+        throw std::invalid_argument("len(Q) must equal X.shape[0]");
 
     std::vector<int> Q_flat, sizes;
     unpack_Q(Q_list, nmol, max_atoms, Q_flat, sizes);
@@ -189,7 +189,7 @@ static py::tuple py_rff_gramian_elemental_gradient(
     if (static_cast<std::size_t>(Y_arr.shape(0)) != nmol)
         throw std::invalid_argument("Y.shape[0] must equal nmol");
     if (Q_list.size() != nmol)
-        throw std::invalid_argument("len(Q) must equal nmol");
+        throw std::invalid_argument("len(Q) must equal X.shape[0]");
 
     std::vector<int> Q_flat, sizes;
     const std::size_t total_atoms =
@@ -261,7 +261,7 @@ static py::array_t<double> py_rff_gradient_elemental(
         throw std::invalid_argument(
             "dX shape must be (nmol, max_atoms, rep_size, max_atoms, 3)");
     if (Q_list.size() != nmol)
-        throw std::invalid_argument("len(Q) must equal nmol");
+        throw std::invalid_argument("len(Q) must equal X.shape[0]");
 
     std::vector<int> Q_flat, sizes;
     const std::size_t total_atoms =
