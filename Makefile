@@ -1,7 +1,7 @@
 all: .venv
 
 install-linux:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DBLA_VENDOR=OpenBLAS" uv pip install -e .[test] --verbose
+	CMAKE_ARGS="-DKF_USE_NATIVE=ON" uv pip install -e .[test] --verbose
 
 install-macos:
 	CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DKF_USE_NATIVE=ON " uv pip install -e .[test] --verbose
