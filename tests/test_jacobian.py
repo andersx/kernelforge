@@ -5,7 +5,7 @@ import pytest
 from numpy.typing import NDArray
 
 # adjust import if your module name/path differs
-from kernelforge import _kernels
+from kernelforge import global_kernels as _kernels
 
 
 def _strict_upper_pairs(N: int) -> list[tuple[int, int]]:
@@ -25,7 +25,7 @@ def test_shapes_and_basic_values() -> None:
     X2 = rng.normal(size=(N2, M))
     sigma = 0.7
 
-    K = _kernels.gaussian_jacobian_batch(X1, dX1, X2, sigma)
+    K = _kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
     assert K.shape == (N1 * D, N2)
 
     # Check that columns are not all zeros and depend on inputs
@@ -47,7 +47,7 @@ def test_formula_matches_numpy_reference() -> None:
     sigma = 0.5
     inv_s2 = 1.0 / (sigma * sigma)
 
-    K = _kernels.gaussian_jacobian_batch(X1, dX1, X2, sigma)
+    K = _kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
 
     # NumPy reference implementation
     # For each pair (a,b): compute weight vector w_ab then project via Jacobian transpose
@@ -83,7 +83,7 @@ def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N:
     sigma = 0.8
     inv_s2 = 1.0 / (sigma * sigma)
 
-    K = _kernels.gaussian_jacobian_batch(X1, dX1, X2, sigma)
+    K = _kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
 
     # Test a few random (a,b) pairs and a few coordinates
     pairs_to_test = [(a % N1, b % N2) for a, b in [(0, 0), (0, 1), (N1 - 1, N2 - 1)]]
@@ -137,10 +137,10 @@ def test_bad_sigma_raises() -> None:
     X2 = rng.normal(size=(N2, M))
 
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, 0.0)
+        _ = _kernels.kernel_gaussian_jacobian(X1, dX1, X2, 0.0)
 
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2, -1.0)
+        _ = _kernels.kernel_gaussian_jacobian(X1, dX1, X2, -1.0)
 
 
 def test_input_shape_mismatch_errors() -> None:
@@ -154,12 +154,12 @@ def test_input_shape_mismatch_errors() -> None:
 
     # X2 second dim must equal M
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.gaussian_jacobian_batch(X1, dX1, X2_bad, 0.9)
+        _ = _kernels.kernel_gaussian_jacobian(X1, dX1, X2_bad, 0.9)
 
     # dX1 M dimension must match X1 M
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.gaussian_jacobian_batch(X1, dX1[:, :-1, :], X2_ok, 0.9)
+        _ = _kernels.kernel_gaussian_jacobian(X1, dX1[:, :-1, :], X2_ok, 0.9)
 
     # dX1 N1 dimension must match X1 N1
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.gaussian_jacobian_batch(X1[:-1], dX1, X2_ok, 0.9)
+        _ = _kernels.kernel_gaussian_jacobian(X1[:-1], dX1, X2_ok, 0.9)

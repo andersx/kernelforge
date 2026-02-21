@@ -2,14 +2,14 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from kernelforge import _kernels  # adjust if your module is just `import _kernels`
+from kernelforge import global_kernels as _kernels
 
 
 def test_kernel_symm_shape_and_symmetry() -> None:
     rng = np.random.default_rng(0)
     n, d = 4, 2
     X = rng.normal(size=(n, d))
-    K = _kernels.kernel_symm(X, alpha=-0.5)
+    K = _kernels.kernel_gaussian_symm(X, alpha=-0.5)
 
     assert K.shape == (n, n)
 
@@ -23,7 +23,7 @@ def test_kernel_symm_against_numpy() -> None:
     X = rng.normal(size=(n, d))
     alpha = -0.3
 
-    K = _kernels.kernel_symm(X, alpha)
+    K = _kernels.kernel_gaussian_symm(X, alpha)
 
     # Reference computation in pure numpy
     sq_norms = np.sum(X**2, axis=1)
@@ -40,7 +40,7 @@ def test_kernel_symm_against_numpy() -> None:
 def test_small_input() -> None:
     X = np.array([[0.0], [1.0]])
     alpha = -1.0
-    K = _kernels.kernel_symm(X, alpha)
+    K = _kernels.kernel_gaussian_symm(X, alpha)
     # Distance^2 = 1, so K[0,1] = K[1,0] = exp(-1)
     assert np.allclose(K[1, 0], np.exp(-1.0))
     assert K[0, 0] == pytest.approx(1.0)
@@ -70,7 +70,7 @@ def test_kernel_asymm_shape_and_values() -> None:
     X2 = rng.normal(size=(n2, d))
     alpha = -0.5
 
-    K = _kernels.kernel_asymm(X1, X2, alpha)
+    K = _kernels.kernel_gaussian(X1, X2, alpha)
     assert K.shape == (n1, n2)
 
     Kref = _ref_kernel_asymm(X1, X2, alpha)
@@ -83,7 +83,7 @@ def test_kernel_asymm_small_case() -> None:
     X2 = np.array([[0.0], [2.0]])  # n2=2, d=1
     alpha = -1.0
 
-    K = _kernels.kernel_asymm(X1, X2, alpha)
+    K = _kernels.kernel_gaussian(X1, X2, alpha)
     # distances^2:
     # X2[0]=0 vs X1[0]=0 -> 0, exp(0)=1
     # X2[0]=0 vs X1[1]=1 -> 1, exp(-1)

@@ -1,9 +1,10 @@
-// invdist.cpp
-#include "invdist.hpp"
+// invdist_repr.cpp
+#include "invdist_repr.hpp"
 
 #include <algorithm>
 #include <cmath>
 
+namespace kf {
 namespace invdist {
 
 std::size_t num_pairs(std::size_t N) noexcept {
@@ -90,3 +91,4 @@ void inverse_distance_upper_and_jacobian(const double *R_flat, std::size_t N, do
 }
 
 }  // namespace invdist
+}  // namespace kf

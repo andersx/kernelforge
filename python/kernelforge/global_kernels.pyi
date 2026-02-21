@@ -1,17 +1,17 @@
 import numpy as np
 from numpy.typing import NDArray
 
-def kernel_symm(X: NDArray[np.float64], alpha: float) -> NDArray[np.float64]: ...
-def kernel_asymm(
+def kernel_gaussian_symm(X: NDArray[np.float64], alpha: float) -> NDArray[np.float64]: ...
+def kernel_gaussian(
     X1: NDArray[np.float64], X2: NDArray[np.float64], alpha: float
 ) -> NDArray[np.float64]: ...
-def gaussian_jacobian_batch(
+def kernel_gaussian_jacobian(
     X1: NDArray[np.float64],
     dX1: NDArray[np.float64],
     X2: NDArray[np.float64],
     sigma: float,
 ) -> NDArray[np.float64]: ...
-def rbf_hessian_full_tiled_gemm(
+def kernel_gaussian_hessian(
     X1: NDArray[np.float64],
     dX1: NDArray[np.float64],
     X2: NDArray[np.float64],
@@ -19,7 +19,7 @@ def rbf_hessian_full_tiled_gemm(
     sigma: float,
     tile_B: int | None = None,
 ) -> NDArray[np.float64]: ...
-def rbf_hessian_full_tiled_gemm_sym(
+def kernel_gaussian_hessian_symm(
     X: NDArray[np.float64],
     dX: NDArray[np.float64],
     sigma: float,
