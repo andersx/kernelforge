@@ -12,18 +12,18 @@ import numpy as np
 from numpy.typing import NDArray
 
 from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
-from kernelforge.local_kernels import (
-    kernel_gaussian,
-    kernel_gaussian_hessian,
-    kernel_gaussian_hessian_symm,
-    kernel_gaussian_symm,
-)
 from kernelforge.kitchen_sinks import (
     rff_features,
     rff_features_elemental,
     rff_gradient_elemental,
     rff_gramian_elemental,
     rff_gramian_elemental_gradient,
+)
+from kernelforge.local_kernels import (
+    kernel_gaussian,
+    kernel_gaussian_hessian,
+    kernel_gaussian_hessian_symm,
+    kernel_gaussian_symm,
 )
 
 PROGRAM_NAME = "KernelForge Benchmarks"

@@ -2,13 +2,12 @@
 
 import numpy as np
 import pytest
-
 from kernelforge.kitchen_sinks import (
     rff_features,
     rff_features_elemental,
+    rff_gradient_elemental,
     rff_gramian_elemental,
     rff_gramian_elemental_gradient,
-    rff_gradient_elemental,
 )
 
 
@@ -89,11 +88,11 @@ class TestRffFeatures:
         Z = rff_features(X, W, b)
         bound = np.sqrt(2.0 / D)
 
-        assert np.all(Z >= -bound - 1e-15)
-        assert np.all(Z <= bound + 1e-15)
+        assert np.all(-bound - 1e-15 <= Z)
+        assert np.all(bound + 1e-15 >= Z)
 
     @pytest.mark.parametrize(
-        "N,rep_size,D",
+        ("N", "rep_size", "D"),
         [
             (1, 1, 1),
             (1, 100, 500),
@@ -148,7 +147,7 @@ class TestRffFeatures:
         W = rng.normal(size=(30, 50))  # W.shape[0] != X.shape[1]
         b = rng.uniform(size=(50,))
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match=r"W\.shape\[0\] must equal X\.shape\[1\]"):
             rff_features(X, W, b)
 
     def test_bad_dimensions_raise(self) -> None:
@@ -158,7 +157,7 @@ class TestRffFeatures:
         W = rng.normal(size=(10, 20))
         b = rng.uniform(size=(20,))
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="X must be 2D"):
             rff_features(X, W, b)
 
 
@@ -222,7 +221,7 @@ class TestRffFeaturesElemental:
         rep_size: int,
         D: int,
         nelements: int,
-    ):
+    ) -> tuple:
         """Helper to create random test data."""
         sizes = rng.integers(min_atoms, max_atoms_per_mol + 1, size=nmol)
         max_atoms = int(sizes.max())
@@ -385,7 +384,7 @@ class TestRffFeaturesElemental:
         W = rng.normal(size=(2, 20, 30))
         b = rng.uniform(size=(2, 30))
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="X must be 3D"):
             rff_features_elemental(X, Q, W, b)
 
     def test_bad_Q_length_raises(self) -> None:
@@ -396,7 +395,7 @@ class TestRffFeaturesElemental:
         W = rng.normal(size=(2, 10, 20))
         b = rng.uniform(size=(2, 20))
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match=r"len\(Q\) must equal X\.shape\[0\]"):
             rff_features_elemental(X, Q, W, b)
 
 
@@ -414,7 +413,7 @@ class TestRffGradientElemental:
         rep_size: int,
         D: int,
         nelements: int,
-    ):
+    ) -> tuple:
         """Create test data with analytically simple dX.
 
         For testing, all molecules have the same number of atoms to keep
@@ -467,16 +466,11 @@ class TestRffGradientElemental:
                 # Forward: z = X[i,j,:] @ W[e] + b[e]  -> (D,)
                 z = X[i, j, :] @ W[e] + b[e]
 
-                # dg[d, r] = sin(z[d]) * norm * W[e][r, d]
-                # dg shape: (D, rep_size)
                 sin_z = np.sin(z)  # (D,)
                 dg = norm * (sin_z[:, None] * W[e].T)  # (D, rep_size)
 
-                # dX_atom[r, k*3+xyz] = dX[i, j, r, k, xyz]
-                # dX_atom shape: (rep_size, 3*natoms)
                 dX_atom = dX[i, j, :, :natoms, :].reshape(rep_size, ncols)
 
-                # G[:, g_offset:g_offset+ncols] += -1 * dg @ dX_atom
                 G[:, g_offset : g_offset + ncols] += -dg @ dX_atom
 
             g_offset += ncols
@@ -487,7 +481,7 @@ class TestRffGradientElemental:
         """Output has correct shape (D, ngrads) and dtype."""
         rng = np.random.default_rng(42)
         nmol, natoms, rep_size, D, nel = 3, 4, 10, 20, 2
-        X, dX, Q, W, b, sizes = self._make_grad_test_data(rng, nmol, natoms, rep_size, D, nel)
+        X, dX, Q, W, b, _sizes = self._make_grad_test_data(rng, nmol, natoms, rep_size, D, nel)
 
         G = rff_gradient_elemental(X, dX, Q, W, b)
 
@@ -539,18 +533,7 @@ class TestRffGradientElemental:
         For a single molecule, perturb each coordinate and check that
         the gradient G predicts the change in LZ correctly.
         """
-        rng = np.random.default_rng(42)
-        natoms, rep_size, D, nelements = 3, 8, 12, 2
-        nmol = 1
-
-        # Use identity dX for simplicity: dX[0,j,r,k,xyz] = delta(j==k) * delta_r_xyz_like
-        # Actually, let's use a concrete representation that depends on coordinates.
-        # Instead, use the chain rule: if LZ = f(X(coords)) and dX = dX/dcoords,
-        # then dLZ/dcoord_g = sum_j sum_d G[d,g] (up to sign conventions).
-        #
-        # Simpler: just verify G_cpp matches G_ref (numpy), which we already do above.
-        # For a true finite-difference test, we need an actual representation function.
-        # Since we don't have that here, the numpy reference match is sufficient.
+        # Covered by numpy reference tests above; no analytic coord function available.
         pass  # covered by numpy reference tests
 
     def test_single_molecule(self) -> None:
@@ -596,7 +579,7 @@ class TestRffGramianElemental:
         rep_size: int,
         D: int,
         nelements: int,
-    ):
+    ) -> tuple:
         """Create random test data."""
         sizes = rng.integers(min_atoms, max_atoms_per_mol + 1, size=nmol)
         max_atoms = int(sizes.max())
@@ -716,7 +699,7 @@ class TestRffGramianElementalGradient:
         rep_size: int,
         D: int,
         nelements: int,
-    ):
+    ) -> tuple:
         """Create test data. All molecules have same number of atoms for simplicity."""
         max_atoms = natoms_each
         X = rng.normal(size=(nmol, max_atoms, rep_size))
@@ -762,19 +745,19 @@ class TestRffGramianElementalGradient:
         X, dX, Q, W, b, Y, F = self._make_test_data(rng, nmol, natoms, rep_size, D, nel)
 
         # Combined
-        LZtLZ_comb, LZtY_comb = rff_gramian_elemental_gradient(
+        _LZtLZ_comb, LZtY_comb = rff_gramian_elemental_gradient(
             X, dX, Q, W, b, Y, F, energy_chunk=3, force_chunk=2
         )
 
         # Energy-only
-        LZtLZ_e, LZtY_e = rff_gramian_elemental(X, Q, W, b, Y, chunk_size=3)
+        _LZtLZ_e, LZtY_e = rff_gramian_elemental(X, Q, W, b, Y, chunk_size=3)
 
         # Force-only: compute G for all molecules, then G @ G^T and G @ F
         G = rff_gradient_elemental(X, dX, Q, W, b)
         LZtLZ_f = G @ G.T
         LZtY_f = G @ F
 
-        np.testing.assert_allclose(LZtLZ_comb, LZtLZ_e + LZtLZ_f, rtol=1e-10, atol=1e-10)
+        np.testing.assert_allclose(_LZtLZ_comb, _LZtLZ_e + LZtLZ_f, rtol=1e-10, atol=1e-10)
         np.testing.assert_allclose(LZtY_comb, LZtY_e + LZtY_f, rtol=1e-10, atol=1e-10)
 
     def test_chunk_sizes_dont_matter(self) -> None:
@@ -796,20 +779,17 @@ class TestRffGramianElementalGradient:
         np.testing.assert_allclose(p3, ref_proj, rtol=1e-12, atol=1e-12)
 
     def test_energy_only_matches_gramian(self) -> None:
-        """With zero forces, matches energy-only gramian."""
+        """With zero forces, LZtY matches energy-only gramian projection."""
         rng = np.random.default_rng(789)
         nmol, natoms, rep_size, D, nel = 8, 3, 10, 20, 2
         X, dX, Q, W, b, Y, F = self._make_test_data(rng, nmol, natoms, rep_size, D, nel)
         F_zero = np.zeros_like(F)
 
-        LZtLZ_comb, LZtY_comb = rff_gramian_elemental_gradient(
+        _LZtLZ_comb, LZtY_comb = rff_gramian_elemental_gradient(
             X, dX, Q, W, b, Y, F_zero, energy_chunk=4, force_chunk=3
         )
 
-        LZtLZ_e, LZtY_e = rff_gramian_elemental(X, Q, W, b, Y, chunk_size=4)
+        _LZtLZ_e, LZtY_e = rff_gramian_elemental(X, Q, W, b, Y, chunk_size=4)
 
-        # The gram matrix will have force contribution (G @ G^T) but LZtY
-        # should only have energy contribution since F=0
-        # Actually LZtLZ still has G@G^T. We can't zero that out easily.
-        # So just check LZtY matches for the zero-F case:
+        # LZtLZ still has force contribution (G@G^T); only check LZtY since F=0
         np.testing.assert_allclose(LZtY_comb, LZtY_e, rtol=1e-12, atol=1e-12)
