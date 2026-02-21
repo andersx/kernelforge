@@ -530,8 +530,12 @@ static inline std::size_t rfp_index_upper_N(blas_int n, blas_int i, blas_int j) 
 
 void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
                               double *arf) {
-    // Compute symmetric Gaussian kernel directly into RFP format (TRANSR='N', UPLO='U')
-    // Output: arf[n*(n+1)/2] — upper triangle packed in Rectangular Full Packed format
+    // Compute symmetric Gaussian kernel directly into RFP format
+    // Output: arf[n*(n+1)/2] in Rectangular Full Packed (RFP) format
+    // 
+    // Internal storage: Fortran TRANSR='N', UPLO='U' (upper triangle packed)
+    // Python API usage: rfp_to_full(arf, n, uplo='L') — note uplo='L' due to swap_uplo trick
+    // 
     // This avoids allocating the full n×n matrix (saves 2× memory for large n)
 
     if (n <= 0 || rep_size <= 0)

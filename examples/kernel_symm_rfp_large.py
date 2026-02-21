@@ -36,21 +36,23 @@ def verify_rfp_correctness(n=1000, d=128, sigma=1.0):
     # Random data
     rng = np.random.default_rng(42)
     X = rng.standard_normal((n, d))
-    alpha_param = 1.0 / (2.0 * sigma**2)
+    # Note: alpha must be negative for a valid Gaussian kernel: exp(-||x-y||^2 / (2*sigma^2))
+    alpha_param = -1.0 / (2.0 * sigma**2)
 
     # Compute kernel in both formats
     K_full = gk.kernel_gaussian_symm(X, alpha_param)  # (n, n) dense lower triangle
     K_rfp = gk.kernel_gaussian_symm_rfp(X, alpha_param)  # 1D RFP packed
 
     # Convert RFP back to full to compare
-    K_from_rfp = km.rfp_to_full(K_rfp, n, uplo="U", transr="N")
+    # Note: kernel writes in Fortran UPLO='U' (upper triangle), so Python API uses uplo='L'
+    # due to the swap_uplo trick in math_bindings.cpp
+    K_from_rfp = km.rfp_to_full(K_rfp, n, uplo="L", transr="N")
 
-    # Extract lower triangles for comparison (full kernel only fills lower triangle)
-    tril_indices = np.tril_indices(n)
-    K_full_lower = K_full[tril_indices]
-    K_rfp_lower = K_from_rfp[tril_indices]
+    # Build reference: mirror lower triangle to upper for full symmetric matrix
+    K_ref = np.tril(K_full) + np.tril(K_full, -1).T
 
-    diff = np.abs(K_full_lower - K_rfp_lower).max()
+    # Compare full symmetric matrices
+    diff = np.abs(K_from_rfp - K_ref).max()
     print(f"Max absolute difference: {diff:.2e}")
 
     if diff < 1e-12:
@@ -83,7 +85,8 @@ def demo_large_kernel_rfp(n=50_000, d=128, sigma=1.0, regularize=1e-6):
 
     # Compute kernel directly into RFP format
     print(f"Computing symmetric Gaussian kernel in RFP format...")
-    alpha_param = 1.0 / (2.0 * sigma**2)
+    # Note: alpha must be negative for valid Gaussian kernel: exp(-||x-y||^2 / (2*sigma^2))
+    alpha_param = -1.0 / (2.0 * sigma**2)
     K_rfp = gk.kernel_gaussian_symm_rfp(X, alpha_param)
 
     print(f"  K_rfp shape: {K_rfp.shape}")
