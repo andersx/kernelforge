@@ -307,7 +307,7 @@ def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
 def benchmark_global_kernel_gaussian_symm() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_symm (N=8000, ~2s)."""
     rng = np.random.default_rng(42)
-    N, rep_size = 8000, 50
+    N, rep_size = 12000, 50
     X = rng.standard_normal((N, rep_size))
     alpha = 0.5 / (rep_size * 2.0)
 
@@ -321,7 +321,7 @@ def benchmark_global_kernel_gaussian_symm() -> tuple[float, str]:
 def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_symm_rfp (N=10000, ~2s)."""
     rng = np.random.default_rng(42)
-    N, rep_size = 10000, 50
+    N, rep_size = 15000, 50
     X = rng.standard_normal((N, rep_size))
     alpha = 0.5 / (rep_size * 2.0)
 
@@ -335,7 +335,7 @@ def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
 def benchmark_global_kernel_gaussian() -> tuple[float, str]:
     """Benchmark global kernel_gaussian asymmetric (N1=8000, N2=8000, ~2s)."""
     rng = np.random.default_rng(42)
-    N1, N2, rep_size = 8000, 8000, 50
+    N1, N2, rep_size = 12000, 12000, 50
     X1 = rng.standard_normal((N1, rep_size))
     X2 = rng.standard_normal((N2, rep_size))
     alpha = 0.5 / (rep_size * 2.0)
@@ -350,7 +350,7 @@ def benchmark_global_kernel_gaussian() -> tuple[float, str]:
 def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_jacobian (N1=2000, N2=7000, ~2s)."""
     rng = np.random.default_rng(42)
-    N1, N2, M, D = 2000, 7000, 50, 27
+    N1, N2, M, D = 3000, 10000, 50, 27
     X1 = rng.standard_normal((N1, M))
     dX1 = rng.standard_normal((N1, M, D))
     X2 = rng.standard_normal((N2, M))
@@ -363,10 +363,43 @@ def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
     return elapsed, f"global::kernel_gaussian_jacobian (N1={N1}, N2={N2}, M={M}, D={D})"
 
 
+def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_jacobian_t (N1=10000, N2=3000, ~2s)."""
+    rng = np.random.default_rng(42)
+    N1, N2, M, D = 10000, 3000, 50, 27
+    X1 = rng.standard_normal((N1, M))
+    X2 = rng.standard_normal((N2, M))
+    dX2 = rng.standard_normal((N2, M, D))
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"global::kernel_gaussian_jacobian_t (N1={N1}, N2={N2}, M={M}, D={D})"
+
+
+
+def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_hessian_symm_rfp (N=2000, ~2s)."""
+    rng = np.random.default_rng(42)
+    N, M, D = 2000, 50, 27
+    X = rng.standard_normal((N, M))
+    dX = rng.standard_normal((N, M, D))
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, M={M}, D={D})"
+
+
+
 def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_hessian_symm (N=1400, ~2s)."""
     rng = np.random.default_rng(42)
-    N, M, D = 1400, 50, 27
+    N, M, D = 2000, 50, 27
     X = rng.standard_normal((N, M))
     dX = rng.standard_normal((N, M, D))
     sigma = 2.5
@@ -378,10 +411,26 @@ def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     return elapsed, f"global::kernel_gaussian_hessian_symm (N={N}, M={M}, D={D})"
 
 
+def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_hessian_symm_rfp (N=2000, ~2s)."""
+    rng = np.random.default_rng(42)
+    N, M, D = 2000, 50, 27
+    X = rng.standard_normal((N, M))
+    dX = rng.standard_normal((N, M, D))
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, M={M}, D={D})"
+
+
+
 def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_hessian asymmetric (N1=700, N2=700, ~2s)."""
     rng = np.random.default_rng(42)
-    N1, N2, M, D = 700, 700, 50, 27
+    N1, N2, M, D = 1000, 1000, 50, 27
     X1 = rng.standard_normal((N1, M))
     dX1 = rng.standard_normal((N1, M, D))
     X2 = rng.standard_normal((N2, M))
@@ -626,7 +675,9 @@ BENCHMARKS = {
     "global_kernel_gaussian_symm_rfp": benchmark_global_kernel_gaussian_symm_rfp,
     "global_kernel_gaussian": benchmark_global_kernel_gaussian,
     "global_kernel_gaussian_jacobian": benchmark_global_kernel_gaussian_jacobian,
+    "global_kernel_gaussian_jacobian_t": benchmark_global_kernel_gaussian_jacobian_t,
     "global_kernel_gaussian_hessian_symm": benchmark_global_kernel_gaussian_hessian_symm,
+    "global_kernel_gaussian_hessian_symm_rfp": benchmark_global_kernel_gaussian_hessian_symm_rfp,
     "global_kernel_gaussian_hessian": benchmark_global_kernel_gaussian_hessian,
     "local_kernel_gaussian_symm": benchmark_local_kernel_gaussian_symm,
     "local_kernel_gaussian": benchmark_local_kernel_gaussian,
@@ -665,7 +716,9 @@ SUITES = {
         "global_kernel_gaussian_symm_rfp",
         "global_kernel_gaussian",
         "global_kernel_gaussian_jacobian",
+        "global_kernel_gaussian_jacobian_t",
         "global_kernel_gaussian_hessian_symm",
+        "global_kernel_gaussian_hessian_symm_rfp",
         "global_kernel_gaussian_hessian",
     ],
     "local-kernels": [
