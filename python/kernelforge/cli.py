@@ -452,6 +452,93 @@ def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
     )
 
 
+def benchmark_global_kernel_gaussian_full() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_full (asymmetric, N=1000) using ethanol inverse distance."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_full(X, dX, X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_full (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_full_symm() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_full_symm (symmetric, N=1000) using ethanol inverse distance."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_full_symm(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_full_symm (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_full_symm_rfp (symmetric RFP, N=1000) using ethanol."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_full_symm_rfp(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_full_symm_rfp (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     """Benchmark local kernel_gaussian_symm_rfp (N=1000, ~2s)."""
     n = 1000
@@ -750,6 +837,9 @@ BENCHMARKS = {
     "global_kernel_gaussian_hessian_symm": benchmark_global_kernel_gaussian_hessian_symm,
     "global_kernel_gaussian_hessian_symm_rfp": benchmark_global_kernel_gaussian_hessian_symm_rfp,
     "global_kernel_gaussian_hessian": benchmark_global_kernel_gaussian_hessian,
+    "global_kernel_gaussian_full": benchmark_global_kernel_gaussian_full,
+    "global_kernel_gaussian_full_symm": benchmark_global_kernel_gaussian_full_symm,
+    "global_kernel_gaussian_full_symm_rfp": benchmark_global_kernel_gaussian_full_symm_rfp,
     "local_kernel_gaussian_symm": benchmark_local_kernel_gaussian_symm,
     "local_kernel_gaussian_symm_rfp": benchmark_local_kernel_gaussian_symm_rfp,
     "local_kernel_gaussian": benchmark_local_kernel_gaussian,
@@ -783,6 +873,9 @@ SUITES = {
         "global_kernel_gaussian_hessian_symm",
         "global_kernel_gaussian_hessian_symm_rfp",
         "global_kernel_gaussian_hessian",
+        "global_kernel_gaussian_full",
+        "global_kernel_gaussian_full_symm",
+        "global_kernel_gaussian_full_symm_rfp",
     ],
     "local-kernels": [
         "local_kernel_gaussian_symm",

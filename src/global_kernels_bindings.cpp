@@ -402,6 +402,138 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_rfp_py(
     return H_rfp;
 }
 
+// ---- Full combined kernel (asymmetric) ----
+static py::array_t<double> kernel_gaussian_full_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X1,   // (N1, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX1,  // (N1, M, D1)
+    py::array_t<double, py::array::c_style | py::array::forcecast> X2,   // (N2, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, M, D2)
+    double sigma, py::object tile_B_obj) {
+    if (X1.ndim() != 2) throw std::invalid_argument("X1 must be 2D (N1,M).");
+    if (dX1.ndim() != 3) throw std::invalid_argument("dX1 must be 3D (N1,M,D1).");
+    if (X2.ndim() != 2) throw std::invalid_argument("X2 must be 2D (N2,M).");
+    if (dX2.ndim() != 3) throw std::invalid_argument("dX2 must be 3D (N2,M,D2).");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
+
+    const std::size_t N1 = static_cast<std::size_t>(X1.shape(0));
+    const std::size_t M  = static_cast<std::size_t>(X1.shape(1));
+    const std::size_t N2 = static_cast<std::size_t>(X2.shape(0));
+    const std::size_t Mx = static_cast<std::size_t>(X2.shape(1));
+    if (Mx != M) throw std::invalid_argument("X2.shape[1] must equal X1.shape[1] (M).");
+    if (static_cast<std::size_t>(dX1.shape(0)) != N1) throw std::invalid_argument("dX1.shape[0] must equal N1.");
+    if (static_cast<std::size_t>(dX1.shape(1)) != M)  throw std::invalid_argument("dX1.shape[1] must equal M.");
+    if (static_cast<std::size_t>(dX2.shape(0)) != N2) throw std::invalid_argument("dX2.shape[0] must equal N2.");
+    if (static_cast<std::size_t>(dX2.shape(1)) != M)  throw std::invalid_argument("dX2.shape[1] must equal M.");
+
+    const std::size_t D1 = static_cast<std::size_t>(dX1.shape(2));
+    const std::size_t D2 = static_cast<std::size_t>(dX2.shape(2));
+    if (D1 == 0 || D2 == 0) throw std::invalid_argument("D1 and D2 must be > 0.");
+
+    std::size_t tile_B = 0;
+    if (!tile_B_obj.is_none()) {
+        long tb = tile_B_obj.cast<long>();
+        if (tb < 0) throw std::invalid_argument("tile_B must be >= 0.");
+        tile_B = static_cast<std::size_t>(tb);
+    }
+
+    const std::size_t full_rows = N1 * (1 + D1);
+    const std::size_t full_cols = N2 * (1 + D2);
+    double *Kptr = aligned_alloc_64(full_rows * full_cols);
+    auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
+
+    py::array_t<double> K(
+        {static_cast<py::ssize_t>(full_rows), static_cast<py::ssize_t>(full_cols)},
+        {static_cast<py::ssize_t>(full_cols * sizeof(double)), static_cast<py::ssize_t>(sizeof(double))},
+        Kptr, capsule);
+
+    const double *X1p  = X1.unchecked<2>().data(0, 0);
+    const double *dX1p = dX1.unchecked<3>().data(0, 0, 0);
+    const double *X2p  = X2.unchecked<2>().data(0, 0);
+    const double *dX2p = dX2.unchecked<3>().data(0, 0, 0);
+
+    kf::kernel_gaussian_full(X1p, dX1p, X2p, dX2p, N1, N2, M, D1, D2, sigma, tile_B, Kptr);
+    return K;
+}
+
+// ---- Full combined kernel (symmetric) ----
+static py::array_t<double> kernel_gaussian_full_symm_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    double sigma, py::object tile_B_obj) {
+    if (X.ndim() != 2)  throw std::invalid_argument("X must be 2D (N,M).");
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
+
+    const std::size_t N = static_cast<std::size_t>(X.shape(0));
+    const std::size_t M = static_cast<std::size_t>(X.shape(1));
+    if (static_cast<std::size_t>(dX.shape(0)) != N) throw std::invalid_argument("dX.shape[0] must equal N.");
+    if (static_cast<std::size_t>(dX.shape(1)) != M) throw std::invalid_argument("dX.shape[1] must equal M.");
+    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    if (D == 0) throw std::invalid_argument("D must be > 0.");
+
+    std::size_t tile_B = 0;
+    if (!tile_B_obj.is_none()) {
+        long tb = tile_B_obj.cast<long>();
+        if (tb < 0) throw std::invalid_argument("tile_B must be >= 0.");
+        tile_B = static_cast<std::size_t>(tb);
+    }
+
+    const std::size_t BIG = N * (1 + D);
+    double *Kptr = aligned_alloc_64(BIG * BIG);
+    auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
+
+    py::array_t<double> K(
+        {static_cast<py::ssize_t>(BIG), static_cast<py::ssize_t>(BIG)},
+        {static_cast<py::ssize_t>(BIG * sizeof(double)), static_cast<py::ssize_t>(sizeof(double))},
+        Kptr, capsule);
+
+    const double *Xp  = X.unchecked<2>().data(0, 0);
+    const double *dXp = dX.unchecked<3>().data(0, 0, 0);
+
+    kf::kernel_gaussian_full_symm(Xp, dXp, N, M, D, sigma, tile_B, Kptr);
+    return K;
+}
+
+// ---- Full combined kernel (symmetric RFP) ----
+static py::array_t<double> kernel_gaussian_full_symm_rfp_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    double sigma, py::object tile_B_obj) {
+    if (X.ndim() != 2)  throw std::invalid_argument("X must be 2D (N,M).");
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
+
+    const std::size_t N = static_cast<std::size_t>(X.shape(0));
+    const std::size_t M = static_cast<std::size_t>(X.shape(1));
+    if (static_cast<std::size_t>(dX.shape(0)) != N) throw std::invalid_argument("dX.shape[0] must equal N.");
+    if (static_cast<std::size_t>(dX.shape(1)) != M) throw std::invalid_argument("dX.shape[1] must equal M.");
+    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    if (D == 0) throw std::invalid_argument("D must be > 0.");
+
+    std::size_t tile_B = 0;
+    if (!tile_B_obj.is_none()) {
+        long tb = tile_B_obj.cast<long>();
+        if (tb < 0) throw std::invalid_argument("tile_B must be >= 0.");
+        tile_B = static_cast<std::size_t>(tb);
+    }
+
+    const std::size_t BIG = N * (1 + D);
+    const std::size_t rfp_size = BIG * (BIG + 1) / 2;
+    double *Kptr = aligned_alloc_64(rfp_size);
+    auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
+
+    py::array_t<double> K_rfp(
+        {static_cast<py::ssize_t>(rfp_size)},
+        {static_cast<py::ssize_t>(sizeof(double))},
+        Kptr, capsule);
+
+    const double *Xp  = X.unchecked<2>().data(0, 0);
+    const double *dXp = dX.unchecked<3>().data(0, 0, 0);
+
+    kf::kernel_gaussian_full_symm_rfp(Xp, dXp, N, M, D, sigma, tile_B, Kptr);
+    return K_rfp;
+}
+
 PYBIND11_MODULE(global_kernels, m) {
     m.doc() = "Global (structure-wise) Gaussian kernels via BLAS (row-major), with 64-byte aligned output buffer.";
     m.def("kernel_gaussian_symm", &kernel_symm_py, py::arg("X"), py::arg("alpha"),
@@ -436,4 +568,20 @@ PYBIND11_MODULE(global_kernels, m) {
           "Compute symmetric Gaussian Hessian/GDML kernel in RFP (Row-First Packed) format.\n"
           "Saves ~50% memory by storing only lower triangle.\n"
           "Returns: 1D array of length N*D*(N*D+1)/2 in RFP format.");
+    m.def("kernel_gaussian_full", &kernel_gaussian_full_py,
+          py::arg("X1"), py::arg("dX1"), py::arg("X2"), py::arg("dX2"),
+          py::arg("sigma"), py::arg("tile_B") = py::none(),
+          "Compute full combined energy+force kernel (asymmetric).\n"
+          "Shapes: X1(N1,M), dX1(N1,M,D1), X2(N2,M), dX2(N2,M,D2) -> K((N1*(1+D1)),(N2*(1+D2))).\n"
+          "Layout: [0:N1, 0:N2]=scalar, [0:N1, N2:]=jac_t, [N1:, 0:N2]=jac, [N1:, N2:]=hessian.");
+    m.def("kernel_gaussian_full_symm", &kernel_gaussian_full_symm_py,
+          py::arg("X"), py::arg("dX"), py::arg("sigma"), py::arg("tile_B") = py::none(),
+          "Compute full combined energy+force kernel (symmetric, X1==X2).\n"
+          "Shapes: X(N,M), dX(N,M,D) -> K((N*(1+D)),(N*(1+D))), lower triangle filled.\n"
+          "Block layout: [0:N,0:N]=scalar, [N:,0:N]=jac, [0:N,N:]=jac_t, [N:,N:]=hessian.");
+    m.def("kernel_gaussian_full_symm_rfp", &kernel_gaussian_full_symm_rfp_py,
+          py::arg("X"), py::arg("dX"), py::arg("sigma"), py::arg("tile_B") = py::none(),
+          "Compute full combined energy+force kernel (symmetric RFP format).\n"
+          "Shapes: X(N,M), dX(N,M,D) -> 1D RFP array of length N*(1+D)*(N*(1+D)+1)/2.\n"
+          "Saves ~50% memory vs full symmetric matrix.");
 }
