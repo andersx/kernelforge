@@ -78,93 +78,67 @@ static inline std::size_t rfp_index_upper_N(blas_int n, blas_int i, blas_int j) 
     }
 }
 
+// =============================================================================
+// LEGACY: DSFRK-based implementation of kernel_gaussian_symm_rfp.
+//
+// This version uses LAPACKE_dsfrk to write the Gram matrix directly into RFP
+// without any temporary buffer (pure O(N²/2) memory). It is a faithful C++
+// port of the Fortran reference in examples/dsfrk_kernel.f90.
+//
+// WHY IT IS NOT THE PRIMARY IMPLEMENTATION:
+//   LAPACKE_dsfrk for double precision is ~2.5× slower than cblas_dsyrk on MKL
+//   (N=10000: ~0.35 s vs ~0.14 s). MKL's DSFRK is not as well optimised as
+//   DSYRK for double; the Fortran reference uses single-precision ssfrk where
+//   the gap is smaller. The tiled DSYRK approach below achieves 1.28× overhead
+//   while still avoiding the full N×N allocation, so it dominates on all counts.
+//
+// The code is kept here for reference and in case a future MKL release improves
+// DSFRK performance, or for use on platforms where DSYRK tile memory is tight.
+// =============================================================================
+#if 0
+
 // Inverse RFP map: linear RFP index (0-based) -> (i, j) 0-based, i <= j
-// Valid for TRANSR='N', UPLO='U', any n. Ported from Fortran rfp_ij_n_u in kernel_packed.f90.
+// Valid for TRANSR='N', UPLO='U', any n. Ported from Fortran rfp_ij_n_u.
 static inline void rfp_ij_n_u(blas_int n, std::size_t idx, blas_int *i_out, blas_int *j_out) {
     const blas_int k      = n / 2;
     const bool     even   = (n % 2 == 0);
     const blas_int stride = even ? (n + 1) : n;
-
-    // 0-based rectangle coords
     const blas_int p  = static_cast<blas_int>(idx);
-    const blas_int c0 = p / stride;   // column in rectangle
-    const blas_int r0 = p - c0 * stride; // row in rectangle
-
-    // Candidate A: upper zone (j >= k)  ->  i=r0, j=k+c0
-    const blas_int iA = r0;
-    const blas_int jA = k + c0;
+    const blas_int c0 = p / stride;
+    const blas_int r0 = p - c0 * stride;
+    const blas_int iA = r0, jA = k + c0;
     const bool     useA = (iA <= jA);
-
-    // Candidate B: lower zone (j < k)  ->  invert  p = i*stride + j + k + 1
     const blas_int q  = p - (k + 1);
     const blas_int iB = (q >= 0) ? (q / stride) : 0;
     const blas_int jB = (q >= 0) ? (q - iB * stride) : 0;
-
     *i_out = useA ? iA : iB;
     *j_out = useA ? jA : jB;
 }
 
-void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
-                              double *arf) {
-    // Compute symmetric Gaussian kernel directly into RFP format.
-    // Output: arf[n*(n+1)/2] in Rectangular Full Packed (RFP) format
-    //   (Fortran TRANSR='N', UPLO='U').
-    // Python API: use rfp_to_full(arf, n, uplo='L') due to the swap_uplo convention
-    // in math_bindings.cpp.
-    //
-    // Strategy: use LAPACKE_dsfrk to compute the Gram matrix directly into RFP format
-    // (no N×N temporary buffer needed — O(N²/2) memory only).
-    // This is a direct C++ port of the Fortran reference in kernel_packed.f90.
-
-    if (n <= 0 || rep_size <= 0)
-        throw std::invalid_argument("n and rep_size must be > 0");
-    if (!Xptr || !arf)
-        throw std::invalid_argument("Xptr and arf must be non-null");
+void kernel_gaussian_symm_rfp_dsfrk(const double *Xptr, blas_int n, blas_int rep_size,
+                                     double alpha, double *arf) {
+    if (n <= 0 || rep_size <= 0) throw std::invalid_argument("n and rep_size must be > 0");
+    if (!Xptr || !arf)           throw std::invalid_argument("Xptr and arf must be non-null");
 
     const std::size_t n_size = static_cast<std::size_t>(n);
     const std::size_t nt     = n_size * (n_size + 1) / 2;
 
-    // 1) Zero the RFP buffer: DSFRK with beta=0 may skip some writes on uninitialized memory.
-    std::memset(arf, 0, nt * sizeof(double));
+    std::memset(arf, 0, nt * sizeof(double));  // beta=0 may skip writes on uninit buffer
 
-    // 2) DSFRK: arf = (-2*alpha) * X^T * X  (in RFP, TRANSR='N', UPLO='U')
-    //    Our X is row-major (n × rep_size). By passing LAPACK_COL_MAJOR, LAPACKE interprets
-    //    the buffer as col-major (rep_size × n). With trans='T' this computes
-    //    C = alpha * A^T * A = (n × rep_size)(rep_size × n) = (n × n) — exactly right.
-#if defined(KF_USE_MKL) || !defined(__APPLE__)
     LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'T',
-                  n, rep_size,
-                  -2.0 * alpha, Xptr, rep_size,
-                  0.0, arf);
-#else
-    // Accelerate (macOS) does not provide dsfrk — fall back to DSYRK + scatter.
-    {
-        double *Ktmp = aligned_alloc_64(n_size * n_size);
-        if (!Ktmp) throw std::bad_alloc();
-        cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
-                    n, rep_size, -2.0 * alpha, Xptr, rep_size, 0.0, Ktmp, n);
-        // scatter lower triangle into RFP
-        for (blas_int j = 0; j < n; ++j)
-            for (blas_int i = 0; i <= j; ++i)
-                arf[rfp_index_upper_N(n, i, j)] =
-                    Ktmp[static_cast<std::size_t>(j) * n_size + static_cast<std::size_t>(i)];
-        aligned_free_64(Ktmp);
-    }
-#endif
+                  n, rep_size, -2.0 * alpha, Xptr, rep_size, 0.0, arf);
 
-    // 3) Compute squared norms: sq[i] = alpha * ||X[i]||^2
     std::vector<double> sq(n_size);
 #pragma omp parallel for schedule(static)
     for (blas_int i = 0; i < n; ++i) {
         const double *row = Xptr + static_cast<std::size_t>(i) * static_cast<std::size_t>(rep_size);
         double acc = 0.0;
-        for (blas_int kk = 0; kk < rep_size; ++kk)
-            acc += row[kk] * row[kk];
+        for (blas_int kk = 0; kk < rep_size; ++kk) acc += row[kk] * row[kk];
         sq[i] = alpha * acc;
     }
 
-    // 4) Elementwise: arf[idx] = exp(arf[idx] + sq[i] + sq[j])
-    //    where (i,j) = rfp_ij_n_u(idx).  Loop is over all nt packed elements.
+    const blas_int k_rfp      = n / 2;
+    const blas_int stride_rfp = (n % 2 == 0) ? (n + 1) : n;
 #pragma omp parallel for schedule(guided)
     for (std::ptrdiff_t idx = 0; idx < static_cast<std::ptrdiff_t>(nt); ++idx) {
         blas_int ii, jj;
@@ -173,13 +147,16 @@ void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
     }
 }
 
-// Tile size for kernel_gaussian_symm_rfp_tiled (number of rows/cols per tile).
+#endif  // LEGACY DSFRK implementation
+
+// =============================================================================
+// Tile size for kernel_gaussian_symm_rfp (number of rows/cols per tile).
 // Temporary buffer is TILE_RFP × TILE_RFP doubles = 512 MB for 8192.
-// This is still much less than N×N for large N.
+// For N <= TILE_RFP the whole matrix fits in one tile (single DSYRK + scatter).
 static constexpr blas_int TILE_RFP = 8192;
 
-void kernel_gaussian_symm_rfp_tiled(const double *Xptr, blas_int n, blas_int rep_size,
-                                     double alpha, double *arf) {
+void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
+                               double alpha, double *arf) {
     // Compute symmetric Gaussian kernel directly into RFP format using tiled DGEMM/DSYRK.
     // Output: arf[n*(n+1)/2] in Rectangular Full Packed (RFP) format
     //   (Fortran TRANSR='N', UPLO='U').

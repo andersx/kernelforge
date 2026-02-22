@@ -233,7 +233,7 @@ def benchmark_global_kernel_gaussian_symm() -> tuple[float, str]:
 
 
 def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_symm_rfp (DSFRK, no N×N buffer) using ethanol inverse distance."""
+    """Benchmark global kernel_gaussian_symm_rfp (tiled DGEMM, no N×N buffer) using ethanol inverse distance."""
     data = load_ethanol_raw_data()
     n = 10000
     R = data["R"][:n]
@@ -250,26 +250,6 @@ def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"global::kernel_gaussian_symm_rfp (N={n}, rep_size={rep_size}, Ethanol)"
-
-
-def benchmark_global_kernel_gaussian_symm_rfp_tiled() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_symm_rfp_tiled (tiled DGEMM, no N×N buffer) using ethanol inverse distance."""
-    data = load_ethanol_raw_data()
-    n = 10000
-    R = data["R"][:n]
-
-    # Generate inverse distance representations
-    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
-    X = np.array(X_list)
-
-    rep_size = X.shape[1]
-    alpha = 0.5 / (rep_size * 2.0)
-
-    start = time.perf_counter()
-    _ = global_kernels.kernel_gaussian_symm_rfp_tiled(X, alpha)
-    elapsed = (time.perf_counter() - start) * 1000
-
-    return elapsed, f"global::kernel_gaussian_symm_rfp_tiled (N={n}, rep_size={rep_size}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian() -> tuple[float, str]:
@@ -764,7 +744,6 @@ BENCHMARKS = {
     "qm7b_fchl19_grad": benchmark_qm7b_fchl19_gradients,
     "global_kernel_gaussian_symm": benchmark_global_kernel_gaussian_symm,
     "global_kernel_gaussian_symm_rfp": benchmark_global_kernel_gaussian_symm_rfp,
-    "global_kernel_gaussian_symm_rfp_tiled": benchmark_global_kernel_gaussian_symm_rfp_tiled,
     "global_kernel_gaussian": benchmark_global_kernel_gaussian,
     "global_kernel_gaussian_jacobian": benchmark_global_kernel_gaussian_jacobian,
     "global_kernel_gaussian_jacobian_t": benchmark_global_kernel_gaussian_jacobian_t,
@@ -798,7 +777,6 @@ SUITES = {
     "global-kernels": [
         "global_kernel_gaussian_symm",
         "global_kernel_gaussian_symm_rfp",
-        "global_kernel_gaussian_symm_rfp_tiled",
         "global_kernel_gaussian",
         "global_kernel_gaussian_jacobian",
         "global_kernel_gaussian_jacobian_t",

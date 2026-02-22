@@ -73,28 +73,6 @@ py::array_t<double> kernel_symm_rfp_py(
     return K_rfp;
 }
 
-py::array_t<double> kernel_symm_rfp_tiled_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> X, double alpha) {
-    check_2d(X);
-    auto bufX = X.request();
-
-    blas_int n = static_cast<blas_int>(bufX.shape[0]);
-    blas_int rep_size = static_cast<blas_int>(bufX.shape[1]);
-    double *Xptr = static_cast<double *>(bufX.ptr);
-
-    const std::size_t nt =
-        static_cast<std::size_t>(n) * (static_cast<std::size_t>(n) + 1) / 2;
-    double *arf = aligned_alloc_64(nt);
-
-    auto capsule = py::capsule(arf, [](void *p) { aligned_free_64(p); });
-    py::array_t<double> K_rfp({static_cast<py::ssize_t>(nt)}, {static_cast<py::ssize_t>(sizeof(double))},
-                              arf, capsule);
-
-    kf::kernel_gaussian_symm_rfp_tiled(Xptr, n, rep_size, alpha, arf);
-
-    return K_rfp;
-}
-
 py::array_t<double> kernel_asymm_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X1,  // (n1,d)
     py::array_t<double, py::array::c_style | py::array::forcecast> X2,  // (n2,d)
@@ -430,13 +408,9 @@ PYBIND11_MODULE(global_kernels, m) {
           "Compute K = exp(alpha*(||x_i||^2 + ||x_j||^2 - 2 x_i·x_j)) over the lower triangle.\n"
           "X is (n, rep_size) in row-major; returns K as an (n,n) NumPy array.");
     m.def("kernel_gaussian_symm_rfp", &kernel_symm_rfp_py, py::arg("X"), py::arg("alpha"),
-          "Compute symmetric Gaussian kernel directly into RFP format using LAPACKE_dsfrk.\n"
-          "No N×N temporary buffer — uses only N*(N+1)/2 memory.\n"
-          "X is (n, rep_size) in row-major; returns 1D array of length n*(n+1)/2 in RFP packed layout.");
-    m.def("kernel_gaussian_symm_rfp_tiled", &kernel_symm_rfp_tiled_py, py::arg("X"), py::arg("alpha"),
-          "Compute symmetric Gaussian kernel into RFP format using tiled DGEMM/DSYRK.\n"
-          "Tile size: 8192. Temporary buffer: min(n,8192)² doubles. No full N×N allocation.\n"
-          "X is (n, rep_size) in row-major; returns 1D array of length n*(n+1)/2 in RFP packed layout.");
+          "Compute symmetric Gaussian kernel directly into RFP format (tiled DGEMM/DSYRK).\n"
+          "Tile size: 8192. Temp buffer: min(n,8192)² doubles. No full N×N allocation.\n"
+          "Output: 1D array of length n*(n+1)/2 in RFP packed layout (TRANSR='N', UPLO='U').");
     m.def("kernel_gaussian", &kernel_asymm_py, py::arg("X1"), py::arg("X2"), py::arg("alpha"),
           "Return K (n2, n1) where K[i2,i1] = exp(alpha*(||x2||^2 + ||x1||^2 - 2 x2·x1)).");
     m.def("kernel_gaussian_jacobian", &gaussian_jacobian_batch_py, py::arg("X1"), py::arg("dX1"),
