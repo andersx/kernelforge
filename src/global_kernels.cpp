@@ -22,11 +22,11 @@
     #else
         // OpenBLAS threading control
         extern "C" {
-            void blas_set_num_threads(int num_threads);
-            int blas_get_num_threads(void);
+            void openblas_set_num_threads(int num_threads);
+            int openblas_get_num_threads(void);
         }
-        #define blas_set_num_threads blas_set_num_threads
-        #define blas_get_num_threads blas_get_num_threads
+        #define blas_set_num_threads openblas_set_num_threads
+        #define blas_get_num_threads openblas_get_num_threads
     #endif
 #endif
 

@@ -32,15 +32,14 @@ from kernelforge import invdist_repr, kernelmath
 from kernelforge.cli import load_ethanol_raw_data
 from kernelforge.global_kernels import (
     kernel_gaussian_full,
-    kernel_gaussian_full_symm,
     kernel_gaussian_full_symm_rfp,
 )
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-N_TRAIN = 200
-N_TEST = 50
+N_TRAIN = 1000
+N_TEST = 200
 SIGMA = 3.0
 L2 = 1e-8
 
@@ -119,14 +118,15 @@ def main():
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
     alpha = kernelmath.cho_solve_rfp(K_rfp, y_tr, l2=L2)
+    del K_rfp  # free ~3 GB RFP buffer
     print(f"\n[3] Cholesky solve in {time.perf_counter() - t0:.3f}s")
     print(f"    alpha: shape={alpha.shape}  ||alpha||={np.linalg.norm(alpha):.4f}")
 
     # ------------------------------------------------------------------
-    # 4. Training error  —  full symmetric combined kernel
+    # 4. Training error  —  derived from the normal equations (no extra allocation)
+    #    We solved (K + l2*I) @ alpha = y, so K @ alpha = y - l2*alpha exactly.
     # ------------------------------------------------------------------
-    K_tr_full = kernel_gaussian_full_symm(X_tr, dX_tr, SIGMA)  # (BIG_tr, BIG_tr)
-    y_tr_pred = K_tr_full @ alpha
+    y_tr_pred = y_tr - L2 * alpha  # K @ alpha = y - l2*alpha
     train_mae_E = np.mean(np.abs(y_tr_pred[:N_TRAIN] - E_tr))
     train_mae_F = np.mean(np.abs(y_tr_pred[N_TRAIN:].reshape(N_TRAIN, D) - F_tr))
     print(
@@ -141,8 +141,8 @@ def main():
     t0 = time.perf_counter()
     K_pred = kernel_gaussian_full(X_te, dX_te, X_tr, dX_tr, SIGMA)  # (BIG_te, BIG_tr)
     y_te_pred = K_pred @ alpha  # (BIG_te,)
+    del K_pred
     print(f"\n[5] Prediction kernel built in {time.perf_counter() - t0:.3f}s")
-    assert K_pred.shape == (BIG_te, BIG_tr)
 
     # ------------------------------------------------------------------
     # 6. Evaluation
