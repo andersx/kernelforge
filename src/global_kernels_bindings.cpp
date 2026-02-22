@@ -31,7 +31,7 @@ py::array_t<double> kernel_symm_py(py::array_t<double, py::array::c_style | py::
     std::size_t nelems = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
     double *Kptr = aligned_alloc_64(nelems);
 
-    // Capsule to free aligned memory when NumPy array is GC’d
+    // Capsule to free aligned memory when NumPy array is GC'd
     auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
 
     // Make a NumPy view over Kptr (row-major)
@@ -44,6 +44,33 @@ py::array_t<double> kernel_symm_py(py::array_t<double, py::array::c_style | py::
     kf::kernel_gaussian_symm(Xptr, n, rep_size, alpha, Kptr);
 
     return K;
+}
+
+py::array_t<double> kernel_symm_rfp_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X, double alpha) {
+    check_2d(X);
+    auto bufX = X.request();
+
+    blas_int n = static_cast<blas_int>(bufX.shape[0]);         // rows
+    blas_int rep_size = static_cast<blas_int>(bufX.shape[1]);  // cols
+    double *Xptr = static_cast<double *>(bufX.ptr);
+
+    // RFP output size: n*(n+1)/2
+    const std::size_t nt =
+        static_cast<std::size_t>(n) * (static_cast<std::size_t>(n) + 1) / 2;
+    double *arf = aligned_alloc_64(nt);
+
+    // Capsule to free aligned memory when NumPy array is GC'd
+    auto capsule = py::capsule(arf, [](void *p) { aligned_free_64(p); });
+
+    // Make a NumPy 1D array over arf (C-contiguous)
+    py::array_t<double> K_rfp({static_cast<py::ssize_t>(nt)}, {static_cast<py::ssize_t>(sizeof(double))},
+                              arf, capsule);
+
+    // Compute
+    kf::kernel_gaussian_symm_rfp(Xptr, n, rep_size, alpha, arf);
+
+    return K_rfp;
 }
 
 py::array_t<double> kernel_asymm_py(
@@ -124,6 +151,58 @@ static py::array_t<double> gaussian_jacobian_batch_py(
     double *Kp = Kv.mutable_data(0, 0);
 
     kf::kernel_gaussian_jacobian(X1p, dX1p, X2p, N1, N2, M, D, sigma, Kp);
+    return K;
+}
+
+static py::array_t<double> gaussian_jacobian_t_batch_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X1,   // (N1, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> X2,   // (N2, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, M, D)
+    double sigma) {
+    if (X1.ndim() != 2)
+        throw std::invalid_argument("X1 must be 2D (N1,M).");
+    if (X2.ndim() != 2)
+        throw std::invalid_argument("X2 must be 2D (N2,M).");
+    if (dX2.ndim() != 3)
+        throw std::invalid_argument("dX2 must be 3D (N2,M,D).");
+    if (sigma <= 0.0)
+        throw std::invalid_argument("sigma must be > 0.");
+
+    const auto N1 = static_cast<std::size_t>(X1.shape(0));
+    const auto M1 = static_cast<std::size_t>(X1.shape(1));
+    
+    const auto N2 = static_cast<std::size_t>(X2.shape(0));
+    const auto M2 = static_cast<std::size_t>(X2.shape(1));
+
+    if (M1 != M2)
+        throw std::invalid_argument("X1.shape[1] must equal X2.shape[1] (M).");
+
+    const auto M = M1;
+
+    if (static_cast<std::size_t>(dX2.shape(0)) != N2)
+        throw std::invalid_argument("dX2.shape[0] must equal X2.shape[0] (N2).");
+    if (static_cast<std::size_t>(dX2.shape(1)) != M)
+        throw std::invalid_argument("dX2.shape[1] must equal X2.shape[1] (M).");
+
+    const auto D = static_cast<std::size_t>(dX2.shape(2));
+    if (D == 0)
+        throw std::invalid_argument("D (last dim of dX2) must be > 0.");
+
+    // Raw pointers (contiguous due to c_style|forcecast)
+    auto x1 = X1.unchecked<2>();    // (N1,M)
+    auto x2 = X2.unchecked<2>();    // (N2,M)
+    auto dx2 = dX2.unchecked<3>();  // (N2,M,D)
+
+    const double *X1p = x1.data(0, 0);
+    const double *X2p = x2.data(0, 0);
+    const double *dX2p = dx2.data(0, 0, 0);
+
+    // Output (N1, N2*D)
+    py::array_t<double> K({static_cast<py::ssize_t>(N1), static_cast<py::ssize_t>(N2 * D)});
+    auto Kv = K.mutable_unchecked<2>();
+    double *Kp = Kv.mutable_data(0, 0);
+
+    kf::kernel_gaussian_jacobian_t(X1p, X2p, dX2p, N1, N2, M, D, sigma, Kp);
     return K;
 }
 
@@ -266,31 +345,61 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_py(
     return H;
 }
 
-py::array_t<double> kernel_symm_rfp_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> X, double alpha) {
-    check_2d(X);
-    auto bufX = X.request();
+static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_rfp_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    double sigma, py::object tile_B_obj                                 /* int or None */
+) {
+    if (X.ndim() != 2)
+        throw std::invalid_argument("X must be 2D (N,M).");
+    if (dX.ndim() != 3)
+        throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (!(sigma > 0.0))
+        throw std::invalid_argument("sigma must be > 0.");
 
-    blas_int n = static_cast<blas_int>(bufX.shape[0]);         // rows
-    blas_int rep_size = static_cast<blas_int>(bufX.shape[1]);  // cols
-    double *Xptr = static_cast<double *>(bufX.ptr);
+    const std::size_t N = static_cast<std::size_t>(X.shape(0));
+    const std::size_t M = static_cast<std::size_t>(X.shape(1));
+    if (static_cast<std::size_t>(dX.shape(0)) != N)
+        throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N).");
+    if (static_cast<std::size_t>(dX.shape(1)) != M)
+        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (M).");
 
-    // RFP output size: n*(n+1)/2
-    const std::size_t nt =
-        static_cast<std::size_t>(n) * (static_cast<std::size_t>(n) + 1) / 2;
-    double *arf = aligned_alloc_64(nt);
+    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    if (D == 0)
+        throw std::invalid_argument("D must be > 0.");
 
-    // Capsule to free aligned memory when NumPy array is GC'd
-    auto capsule = py::capsule(arf, [](void *p) { aligned_free_64(p); });
+    // tile_B: default 0 means "auto"
+    std::size_t tile_B = 0;
+    if (!tile_B_obj.is_none()) {
+        long tb = tile_B_obj.cast<long>();
+        if (tb < 0)
+            throw std::invalid_argument("tile_B must be >= 0 (0 means auto).");
+        tile_B = static_cast<std::size_t>(tb);
+    }
 
-    // Make a NumPy 1D array over arf (C-contiguous)
-    py::array_t<double> K_rfp({static_cast<py::ssize_t>(nt)}, {static_cast<py::ssize_t>(sizeof(double))},
-                              arf, capsule);
+    // RFP packed size
+    const std::size_t BIG = N * D;
+    const std::size_t rfp_size = BIG * (BIG + 1) / 2;
 
-    // Compute
-    kf::kernel_gaussian_symm_rfp(Xptr, n, rep_size, alpha, arf);
+    // Allocate aligned memory for RFP result
+    double *Hrfp_ptr = aligned_alloc_64(rfp_size);
 
-    return K_rfp;
+    // Capsule to free the memory when Python GC runs
+    auto capsule = py::capsule(Hrfp_ptr, [](void *p) { aligned_free_64(p); });
+
+    // Wrap into 1D NumPy array  
+    py::array_t<double> H_rfp({static_cast<py::ssize_t>(rfp_size)},
+                              {static_cast<py::ssize_t>(sizeof(double))},
+                              Hrfp_ptr, capsule);
+
+    // Raw pointers
+    const double *Xp = X.unchecked<2>().data(0, 0);
+    const double *dXp = dX.unchecked<3>().data(0, 0, 0);
+
+    // Call the C++ core
+    kf::kernel_gaussian_hessian_symm_rfp(Xp, dXp, N, M, D, sigma, tile_B, Hrfp_ptr);
+
+    return H_rfp;
 }
 
 PYBIND11_MODULE(global_kernels, m) {
@@ -304,7 +413,14 @@ PYBIND11_MODULE(global_kernels, m) {
     m.def("kernel_gaussian", &kernel_asymm_py, py::arg("X1"), py::arg("X2"), py::arg("alpha"),
           "Return K (n2, n1) where K[i2,i1] = exp(alpha*(||x2||^2 + ||x1||^2 - 2 x2·x1)).");
     m.def("kernel_gaussian_jacobian", &gaussian_jacobian_batch_py, py::arg("X1"), py::arg("dX1"),
-          py::arg("X2"), py::arg("sigma"));
+          py::arg("X2"), py::arg("sigma"),
+          "Compute Jacobian kernel with Jacobians on query side (X1).\n"
+          "Shapes: X1(N1,M), dX1(N1,M,D), X2(N2,M) -> K(N1*D, N2).");
+    m.def("kernel_gaussian_jacobian_t", &gaussian_jacobian_t_batch_py, py::arg("X1"), 
+          py::arg("X2"), py::arg("dX2"), py::arg("sigma"),
+          "Compute transposed Jacobian kernel with Jacobians on reference side (X2).\n"
+          "Shapes: X1(N1,M), X2(N2,M), dX2(N2,M,D) -> K(N1, N2*D).\n"
+          "Property: kernel_gaussian_jacobian_t(X2, X1, dX1, σ) == kernel_gaussian_jacobian(X1, dX1, X2, σ).T");
     m.def("kernel_gaussian_hessian", &rbf_hessian_full_tiled_gemm_py, py::arg("X1"),
           py::arg("dX1"), py::arg("X2"), py::arg("dX2"), py::arg("sigma"),
           py::arg("tile_B") = py::none(),
@@ -314,4 +430,9 @@ PYBIND11_MODULE(global_kernels, m) {
     m.def("kernel_gaussian_hessian_symm", &rbf_hessian_full_tiled_gemm_sym_py, py::arg("X"),
           py::arg("dX"), py::arg("sigma"), py::arg("tile_B") = py::none(),
           "Compute symmetric Gaussian Hessian/GDML kernel (training version).");
+    m.def("kernel_gaussian_hessian_symm_rfp", &rbf_hessian_full_tiled_gemm_sym_rfp_py, py::arg("X"),
+          py::arg("dX"), py::arg("sigma"), py::arg("tile_B") = py::none(),
+          "Compute symmetric Gaussian Hessian/GDML kernel in RFP (Row-First Packed) format.\n"
+          "Saves ~50% memory by storing only lower triangle.\n"
+          "Returns: 1D array of length N*D*(N*D+1)/2 in RFP format.");
 }
