@@ -40,7 +40,7 @@ dev = [
 ]
 
 [project.scripts]
-qmlbench = "kernelforge.cli:main"
+kernel-bench = "kernelforge.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/andersx/kernelforge"
