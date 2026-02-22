@@ -176,10 +176,8 @@ def test_kernel_gaussian_symm_rfp_solve(n: int, seed: int) -> None:
     # Create a test right-hand side
     y = rng.standard_normal(n)
 
-    # Solve K @ alpha_solve = y using RFP Cholesky
-    # Note: uplo='U' in Python API because swap_uplo maps it to Fortran 'L'
-    # which matches the lower-triangle convention for solve_cholesky_rfp_L
-    alpha_solve = kernelmath.solve_cholesky_rfp_L(K_rfp.copy(), y, uplo="U")
+    # Solve K @ alpha_solve = y using RFP Cholesky (overwrites K_rfp, so pass a copy)
+    alpha_solve = kernelmath.cho_solve_rfp(K_rfp.copy(), y)
     assert alpha_solve.shape == (n,)
 
     # Verify solution by computing residual with full kernel

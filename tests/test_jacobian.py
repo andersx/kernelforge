@@ -163,3 +163,152 @@ def test_input_shape_mismatch_errors() -> None:
     # dX1 N1 dimension must match X1 N1
     with pytest.raises(Exception, match=r".*"):
         _ = _kernels.kernel_gaussian_jacobian(X1[:-1], dX1, X2_ok, 0.9)
+
+
+# ============================================================================
+# Tests for kernel_gaussian_jacobian_t (transposed version)
+# ============================================================================
+
+
+def test_jacobian_t_shapes() -> None:
+    """Test that jacobian_t produces correct output shape."""
+    rng = np.random.default_rng(10)
+
+    N1, N2 = 4, 5
+    N = 3
+    D = 3 * N
+    M = N * (N - 1) // 2
+
+    X1 = rng.normal(size=(N1, M))
+    X2 = rng.normal(size=(N2, M))
+    dX2 = rng.normal(size=(N2, M, D))
+    sigma = 0.7
+
+    K_t = _kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
+    assert K_t.shape == (N1, N2 * D)
+
+    # Check that values are finite and non-zero
+    assert np.isfinite(K_t).all()
+    assert not np.allclose(K_t, 0.0)
+
+
+def test_jacobian_t_equals_jacobian_transposed() -> None:
+    """Test jacobian_t(X2, X1, dX1, s) == jacobian(X1, dX1, X2, s).T (s=sigma)."""
+    rng = np.random.default_rng(11)
+
+    N1, N2 = 3, 4
+    N = 2
+    D = 3 * N
+    M = 5
+
+    X1 = rng.normal(size=(N1, M))
+    dX1 = rng.normal(size=(N1, M, D))
+    X2 = rng.normal(size=(N2, M))
+    dX2 = rng.normal(size=(N2, M, D))
+    sigma = 0.8
+
+    # Compute K: (N1*D, N2) with Jacobians on X1 side
+    K = _kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
+
+    # Compute K_t: (N2, N1*D) with Jacobians on X2 side (swapping X1<->X2, dX1<->dX2)
+    K_t = _kernels.kernel_gaussian_jacobian_t(X2, X1, dX1, sigma)
+
+    # K_t should equal K.T
+    assert K.shape == (N1 * D, N2)
+    assert K_t.shape == (N2, N1 * D)
+    np.testing.assert_allclose(K_t, K.T, rtol=1e-12, atol=1e-12)
+
+
+def test_jacobian_t_formula_matches_numpy_reference() -> None:
+    """Test that jacobian_t matches the direct NumPy implementation."""
+    rng = np.random.default_rng(12)
+
+    N1, N2 = 2, 3
+    N = 2
+    D = 3 * N
+    M = 4
+
+    X1 = rng.normal(size=(N1, M))
+    X2 = rng.normal(size=(N2, M))
+    dX2 = rng.normal(size=(N2, M, D))
+    sigma = 0.6
+    inv_s2 = 1.0 / (sigma * sigma)
+
+    K_t = _kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
+
+    # NumPy reference: K_t[a, b*D:(b+1)*D] = w_ab @ J2[b]
+    # where w_ab = (k_ab / σ²) * (x1[a] - x2[b])
+    K_ref = np.zeros_like(K_t)
+    for a in range(N1):
+        x1 = X1[a]
+        for b in range(N2):
+            x2 = X2[b]
+            J2 = dX2[b]  # (M, D)
+            diff = x1 - x2
+            sq = float(diff @ diff)
+            k_ab = np.exp(-0.5 * inv_s2 * sq)
+            w_ab = (k_ab * inv_s2) * diff
+            K_ref[a, b * D : (b + 1) * D] = w_ab @ J2
+
+    np.testing.assert_allclose(K_t, K_ref, rtol=1e-12, atol=1e-12)
+
+
+def test_jacobian_t_symmetry_when_same_data() -> None:
+    """Test that when X1=X2 and dX1=dX2, K_t still equals K.T."""
+    rng = np.random.default_rng(13)
+
+    N = 3
+    D = 9
+    M = 5
+
+    X = rng.normal(size=(N, M))
+    dX = rng.normal(size=(N, M, D))
+    sigma = 0.9
+
+    # K: (N*D, N) with Jacobians on query side
+    K = _kernels.kernel_gaussian_jacobian(X, dX, X, sigma)
+
+    # K_t: (N, N*D) with Jacobians on reference side
+    K_t = _kernels.kernel_gaussian_jacobian_t(X, X, dX, sigma)
+
+    # Should satisfy K_t == K.T
+    np.testing.assert_allclose(K_t, K.T, rtol=1e-12, atol=1e-12)
+
+
+def test_jacobian_t_bad_sigma() -> None:
+    """Test that jacobian_t raises error for invalid sigma."""
+    rng = np.random.default_rng(14)
+
+    N1, N2, M, D = 2, 2, 4, 6
+    X1 = rng.normal(size=(N1, M))
+    X2 = rng.normal(size=(N2, M))
+    dX2 = rng.normal(size=(N2, M, D))
+
+    with pytest.raises(Exception, match=r".*"):
+        _ = _kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, 0.0)
+
+    with pytest.raises(Exception, match=r".*"):
+        _ = _kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, -1.0)
+
+
+def test_jacobian_t_shape_mismatch_errors() -> None:
+    """Test that jacobian_t raises errors for shape mismatches."""
+    rng = np.random.default_rng(15)
+
+    N1, N2, M, D = 2, 3, 5, 9
+    X1 = rng.normal(size=(N1, M))
+    X2_ok = rng.normal(size=(N2, M))
+    X2_bad = rng.normal(size=(N2, M + 1))
+    dX2 = rng.normal(size=(N2, M, D))
+
+    # X2 second dim must equal M
+    with pytest.raises(Exception, match=r".*"):
+        _ = _kernels.kernel_gaussian_jacobian_t(X1, X2_bad, dX2, 0.9)
+
+    # dX2 M dimension must match X2 M
+    with pytest.raises(Exception, match=r".*"):
+        _ = _kernels.kernel_gaussian_jacobian_t(X1, X2_ok, dX2[:, :-1, :], 0.9)
+
+    # dX2 N2 dimension must match X2 N2
+    with pytest.raises(Exception, match=r".*"):
+        _ = _kernels.kernel_gaussian_jacobian_t(X1, X2_ok[:-1], dX2, 0.9)

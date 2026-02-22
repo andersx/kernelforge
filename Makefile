@@ -31,6 +31,17 @@ environment:
 	uv venv --python 3.14
 	uv pip install scikit-build-core pybind11
 
+check: format typecheck
+
 format:
 	uv run ruff format python/ tests/
 	uv run ruff check --select I --fix python/ tests/
+
+typecheck:
+	uv run ty check python/ tests/
+
+clean:
+	rm -rf ./.venv/
+	rm -rf ./.ruff_cache/
+	rm -rf ./.pytest_cache/
+

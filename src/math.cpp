@@ -105,7 +105,7 @@ void solve_cholesky_rfp(double *K_arf, const double *y, blas_int n, double *alph
         throw std::runtime_error("null pointer");
     if (!(uplo == 'U' || uplo == 'u' || uplo == 'L' || uplo == 'l'))
         throw std::runtime_error("uplo must be 'U' or 'L'");
-    if (!(transr == 'N' || transr == 'n'))  // keep this simple; extend if you use 'T'
+    if (!(transr == 'N' || transr == 'n'))
         throw std::runtime_error("Only TRANSR='N' supported here");
 
     uplo = (uplo == 'l' || uplo == 'L') ? 'L' : 'U';
@@ -113,46 +113,29 @@ void solve_cholesky_rfp(double *K_arf, const double *y, blas_int n, double *alph
 
     const std::size_t n_size = static_cast<std::size_t>(n);
 
-    // Copy RHS
+    // Copy RHS into alpha
     std::memcpy(alpha, y, n_size * sizeof(double));
 
-    // Save + regularize diagonal in RFP (matching the chosen UPLO)
-    std::vector<double> diag(n_size);
-    for (blas_int j = 0; j < n; ++j) {
-        const std::size_t idx =
-            (uplo == 'U') ? rfp_diag_index_upper_N(n, j) : rfp_diag_index_lower_N(n, j);
-        diag[j] = K_arf[idx];
-        K_arf[idx] += regularize;
+    // Add regularization to the diagonal of K_arf in-place.
+    // The caller is responsible for providing a working copy if preservation is needed
+    // (cho_solve_rfp_py always does this; solve_cholesky_rfp_L documents the overwrite).
+    if (regularize != 0.0) {
+        for (blas_int j = 0; j < n; ++j) {
+            const std::size_t idx =
+                (uplo == 'U') ? rfp_diag_index_upper_N(n, j) : rfp_diag_index_lower_N(n, j);
+            K_arf[idx] += regularize;
+        }
     }
 
     blas_int info = 0;
     dpftrf_(&transr, &uplo, &n, K_arf, &info);
-    if (info != 0) {
-        for (blas_int j = 0; j < n; ++j) {
-            const std::size_t idx =
-                (uplo == 'U') ? rfp_diag_index_upper_N(n, j) : rfp_diag_index_lower_N(n, j);
-            K_arf[idx] = diag[j];
-        }
+    if (info != 0)
         throw std::runtime_error("DPFTRF failed, info=" + std::to_string(info));
-    }
 
     const blas_int nrhs = 1, ldb = n;
     dpftrs_(&transr, &uplo, &n, &nrhs, K_arf, alpha, &ldb, &info);
-    if (info != 0) {
-        for (blas_int j = 0; j < n; ++j) {
-            const std::size_t idx =
-                (uplo == 'U') ? rfp_diag_index_upper_N(n, j) : rfp_diag_index_lower_N(n, j);
-            K_arf[idx] = diag[j];
-        }
+    if (info != 0)
         throw std::runtime_error("DPFTRS failed, info=" + std::to_string(info));
-    }
-
-    // Restore diagonal
-    for (blas_int j = 0; j < n; ++j) {
-        const std::size_t idx =
-            (uplo == 'U') ? rfp_diag_index_upper_N(n, j) : rfp_diag_index_lower_N(n, j);
-        K_arf[idx] = diag[j];
-    }
 }
 
 blas_int full_to_rfp(char transr, char uplo, blas_int n, const double *A_colmaj, blas_int lda,

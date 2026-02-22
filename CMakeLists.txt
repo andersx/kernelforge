@@ -99,6 +99,11 @@ endif()
 
 # Fallback: Use generic BLAS (OpenBLAS, ATLAS, reference BLAS, etc.)
 if(NOT DEFINED KF_BLAS_BACKEND)
+  if(KF_BLAS_VENDOR STREQUAL "OpenBLAS")
+    # Explicitly force FindBLAS to only search for OpenBLAS (avoids finding MKL
+    # when the oneAPI environment is active and MKL is on LD_LIBRARY_PATH)
+    set(BLA_VENDOR OpenBLAS)
+  endif()
   if(KF_BLAS_ILP64)
     # OpenBLAS ILP64: requires BLA_SIZEOF_INTEGER=8
     set(BLA_SIZEOF_INTEGER 8)

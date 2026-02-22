@@ -40,31 +40,33 @@ py::array_t<double> solve_cholesky_py(
     return py::array_t<double>({n}, {sizeof(double)}, alpha_ptr, free_capsule);
 }
 
-static py::array_t<double> solve_cholesky_rfp_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> K_arf_in,  // 1-D RFP
+// Solve (K + l2*I) @ alpha = y where K is in RFP packed format (TRANSR='N', UPLO='U').
+// Overwrites K_rfp with the Cholesky factor — caller must copy if preservation is needed.
+// Always uses the convention produced by all kernelforge RFP kernels (TRANSR='N', UPLO='U').
+static py::array_t<double> cho_solve_rfp_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> K_rfp_in,  // 1-D RFP
     py::array_t<double, py::array::c_style | py::array::forcecast> y_in,      // 1-D
-    double regularize,
-    char uplo = 'U',  // <-- pass the ACTUAL mapping of K_arf ('U' if your kernel wrote upper)
-    char transr = 'N') {
-    auto Kbuf = K_arf_in.request(true);  // writable: factorization is in-place
+    double l2 = 0.0) {
+    auto Kbuf = K_rfp_in.request();  // factorization overwrites K_rfp in-place
     auto ybuf = y_in.request();
 
     if (Kbuf.ndim != 1 || ybuf.ndim != 1)
-        throw std::runtime_error("K_arf must be 1D RFP and y must be 1D");
+        throw std::runtime_error("K_rfp must be 1D RFP and y must be 1D");
     const blas_int n = static_cast<blas_int>(ybuf.shape[0]);
     const std::size_t n_size = static_cast<std::size_t>(n);
     const std::size_t need = n_size * (n_size + 1) / 2;
     if (static_cast<std::size_t>(Kbuf.shape[0]) != need)
-        throw std::runtime_error("K_arf length must be n*(n+1)/2");
+        throw std::runtime_error("K_rfp length must be n*(n+1)/2");
 
-    auto *K_arf = static_cast<double *>(Kbuf.ptr);
+    // Cast away const: the caller accepts that K_rfp is overwritten (documented).
+    auto *K_rfp = static_cast<double *>(Kbuf.ptr);
     const auto *y = static_cast<const double *>(ybuf.ptr);
 
     double *alpha_ptr = aligned_alloc_64(n_size);
     if (!alpha_ptr)
         throw std::bad_alloc();
 
-    kf::math::solve_cholesky_rfp(K_arf, y, n, alpha_ptr, regularize, uplo, transr);
+    kf::math::solve_cholesky_rfp(K_rfp, y, n, alpha_ptr, l2, 'U', 'N');
 
     auto cap = py::capsule(alpha_ptr, [](void *p) { aligned_free_64(p); });
     return py::array_t<double>({(py::ssize_t)n}, {(py::ssize_t)sizeof(double)}, alpha_ptr, cap);
@@ -169,10 +171,13 @@ PYBIND11_MODULE(kernelmath, m) {
           "- y is preserved\n"
           "- regularize is added to diagonal of K\n"
           "- alpha is returned");
-    m.def("solve_cholesky_rfp_L", &solve_cholesky_rfp_py, py::arg("K_arf"), py::arg("y"),
-          py::arg("regularize") = 0.0, py::arg("uplo") = 'U', py::arg("transr") = 'N',
-          "Solve (K * alpha = y) where K is SPD in RFP format (TRANSR='N', UPLO='L').\n"
-          "Overwrites K_arf during factorization (diagonal restored afterwards).");
+    m.def("cho_solve_rfp", &cho_solve_rfp_py, py::arg("K_rfp"), py::arg("y"),
+          py::arg("l2") = 0.0,
+          "Solve (K + l2*I) @ alpha = y where K is in RFP packed format.\n"
+          "K_rfp is overwritten with the Cholesky factor — pass K_rfp.copy() to preserve it.\n"
+          "Uses TRANSR='N', UPLO='U' (the convention all kernelforge RFP kernels produce).\n"
+          "l2: L2 regularization added to the diagonal before factorization (default 0.0).\n"
+          "Returns alpha as a 1D numpy array of length n.");
     m.def("full_to_rfp", &full_to_rfp_py, py::arg("A"), py::arg("uplo") = 'U',
           py::arg("transr") = 'N',
           "Full (n×n, Fortran-order) -> RFP (1-D). No copies; A must be F-contiguous.");

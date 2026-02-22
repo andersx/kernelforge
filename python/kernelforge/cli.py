@@ -1,9 +1,7 @@
 import argparse
 import sys
-import tempfile
 import time
 import urllib.request
-import zipfile
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -11,6 +9,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from kernelforge import global_kernels, invdist_repr
 from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 from kernelforge.kitchen_sinks import (
     rff_features,
@@ -23,42 +22,58 @@ from kernelforge.local_kernels import (
     kernel_gaussian,
     kernel_gaussian_hessian,
     kernel_gaussian_hessian_symm,
+    kernel_gaussian_jacobian,
     kernel_gaussian_symm,
+    kernel_gaussian_symm_rfp,
 )
 
-PROGRAM_NAME = "KernelForge Benchmarks"
+PROGRAM_NAME = "KernelForge Kernel Benchmarks"
 
 # Data cache directory for downloaded datasets
 CACHE_DIR = Path.home() / ".kernelforge" / "datasets"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Cache for loaded dataset (to avoid reloading npz between benchmarks)
+_ethanol_data_cache = None
 
-def load_ethanol_raw_data() -> np.ndarray:
-    """Load raw ethanol data from sgdml.org. Auto-downloads if needed."""
-    npz_path = CACHE_DIR / "ethanol_ccsd_t-train.npz"
+
+def load_ethanol_raw_data() -> dict[str, Any]:
+    """Load raw ethanol MD17 data from sgdml.org (555K structures). Auto-downloads if needed.
+
+    Returns a dict with keys: R (coordinates), z (atomic numbers), E (energies), F (forces).
+    Data is eagerly loaded and cached in memory on first call to avoid slow disk I/O on
+    subsequent calls.
+    """
+    global _ethanol_data_cache
+
+    if _ethanol_data_cache is not None:
+        return _ethanol_data_cache
+
+    npz_path = CACHE_DIR / "md17_ethanol.npz"
 
     if not npz_path.exists():
-        url = "https://sgdml.org/secure_proxy.php?file=data/npz/ethanol_ccsd_t.zip"
-        print("  [Downloading ethanol dataset...]")
+        url = "https://sgdml.org/secure_proxy.php?file=data/npz/md17_ethanol.npz"
+        print("  [Downloading MD17 ethanol dataset...]")
 
         try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                zip_path = Path(tmpdir) / "ethanol.zip"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req) as response:
-                    if response.status != 200:
-                        raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
-                    zip_path.write_bytes(response.read())
-
-                with zipfile.ZipFile(zip_path) as z:
-                    z.extractall(tmpdir)
-                extracted = next(iter(Path(tmpdir).glob("*.npz")))
-                extracted.rename(npz_path)
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
+                npz_path.write_bytes(response.read())
         except Exception as e:
             print(f"  [Error downloading ethanol: {e}]", file=sys.stderr)
             raise
 
-    return np.load(npz_path, allow_pickle=True)
+    # Eagerly load R and z into memory (not lazy — makes slicing fast)
+    npz = np.load(npz_path, allow_pickle=True)
+    _ethanol_data_cache = {
+        "R": npz["R"],
+        "z": npz["z"],
+        "E": npz["E"],
+        "F": npz["F"],
+    }
+    return _ethanol_data_cache
 
 
 def load_qm7b_raw_data() -> NDArray[Any]:
@@ -198,79 +213,451 @@ def benchmark_qm7b_fchl19_gradients() -> tuple[float, str]:
     return elapsed, "QM7b FCHL19 gradients (N=7211)"
 
 
-def benchmark_kernel_symm_ethanol() -> tuple[float, str]:
-    """Benchmark symmetric local kernel on ethanol (N=100)."""
-    data = prepare_ethanol_fchl19(100)
-    X = data["X"][:100]
-    Q = data["Q"][:100]
-    N = data["N"][:100]
+def benchmark_global_kernel_gaussian_symm() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_symm using ethanol inverse distance (N=1000, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 10000
+    R = data["R"][:n]
+
+    # Generate inverse distance representations
+    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
+    X = np.array(X_list)
+
+    rep_size = X.shape[1]
+    alpha = 0.5 / (rep_size * 2.0)
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_symm(X, alpha)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"global::kernel_gaussian_symm (N={n}, rep_size={rep_size}, Ethanol)"
+
+
+def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_symm_rfp (tiled DGEMM, no NxN buffer) using ethanol
+    inverse distance."""
+    data = load_ethanol_raw_data()
+    n = 10000
+    R = data["R"][:n]
+
+    # Generate inverse distance representations
+    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
+    X = np.array(X_list)
+
+    rep_size = X.shape[1]
+    alpha = 0.5 / (rep_size * 2.0)
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_symm_rfp(X, alpha)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"global::kernel_gaussian_symm_rfp (N={n}, rep_size={rep_size}, Ethanol)"
+
+
+def benchmark_global_kernel_gaussian() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian using ethanol inverse distance (N1=500, N2=500, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 10000
+    R = data["R"][:n]
+
+    # Generate inverse distance representations
+    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
+    X1 = np.array(X_list)
+    X2 = np.array(X_list)
+
+    rep_size = X1.shape[1]
+    alpha = 0.5 / (rep_size * 2.0)
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian(X1, X2, alpha)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian (N={n}, rep_size={rep_size}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_jacobian using ethanol inverse distance (N=1000, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 5000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+
+    # Use same data for both X1 and X2 (for comparability with symmetric kernel)
+    X1 = X
+    dX1 = dX
+    X2 = X
+
+    rep_size = X.shape[1]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_jacobian"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_jacobian_t using ethanol inverse distance (N=1000, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 5000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+
+    # Use same data for both X1 and X2 (for comparability with symmetric kernel)
+    X1 = X
+    X2 = X
+    dX2 = dX
+
+    rep_size = X.shape[1]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_jacobian_t"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_hessian_symm_rfp using ethanol inverse distance
+    (N=200, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian_symm_rfp"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_hessian_symm using ethanol inverse distance (N=200, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_hessian_symm(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian_symm"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_hessian using ethanol inverse distance (N=300, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+
+    # Use same data for both X1 and X2 (for comparability with symmetric kernel)
+    X1 = X
+    dX1 = dX
+    X2 = X
+    dX2 = dX
+
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_full() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_full (asymmetric, N=1000) using ethanol inverse distance."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_full(X, dX, X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_full (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_full_symm() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_full_symm (symmetric, N=1000) using ethanol
+    inverse distance."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_full_symm(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_full_symm"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_full_symm_rfp (symmetric RFP, N=1000) using ethanol."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    rep_size = X.shape[1]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_full_symm_rfp(X, dX, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_full_symm_rfp"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm_rfp (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_symm_rfp (Ethanol, N={n})"
+
+
+def benchmark_local_kernel_gaussian_symm() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm (N=1200, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
     sigma = 2.0
 
     start = time.perf_counter()
     _ = kernel_gaussian_symm(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Local kernel symmetric (Ethanol, N=100)"
+    return elapsed, f"local::kernel_gaussian_symm (Ethanol, N={n})"
 
 
-def benchmark_kernel_asymm_ethanol() -> tuple[float, str]:
-    """Benchmark asymmetric local kernel on ethanol (N=20, train-test split)."""
-    data = prepare_ethanol_fchl19(20)
-    X = data["X"][:20]
-    Q = data["Q"][:20]
-    N = data["N"][:20]
+def benchmark_local_kernel_gaussian() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian asymmetric (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
     sigma = 2.0
 
-    n_train = 16
-    X_train, X_test = X[:n_train], X[n_train:]
-    Q_train, Q_test = Q[:n_train], Q[n_train:]
-    N_train, N_test = N[:n_train], N[n_train:]
+    # Use same data for both train and test (for comparability with symmetric kernel)
+    X_train, X_test = X, X
+    Q_train, Q_test = Q, Q
+    N_train, N_test = N, N
 
     start = time.perf_counter()
     _ = kernel_gaussian(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Local kernel asymmetric (Ethanol, N=20)"
+    return elapsed, f"local::kernel_gaussian (Ethanol, N={n})"
 
 
-def benchmark_kernel_symm_qm7b() -> tuple[float, str]:
-    """Benchmark symmetric local kernel on QM7b (N=100)."""
-    data = prepare_qm7b_fchl19(100)
-    X = data["X"][:100]
-    Q = data["Q"][:100]
-    N = data["N"][:100]
+def benchmark_local_kernel_gaussian_symm_qm7b() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm on QM7b (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_qm7b_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
     sigma = 2.0
 
     start = time.perf_counter()
     _ = kernel_gaussian_symm(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Local kernel symmetric (QM7b, N=100)"
+    return elapsed, f"local::kernel_gaussian_symm (QM7b, N={n})"
 
 
-def benchmark_kernel_asymm_qm7b() -> tuple[float, str]:
-    """Benchmark asymmetric local kernel on QM7b (N=100, train-test split)."""
-    data = prepare_qm7b_fchl19(100)
-    X = data["X"][:100]
-    Q = data["Q"][:100]
-    N = data["N"][:100]
+def benchmark_local_kernel_gaussian_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm_rfp on QM7b (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_qm7b_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
     sigma = 2.0
 
-    n_train = 80
-    X_train, X_test = X[:n_train], X[n_train:]
-    Q_train, Q_test = Q[:n_train], Q[n_train:]
-    N_train, N_test = N[:n_train], N[n_train:]
+    start = time.perf_counter()
+    _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_symm_rfp (QM7b, N={n})"
+
+
+def benchmark_local_kernel_gaussian_qm7b() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian asymmetric on QM7b (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_qm7b_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.0
+
+    # Use same data for both train and test (for comparability with symmetric kernel)
+    X_train, X_test = X, X
+    Q_train, Q_test = Q, Q
+    N_train, N_test = N, N
 
     start = time.perf_counter()
     _ = kernel_gaussian(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "Local kernel asymmetric (QM7b, N=100)"
+    return elapsed, f"local::kernel_gaussian (QM7b, N={n})"
 
 
-def benchmark_kernel_gdml_ethanol() -> tuple[float, str]:
-    """Benchmark symmetric GDML kernel on ethanol (N=100)."""
-    n = 200
+def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_jacobian (N=600, ~2s)."""
+    n = 600
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -278,16 +665,22 @@ def benchmark_kernel_gdml_ethanol() -> tuple[float, str]:
     N = data["N"][:n]
     sigma = 2.5
 
+    # Use same data for both train and test (for comparability with symmetric kernel)
+    X_train, X_test = X, X
+    dX_test = dX
+    Q_train, Q_test = Q, Q
+    N_train, N_test = N, N
+
     start = time.perf_counter()
-    _ = kernel_gaussian_hessian(X, X, dX, dX, Q, Q, N, N, sigma)
+    _ = kernel_gaussian_jacobian(X_train, X_test, dX_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "GDML kernel symmetric (Ethanol, N=n)"
+    return elapsed, f"local::kernel_gaussian_jacobian (Ethanol, N={n})"
 
 
-def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
-    """Benchmark symmetric GDML kernel on ethanol (N=100)."""
-    n = 200
+def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_hessian_symm (N=270, ~2s)."""
+    n = 250
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -299,7 +692,32 @@ def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
     _ = kernel_gaussian_hessian_symm(X, dX, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, "GDML kernel symmetric (Ethanol, N=n)"
+    return elapsed, f"local::kernel_gaussian_hessian_symm (Ethanol, N={n})"
+
+
+def benchmark_local_kernel_gaussian_hessian() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_hessian asymmetric (N=300, ~2s)."""
+    n = 300
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
+
+    # Use same data for both train and test (for comparability with symmetric kernel)
+    X_train, X_test = X, X
+    dX_train, dX_test = dX, dX
+    Q_train, Q_test = Q, Q
+    N_train, N_test = N, N
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_hessian(
+        X_train, X_test, dX_train, dX_test, Q_train, Q_test, N_train, N_test, sigma
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_hessian (Ethanol, N={n})"
 
 
 def benchmark_rff_features() -> tuple[float, str]:
@@ -314,7 +732,7 @@ def benchmark_rff_features() -> tuple[float, str]:
     _ = rff_features(X, W, b)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_features (N={N}, rep_size={rep_size}, D={D})"
+    return elapsed, f"rff::rff_features (N={N}, rep_size={rep_size}, D={D})"
 
 
 def _make_qm7b_elemental_inputs(n_mols: int, D: int, rng: np.random.Generator) -> dict[str, Any]:
@@ -356,7 +774,7 @@ def benchmark_rff_features_elemental() -> tuple[float, str]:
     _ = rff_features_elemental(X, Q, W, b)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_features_elemental (N=100, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_features_elemental (N=100, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gradient_elemental() -> tuple[float, str]:
@@ -374,7 +792,7 @@ def benchmark_rff_gradient_elemental() -> tuple[float, str]:
     _ = rff_gradient_elemental(X, dX, Q, W, b)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_gradient_elemental (N={n_mols}, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gradient_elemental (N={n_mols}, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gramian_elemental() -> tuple[float, str]:
@@ -391,7 +809,7 @@ def benchmark_rff_gramian_elemental() -> tuple[float, str]:
     _ = rff_gramian_elemental(X, Q, W, b, Y)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_gramian_elemental (N={n_mols}, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gramian_elemental (N={n_mols}, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gramian_elemental_gradient() -> tuple[float, str]:
@@ -413,7 +831,7 @@ def benchmark_rff_gramian_elemental_gradient() -> tuple[float, str]:
     _ = rff_gramian_elemental_gradient(X, dX, Q, W, b, Y, F)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_gramian_elemental_gradient (N={n_mols}, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gramian_elemental_gradient (N={n_mols}, D={D}, QM7b-like)"
 
 
 BENCHMARKS = {
@@ -421,12 +839,26 @@ BENCHMARKS = {
     "ethanol_fchl19_grad": benchmark_ethanol_fchl19_gradients,
     "qm7b_fchl19_repr": benchmark_qm7b_fchl19_representations,
     "qm7b_fchl19_grad": benchmark_qm7b_fchl19_gradients,
-    "kernel_symm_ethanol": benchmark_kernel_symm_ethanol,
-    "kernel_asymm_ethanol": benchmark_kernel_asymm_ethanol,
-    "kernel_symm_qm7b": benchmark_kernel_symm_qm7b,
-    "kernel_asymm_qm7b": benchmark_kernel_asymm_qm7b,
-    "kernel_gdml_ethanol": benchmark_kernel_gdml_ethanol,
-    "kernel_gdml_symm_ethanol": benchmark_kernel_gdml_symm_ethanol,
+    "global_kernel_gaussian_symm": benchmark_global_kernel_gaussian_symm,
+    "global_kernel_gaussian_symm_rfp": benchmark_global_kernel_gaussian_symm_rfp,
+    "global_kernel_gaussian": benchmark_global_kernel_gaussian,
+    "global_kernel_gaussian_jacobian": benchmark_global_kernel_gaussian_jacobian,
+    "global_kernel_gaussian_jacobian_t": benchmark_global_kernel_gaussian_jacobian_t,
+    "global_kernel_gaussian_hessian_symm": benchmark_global_kernel_gaussian_hessian_symm,
+    "global_kernel_gaussian_hessian_symm_rfp": benchmark_global_kernel_gaussian_hessian_symm_rfp,
+    "global_kernel_gaussian_hessian": benchmark_global_kernel_gaussian_hessian,
+    "global_kernel_gaussian_full": benchmark_global_kernel_gaussian_full,
+    "global_kernel_gaussian_full_symm": benchmark_global_kernel_gaussian_full_symm,
+    "global_kernel_gaussian_full_symm_rfp": benchmark_global_kernel_gaussian_full_symm_rfp,
+    "local_kernel_gaussian_symm": benchmark_local_kernel_gaussian_symm,
+    "local_kernel_gaussian_symm_rfp": benchmark_local_kernel_gaussian_symm_rfp,
+    "local_kernel_gaussian": benchmark_local_kernel_gaussian,
+    "local_kernel_gaussian_symm_qm7b": benchmark_local_kernel_gaussian_symm_qm7b,
+    "local_kernel_gaussian_symm_rfp_qm7b": benchmark_local_kernel_gaussian_symm_rfp_qm7b,
+    "local_kernel_gaussian_qm7b": benchmark_local_kernel_gaussian_qm7b,
+    "local_kernel_gaussian_jacobian": benchmark_local_kernel_gaussian_jacobian,
+    "local_kernel_gaussian_hessian_symm": benchmark_local_kernel_gaussian_hessian_symm,
+    "local_kernel_gaussian_hessian": benchmark_local_kernel_gaussian_hessian,
     "rff_features": benchmark_rff_features,
     "rff_features_elemental": benchmark_rff_features_elemental,
     "rff_gradient_elemental": benchmark_rff_gradient_elemental,
@@ -442,17 +874,29 @@ SUITES = {
         "qm7b_fchl19_repr",
         "qm7b_fchl19_grad",
     ],
-    "ethanol-kernels": [
-        "kernel_symm_ethanol",
-        "kernel_asymm_ethanol",
+    "global-kernels": [
+        "global_kernel_gaussian_symm",
+        "global_kernel_gaussian_symm_rfp",
+        "global_kernel_gaussian",
+        "global_kernel_gaussian_jacobian",
+        "global_kernel_gaussian_jacobian_t",
+        "global_kernel_gaussian_hessian_symm",
+        "global_kernel_gaussian_hessian_symm_rfp",
+        "global_kernel_gaussian_hessian",
+        "global_kernel_gaussian_full",
+        "global_kernel_gaussian_full_symm",
+        "global_kernel_gaussian_full_symm_rfp",
     ],
-    "qm7b-kernels": [
-        "kernel_symm_qm7b",
-        "kernel_asymm_qm7b",
-    ],
-    "gdml-kernels": [
-        "kernel_gdml_ethanol",
-        "kernel_gdml_symm_ethanol",
+    "local-kernels": [
+        "local_kernel_gaussian_symm",
+        "local_kernel_gaussian_symm_rfp",
+        "local_kernel_gaussian",
+        "local_kernel_gaussian_symm_qm7b",
+        "local_kernel_gaussian_symm_rfp_qm7b",
+        "local_kernel_gaussian_qm7b",
+        "local_kernel_gaussian_jacobian",
+        "local_kernel_gaussian_hessian_symm",
+        "local_kernel_gaussian_hessian",
     ],
     "kitchen-sinks": [
         "rff_features",
@@ -482,7 +926,7 @@ def print_header(suite_name: str) -> None:
 def print_result(bench_name: str, elapsed_ms: float, description: str) -> None:
     """Print a single benchmark result."""
     elapsed_s = elapsed_ms / 1000.0
-    print(f"  {description:<50} {elapsed_s:>8.4f} s")
+    print(f"  {description:<70} {elapsed_s:>8.4f} s")
 
 
 def print_footer(total_ms: float, count: int) -> None:
@@ -526,9 +970,9 @@ def run(suite: str) -> None:
 
 
 def main() -> None:
-    """Main entry point for the qmlbench command."""
+    """Main entry point for the kernel-bench command."""
     parser = argparse.ArgumentParser(
-        prog="qmlbench",
+        prog="kernel-bench",
         description=f"{PROGRAM_NAME} - Single-run benchmark suite for KernelForge",
     )
     parser.add_argument(
