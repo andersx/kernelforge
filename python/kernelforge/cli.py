@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
-from kernelforge import global_kernels
+from kernelforge import global_kernels, invdist_repr
 from kernelforge.kitchen_sinks import (
     rff_features,
     rff_features_elemental,
@@ -306,110 +306,193 @@ def benchmark_kernel_gdml_symm_ethanol() -> tuple[float, str]:
 
 
 def benchmark_global_kernel_gaussian_symm() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_symm (N=8000, ~2s)."""
-    rng = np.random.default_rng(42)
-    N, rep_size = 12000, 50
-    X = rng.standard_normal((N, rep_size))
+    """Benchmark global kernel_gaussian_symm using ethanol inverse distance (N=1000, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    
+    # Generate inverse distance representations
+    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
+    X = np.array(X_list)
+    
+    rep_size = X.shape[1]
     alpha = 0.5 / (rep_size * 2.0)
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian_symm(X, alpha)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_symm (N={N}, rep_size={rep_size})"
+    return elapsed, f"global::kernel_gaussian_symm (N={n}, rep_size={rep_size}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_symm_rfp (N=10000, ~2s)."""
-    rng = np.random.default_rng(42)
-    N, rep_size = 15000, 50
-    X = rng.standard_normal((N, rep_size))
+    """Benchmark global kernel_gaussian_symm_rfp using ethanol inverse distance (N=1000, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    
+    # Generate inverse distance representations
+    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
+    X = np.array(X_list)
+    
+    rep_size = X.shape[1]
     alpha = 0.5 / (rep_size * 2.0)
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian_symm_rfp(X, alpha)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_symm_rfp (N={N}, rep_size={rep_size})"
+    return elapsed, f"global::kernel_gaussian_symm_rfp (N={n}, rep_size={rep_size}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian asymmetric (N1=8000, N2=8000, ~2s)."""
-    rng = np.random.default_rng(42)
-    N1, N2, rep_size = 12000, 12000, 50
-    X1 = rng.standard_normal((N1, rep_size))
-    X2 = rng.standard_normal((N2, rep_size))
+    """Benchmark global kernel_gaussian using ethanol inverse distance (N1=500, N2=500, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    
+    # Generate inverse distance representations
+    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
+    X = np.array(X_list)
+    
+    n_train = 500
+    X1 = X[:n_train]
+    X2 = X[n_train:]
+    
+    rep_size = X.shape[1]
     alpha = 0.5 / (rep_size * 2.0)
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian(X1, X2, alpha)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian (N1={N1}, N2={N2}, rep_size={rep_size})"
+    return elapsed, f"global::kernel_gaussian (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_jacobian (N1=2000, N2=7000, ~2s)."""
-    rng = np.random.default_rng(42)
-    N1, N2, M, D = 3000, 10000, 50, 27
-    X1 = rng.standard_normal((N1, M))
-    dX1 = rng.standard_normal((N1, M, D))
-    X2 = rng.standard_normal((N2, M))
+    """Benchmark global kernel_gaussian_jacobian using ethanol inverse distance (N1=300, N2=700, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+    
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    
+    n_train = 300
+    X1 = X[:n_train]
+    dX1 = dX[:n_train]
+    X2 = X[n_train:]
+    
+    rep_size = X.shape[1]
     sigma = 2.0
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_jacobian (N1={N1}, N2={N2}, rep_size={M}, n_atoms={D//3})"
+    return elapsed, f"global::kernel_gaussian_jacobian (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_jacobian_t (N1=10000, N2=3000, ~2s)."""
-    rng = np.random.default_rng(42)
-    N1, N2, M, D = 10000, 3000, 50, 27
-    X1 = rng.standard_normal((N1, M))
-    X2 = rng.standard_normal((N2, M))
-    dX2 = rng.standard_normal((N2, M, D))
+    """Benchmark global kernel_gaussian_jacobian_t using ethanol inverse distance (N1=700, N2=300, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+    
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    
+    n_train = 700
+    X1 = X[:n_train]
+    X2 = X[n_train:]
+    dX2 = dX[n_train:]
+    
+    rep_size = X.shape[1]
     sigma = 2.0
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_jacobian_t (N1={N1}, N2={N2}, rep_size={M}, n_atoms={D//3})"
-
+    return elapsed, f"global::kernel_gaussian_jacobian_t (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_hessian_symm_rfp (N=2000, ~2s)."""
-    rng = np.random.default_rng(42)
-    N, M, D = 2000, 50, 27
-    X = rng.standard_normal((N, M))
-    dX = rng.standard_normal((N, M, D))
+    """Benchmark global kernel_gaussian_hessian_symm_rfp using ethanol inverse distance (N=200, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 200
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+    
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    
+    rep_size = X.shape[1]
     sigma = 2.5
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, rep_size={M}, n_atoms={D//3})"
-
+    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_hessian_symm (N=1400, ~2s)."""
-    rng = np.random.default_rng(42)
-    N, M, D = 2000, 50, 27
-    X = rng.standard_normal((N, M))
-    dX = rng.standard_normal((N, M, D))
+    """Benchmark global kernel_gaussian_hessian_symm using ethanol inverse distance (N=200, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 200
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+    
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    
+    rep_size = X.shape[1]
     sigma = 2.5
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian_hessian_symm(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm (N={N}, rep_size={M}, n_atoms={D//3})"
+    return elapsed, f"global::kernel_gaussian_hessian_symm (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
 
 
 def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
@@ -429,20 +512,38 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
 
 
 def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_hessian asymmetric (N1=700, N2=700, ~2s)."""
-    rng = np.random.default_rng(42)
-    N1, N2, M, D = 1000, 1000, 50, 27
-    X1 = rng.standard_normal((N1, M))
-    dX1 = rng.standard_normal((N1, M, D))
-    X2 = rng.standard_normal((N2, M))
-    dX2 = rng.standard_normal((N2, M, D))
+    """Benchmark global kernel_gaussian_hessian using ethanol inverse distance (N1=150, N2=150, ~2s)."""
+    data = load_ethanol_raw_data()
+    n = 300
+    R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
+    
+    # Generate inverse distance representations and Jacobians
+    X_list = []
+    dX_list = []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    
+    n_train = 150
+    X1 = X[:n_train]
+    dX1 = dX[:n_train]
+    X2 = X[n_train:]
+    dX2 = dX[n_train:]
+    
+    rep_size = X.shape[1]
     sigma = 2.5
 
     start = time.perf_counter()
     _ = global_kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian (N1={N1}, N2={N2}, rep_size={M}, n_atoms={D//3})"
+    return elapsed, f"global::kernel_gaussian_hessian (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
 
 
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
