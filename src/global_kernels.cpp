@@ -63,11 +63,11 @@ void kernel_gaussian_symm(const double *Xptr, blas_int n, blas_int rep_size, dou
     }
 }
 
-// Helper: RFP index for TRANSR='N', UPLO='U' (upper triangle, i <= j)
-// Overload for blas_int (used by kernel_gaussian_symm_rfp)
+// RFP index map: (i, j) 0-based, i <= j -> linear RFP position (0-based)
+// Valid for Fortran TRANSR='N', UPLO='U', any n.
+// Used to scatter kernel values directly into RFP layout.
 static inline std::size_t rfp_index_upper_N(blas_int n, blas_int i, blas_int j) {
-    // Precondition: 0 <= i <= j < n
-    const blas_int k = n / 2;
+    const blas_int k      = n / 2;
     const blas_int stride = (n % 2 == 0) ? (n + 1) : n;
     if (j >= k) {
         return static_cast<std::size_t>(j - k) * static_cast<std::size_t>(stride) +
@@ -78,15 +78,43 @@ static inline std::size_t rfp_index_upper_N(blas_int n, blas_int i, blas_int j) 
     }
 }
 
+// Inverse RFP map: linear RFP index (0-based) -> (i, j) 0-based, i <= j
+// Valid for TRANSR='N', UPLO='U', any n. Ported from Fortran rfp_ij_n_u in kernel_packed.f90.
+static inline void rfp_ij_n_u(blas_int n, std::size_t idx, blas_int *i_out, blas_int *j_out) {
+    const blas_int k      = n / 2;
+    const bool     even   = (n % 2 == 0);
+    const blas_int stride = even ? (n + 1) : n;
+
+    // 0-based rectangle coords
+    const blas_int p  = static_cast<blas_int>(idx);
+    const blas_int c0 = p / stride;   // column in rectangle
+    const blas_int r0 = p - c0 * stride; // row in rectangle
+
+    // Candidate A: upper zone (j >= k)  ->  i=r0, j=k+c0
+    const blas_int iA = r0;
+    const blas_int jA = k + c0;
+    const bool     useA = (iA <= jA);
+
+    // Candidate B: lower zone (j < k)  ->  invert  p = i*stride + j + k + 1
+    const blas_int q  = p - (k + 1);
+    const blas_int iB = (q >= 0) ? (q / stride) : 0;
+    const blas_int jB = (q >= 0) ? (q - iB * stride) : 0;
+
+    *i_out = useA ? iA : iB;
+    *j_out = useA ? jA : jB;
+}
+
 void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
                               double *arf) {
-    // Compute symmetric Gaussian kernel directly into RFP format
+    // Compute symmetric Gaussian kernel directly into RFP format.
     // Output: arf[n*(n+1)/2] in Rectangular Full Packed (RFP) format
-    // 
-    // Internal storage: Fortran TRANSR='N', UPLO='U' (upper triangle packed)
-    // Python API usage: rfp_to_full(arf, n, uplo='L') — note uplo='L' due to swap_uplo trick
-    // 
-    // This avoids allocating the full n×n matrix (saves 2× memory for large n)
+    //   (Fortran TRANSR='N', UPLO='U').
+    // Python API: use rfp_to_full(arf, n, uplo='L') due to the swap_uplo convention
+    // in math_bindings.cpp.
+    //
+    // Strategy: use LAPACKE_dsfrk to compute the Gram matrix directly into RFP format
+    // (no N×N temporary buffer needed — O(N²/2) memory only).
+    // This is a direct C++ port of the Fortran reference in kernel_packed.f90.
 
     if (n <= 0 || rep_size <= 0)
         throw std::invalid_argument("n and rep_size must be > 0");
@@ -94,77 +122,165 @@ void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
         throw std::invalid_argument("Xptr and arf must be non-null");
 
     const std::size_t n_size = static_cast<std::size_t>(n);
-    const std::size_t rep_size_size = static_cast<std::size_t>(rep_size);
-    const std::size_t nt = n_size * (n_size + 1) / 2;
+    const std::size_t nt     = n_size * (n_size + 1) / 2;
 
-    // Zero the RFP output
+    // 1) Zero the RFP buffer: DSFRK with beta=0 may skip some writes on uninitialized memory.
     std::memset(arf, 0, nt * sizeof(double));
 
-    // 1) Precompute squared norms: sq[i] = alpha * ||X[i]||^2
+    // 2) DSFRK: arf = (-2*alpha) * X^T * X  (in RFP, TRANSR='N', UPLO='U')
+    //    Our X is row-major (n × rep_size). By passing LAPACK_COL_MAJOR, LAPACKE interprets
+    //    the buffer as col-major (rep_size × n). With trans='T' this computes
+    //    C = alpha * A^T * A = (n × rep_size)(rep_size × n) = (n × n) — exactly right.
+#if defined(KF_USE_MKL) || !defined(__APPLE__)
+    LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'T',
+                  n, rep_size,
+                  -2.0 * alpha, Xptr, rep_size,
+                  0.0, arf);
+#else
+    // Accelerate (macOS) does not provide dsfrk — fall back to DSYRK + scatter.
+    {
+        double *Ktmp = aligned_alloc_64(n_size * n_size);
+        if (!Ktmp) throw std::bad_alloc();
+        cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                    n, rep_size, -2.0 * alpha, Xptr, rep_size, 0.0, Ktmp, n);
+        // scatter lower triangle into RFP
+        for (blas_int j = 0; j < n; ++j)
+            for (blas_int i = 0; i <= j; ++i)
+                arf[rfp_index_upper_N(n, i, j)] =
+                    Ktmp[static_cast<std::size_t>(j) * n_size + static_cast<std::size_t>(i)];
+        aligned_free_64(Ktmp);
+    }
+#endif
+
+    // 3) Compute squared norms: sq[i] = alpha * ||X[i]||^2
     std::vector<double> sq(n_size);
+#pragma omp parallel for schedule(static)
     for (blas_int i = 0; i < n; ++i) {
-        const double *row = Xptr + static_cast<std::size_t>(i) * rep_size_size;
+        const double *row = Xptr + static_cast<std::size_t>(i) * static_cast<std::size_t>(rep_size);
         double acc = 0.0;
-        for (blas_int k = 0; k < rep_size; ++k)
-            acc += row[k] * row[k];
+        for (blas_int kk = 0; kk < rep_size; ++kk)
+            acc += row[kk] * row[kk];
         sq[i] = alpha * acc;
     }
 
-    // 2) Tiled DGEMM to compute kernel entries directly into RFP
-    // Tile size — tuned for L2/L3 cache
-    const blas_int TILE = 512;
+    // 4) Elementwise: arf[idx] = exp(arf[idx] + sq[i] + sq[j])
+    //    where (i,j) = rfp_ij_n_u(idx).  Loop is over all nt packed elements.
+#pragma omp parallel for schedule(guided)
+    for (std::ptrdiff_t idx = 0; idx < static_cast<std::ptrdiff_t>(nt); ++idx) {
+        blas_int ii, jj;
+        rfp_ij_n_u(n, static_cast<std::size_t>(idx), &ii, &jj);
+        arf[idx] = std::exp(arf[idx] + sq[ii] + sq[jj]);
+    }
+}
 
-    // Allocate scratch buffer for DGEMM tile results
-    double *G_tile = aligned_alloc_64(static_cast<std::size_t>(TILE) * TILE);
-    if (!G_tile)
-        throw std::bad_alloc();
+// Tile size for kernel_gaussian_symm_rfp_tiled (number of rows/cols per tile).
+// Temporary buffer is TILE_RFP × TILE_RFP doubles = 512 MB for 8192.
+// This is still much less than N×N for large N.
+static constexpr blas_int TILE_RFP = 8192;
 
-    // Process lower triangle tiles (i0 <= j0)
-    for (blas_int j0 = 0; j0 < n; j0 += TILE) {
-        const blas_int jb = std::min(TILE, n - j0);
-        const double *Xj = Xptr + static_cast<std::size_t>(j0) * rep_size_size;
+void kernel_gaussian_symm_rfp_tiled(const double *Xptr, blas_int n, blas_int rep_size,
+                                     double alpha, double *arf) {
+    // Compute symmetric Gaussian kernel directly into RFP format using tiled DGEMM/DSYRK.
+    // Output: arf[n*(n+1)/2] in Rectangular Full Packed (RFP) format
+    //   (Fortran TRANSR='N', UPLO='U').
+    //
+    // Memory: one TILE_RFP×TILE_RFP temporary buffer (~512 MB for T=8192).
+    // For N >> TILE_RFP this is far less than N×N.
+    // For N <= TILE_RFP the whole matrix fits in one tile (single DSYRK + scatter).
 
-        for (blas_int i0 = 0; i0 <= j0; i0 += TILE) {
-            const blas_int ib = std::min(TILE, n - i0);
-            const double *Xi = Xptr + static_cast<std::size_t>(i0) * rep_size_size;
+    if (n <= 0 || rep_size <= 0)
+        throw std::invalid_argument("n and rep_size must be > 0");
+    if (!Xptr || !arf)
+        throw std::invalid_argument("Xptr and arf must be non-null");
+
+    const std::size_t n_sz = static_cast<std::size_t>(n);
+    const std::size_t d_sz = static_cast<std::size_t>(rep_size);
+
+    // 1) Squared norms: sq[i] = alpha * ||X[i]||^2
+    std::vector<double> sq(n_sz);
+#pragma omp parallel for schedule(static)
+    for (blas_int i = 0; i < n; ++i) {
+        const double *row = Xptr + static_cast<std::size_t>(i) * d_sz;
+        double acc = 0.0;
+        for (blas_int kk = 0; kk < rep_size; ++kk)
+            acc += row[kk] * row[kk];
+        sq[i] = alpha * acc;
+    }
+
+    // 2) Allocate one reusable tile buffer (TILE_RFP × TILE_RFP or smaller if n < TILE_RFP)
+    const blas_int T  = std::min<blas_int>(TILE_RFP, n);
+    const std::size_t tile_buf_sz = static_cast<std::size_t>(T) * static_cast<std::size_t>(T);
+    double *tile = aligned_alloc_64(tile_buf_sz);
+    if (!tile) throw std::bad_alloc();
+
+    // 3) Tile over the upper triangle.
+    //    Outer loop: tile-columns tc (j range [j0, j1))
+    //    Inner loop: tile-rows tr <= tc (i range [i0, i1))
+    //    Diagonal tiles (tr==tc): DSYRK + scatter upper-triangle entries to RFP
+    //    Off-diagonal tiles (tr<tc): DGEMM + scatter all entries to RFP
+    for (blas_int j0 = 0; j0 < n; j0 += T) {
+        const blas_int j1  = std::min<blas_int>(j0 + T, n);
+        const blas_int Tj  = j1 - j0;  // width of this column tile
+        const double *Xj   = Xptr + static_cast<std::size_t>(j0) * d_sz;
+
+        for (blas_int i0 = 0; i0 <= j0; i0 += T) {
+            const blas_int i1  = std::min<blas_int>(i0 + T, j1);  // i1 <= j1 (upper tri only)
+            const blas_int Ti  = i1 - i0;
+            const double *Xi   = Xptr + static_cast<std::size_t>(i0) * d_sz;
 
             if (i0 == j0) {
-                // Diagonal tile: use DSYRK (upper triangle)
-                cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans, ib, rep_size, -2.0 * alpha, Xi,
-                            rep_size, 0.0, G_tile, ib);
+                // ---- Diagonal tile: only upper triangle needed ----
+                // DSYRK (lower, row-major) into tile[Ti×Ti]
+                // tile[p*Ti + q] = -2*alpha * X[i0+p] · X[i0+q]  for q <= p (lower)
+                cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
+                            Ti, rep_size,
+                            -2.0 * alpha, Xi, rep_size,
+                            0.0, tile, Ti);
 
-                // Write upper triangle of this tile to RFP
-                for (blas_int j_loc = 0; j_loc < jb; ++j_loc) {
-                    const blas_int j = j0 + j_loc;
-                    for (blas_int i_loc = 0; i_loc <= j_loc; ++i_loc) {
-                        const blas_int i = i0 + i_loc;
-                        const double g_ij = G_tile[static_cast<std::size_t>(i_loc) * ib + j_loc];
-                        const double k_ij = std::exp(sq[i] + sq[j] + g_ij);
-                        const std::size_t rfp_idx = rfp_index_upper_N(n, i, j);
-                        arf[rfp_idx] = k_ij;
+                // Scatter lower triangle of tile → RFP (with exp).
+                // DSYRK row-major lower: tile[p*Ti + q] valid for q <= p.
+                // In global indexing: row = i0+p, col = i0+q, with row >= col (lower tri),
+                // which maps to rfp_index_upper_N(n, col, row) = rfp_index_upper_N(n, i0+q, i0+p).
+#pragma omp parallel for schedule(guided)
+                for (blas_int p = 0; p < Ti; ++p) {
+                    for (blas_int q = 0; q <= p; ++q) {
+                        const blas_int gi = i0 + q;  // global i (upper-tri: i <= j)
+                        const blas_int gj = i0 + p;  // global j
+                        const double val = std::exp(
+                            sq[gi] + sq[gj] +
+                            tile[static_cast<std::size_t>(p) * static_cast<std::size_t>(Ti) +
+                                 static_cast<std::size_t>(q)]);
+                        arf[rfp_index_upper_N(n, gi, gj)] = val;
                     }
                 }
             } else {
-                // Off-diagonal tile: use DGEMM (full rectangle)
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, ib, jb, rep_size, -2.0 * alpha,
-                            Xi, rep_size, Xj, rep_size, 0.0, G_tile, jb);
+                // ---- Off-diagonal tile: i range is strictly left of j range ----
+                // tile[Ti × Tj] = (-2*alpha) * X[i0:i1] @ X[j0:j1]^T
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            Ti, Tj, rep_size,
+                            -2.0 * alpha, Xi, rep_size,
+                            Xj, rep_size,
+                            0.0, tile, Tj);
 
-                // Write all entries (i < j) from this tile to RFP
-                for (blas_int j_loc = 0; j_loc < jb; ++j_loc) {
-                    const blas_int j = j0 + j_loc;
-                    for (blas_int i_loc = 0; i_loc < ib; ++i_loc) {
-                        const blas_int i = i0 + i_loc;
-                        const double g_ij = G_tile[static_cast<std::size_t>(i_loc) * jb + j_loc];
-                        const double k_ij = std::exp(sq[i] + sq[j] + g_ij);
-                        const std::size_t rfp_idx = rfp_index_upper_N(n, i, j);
-                        arf[rfp_idx] = k_ij;
+                // Scatter all Ti×Tj entries → RFP (with exp).
+                // tile[p*Tj + q] corresponds to global (i=i0+p, j=j0+q), i < j always.
+#pragma omp parallel for schedule(guided)
+                for (blas_int p = 0; p < Ti; ++p) {
+                    for (blas_int q = 0; q < Tj; ++q) {
+                        const blas_int gi = i0 + p;
+                        const blas_int gj = j0 + q;
+                        const double val = std::exp(
+                            sq[gi] + sq[gj] +
+                            tile[static_cast<std::size_t>(p) * static_cast<std::size_t>(Tj) +
+                                 static_cast<std::size_t>(q)]);
+                        arf[rfp_index_upper_N(n, gi, gj)] = val;
                     }
                 }
             }
         }
     }
 
-    aligned_free_64(G_tile);
+    aligned_free_64(tile);
 }
 
 static inline void rowwise_self_norms(const double *X, std::size_t n, std::size_t d, double *out) {
@@ -329,8 +445,9 @@ void kernel_gaussian_jacobian_t(const double *X1, const double *X2, const double
     // Parallelize over N2 (reference structures with Jacobians)
 #pragma omp parallel
     {
-        // Thread-private scratch buffers
+        // Thread-private scratch buffers: allocate once per thread, reuse across iterations
         double *W_local = aligned_alloc_64(static_cast<size_t>(M) * N1);  // (M × N1)
+        double *Kblock  = aligned_alloc_64(N1 * D);                        // (N1 × D)
         std::vector<double> diff(M);
 
 #pragma omp for schedule(dynamic, 4)
@@ -359,46 +476,31 @@ void kernel_gaussian_jacobian_t(const double *X1, const double *X2, const double
                 }
             }
 
-            // Output block for this 'b': columns [b*D : (b+1)*D), all rows a=0..N1-1
-            // K_out is (N1, N2*D) row-major, so K_out[a, b*D+d] = K_out[a*(N2*D) + b*D + d]
-            // We want to write column-blocks, which means writing to K_out + b*D with stride N2*D
-            
-            // Kblock(N1 × D) = W^T(N1 × M) @ J2b(M × D)
-            // W_local is (M × N1) row-major, so W^T is accessed via transpose
-            // Output: starting at column b*D of K_out
-            
-            // We need to write to K_out in a way that respects row-major layout
-            // K_out[a, b*D+d] is at offset a*(N2*D) + b*D + d
-            // For DGEMM, we'll compute into a temporary block then copy, OR
-            // use DGEMM with appropriate strides
-            
-            // Actually, let's compute into a temp block and copy
-            std::vector<double> Kblock(N1 * D);  // (N1 × D)
-            
             // DGEMM: Kblock(N1 × D) = W_local^T(N1 × M) @ J2b(M × D)
-            // W_local is (M × N1) row-major, J2b is (M × D) row-major
-            // CblasTrans on W_local gives us (N1 × M)
-            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, 
+            // W_local is (M × N1) row-major, transposed to (N1 × M)
+            // J2b is (M × D) row-major
+            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
                         static_cast<int>(N1),
-                        static_cast<int>(D), 
-                        static_cast<int>(M), 
-                        1.0, 
-                        W_local, static_cast<int>(N1),  // W is (M × N1), transposed to (N1 × M)
-                        J2b, static_cast<int>(D),        // J2b is (M × D)
-                        0.0, 
-                        Kblock.data(), static_cast<int>(D));  // Kblock is (N1 × D)
+                        static_cast<int>(D),
+                        static_cast<int>(M),
+                        1.0,
+                        W_local, static_cast<int>(N1),
+                        J2b, static_cast<int>(D),
+                        0.0,
+                        Kblock, static_cast<int>(D));
             
             // Copy Kblock to the appropriate columns of K_out
-            // K_out[a, b*D : (b+1)*D] = Kblock[a, :]
+            // K_out is (N1, N2*D) row-major: K_out[a, b*D : (b+1)*D] = Kblock[a, :]
             for (std::size_t a = 0; a < N1; ++a) {
                 double *K_row = K_out + a * (N2 * D) + b * D;
-                const double *Kblock_row = Kblock.data() + a * D;
+                const double *Kblock_row = Kblock + a * D;
                 std::memcpy(K_row, Kblock_row, D * sizeof(double));
             }
         }
         
-        // Free thread-local buffer
+        // Free thread-local buffers
         aligned_free_64(W_local);
+        aligned_free_64(Kblock);
     }
 
     // Restore BLAS threading

@@ -38,6 +38,7 @@
         #define OPENBLAS_USE64BITINT
     #endif
     #include <cblas.h>
+    #include <lapacke.h>  // provides LAPACKE_dsfrk and LAPACK_COL_MAJOR
 
 #endif
 
