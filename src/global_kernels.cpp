@@ -569,58 +569,56 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
     }
     t_phase1 = omp_get_wtime() - t_start;
 
-    // 2) Pack J1_hat (N1*D1 x M),  J2_all_cat (M x N2*D2)
+    // 2) Pack J1_hat (N1*D1 × M) and J2_hat (N2*D2 × M): same row-major layout.
+    //    Each row (a*D1+dj) of J1_hat is column dj of the (M×D1) Jacobian for molecule a.
     double t2_start = omp_get_wtime();
     double *J1_hat = aligned_alloc_64(big_rows * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
-        const double *__restrict J1 = dX1 + (a * M) * D1;  // (M x D1)
+        const double *__restrict J1 = dX1 + (a * M) * D1;
         for (std::size_t dj = 0; dj < D1; ++dj) {
             double *__restrict row = J1_hat + (a * D1 + dj) * M;
-// transpose column dj of (M x D1) → row of length M
 #pragma omp simd
             for (std::size_t i = 0; i < M; ++i)
                 row[i] = J1[i * D1 + dj];
         }
     }
 
-    double *J2_all_cat = aligned_alloc_64(M * big_cols);
-// Parallelize outer over b to keep writes mostly contiguous per thread
+    double *J2_hat = aligned_alloc_64(big_cols * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
-        const double *__restrict J2 = dX2 + (b * M) * D2;  // (M x D2)
-        for (std::size_t i = 0; i < M; ++i) {
-            std::memcpy(J2_all_cat + i * big_cols + b * D2, J2 + i * D2,
-                        D2 * sizeof(double));
+        const double *__restrict J2 = dX2 + (b * M) * D2;
+        for (std::size_t dj = 0; dj < D2; ++dj) {
+            double *__restrict row = J2_hat + (b * D2 + dj) * M;
+#pragma omp simd
+            for (std::size_t i = 0; i < M; ++i)
+                row[i] = J2[i * D2 + dj];
         }
     }
-    const int lda_J1 = (int)M;
-    const int ldb_J2cat = (int)big_cols;
-    const int ldc_H = (int)big_cols;
     t_phase2 = omp_get_wtime() - t2_start;
 
-    // 3) Base Gram for ALL blocks once: H_out = J1_hat @ J2_all_cat  (threaded BLAS)
+    // 3) No global Gram matrix. D1×D2 Gram blocks computed on-the-fly in phase 6.
+    //    Avoids writing/reading the big_rows × big_cols = (N1*D1)×(N2*D2) H_out,
+    //    which at N=1000, D=27 is 5.8 GB and bottlenecked by cold-page memory bandwidth.
     double t3_start = omp_get_wtime();
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, (int)big_rows, (int)big_cols, (int)M,
-                1.0, J1_hat, lda_J1, J2_all_cat, ldb_J2cat, 0.0, H_out, ldc_H);
-    t_phase3 = omp_get_wtime() - t3_start;
+    t_phase3 = omp_get_wtime() - t3_start;  // nothing to do
 
-    // 4) Projection tables: V1X2_all and V2X1_all  (threaded BLAS)
+    // 4) Projection tables: V1X2 = J1_hat @ X2^T (big_rows × N2),
+    //                        V2X1 = J2_hat @ X1^T (big_cols × N1)
     double t4_start = omp_get_wtime();
     double *V1X2_all = aligned_alloc_64(big_rows * N2);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)big_rows, (int)N2, (int)M, 1.0,
                 J1_hat, (int)M, X2, (int)M, 0.0, V1X2_all, (int)N2);
 
     double *V2X1_all = aligned_alloc_64(big_cols * N1);
-    cblas_dgemm(CblasRowMajor, CblasTrans, CblasTrans, (int)big_cols, (int)N1, (int)M, 1.0,
-                J2_all_cat, (int)big_cols, X1, (int)M, 0.0, V2X1_all, (int)N1);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)big_cols, (int)N1, (int)M, 1.0,
+                J2_hat, (int)M, X1, (int)M, 0.0, V2X1_all, (int)N1);
     t_phase4 = omp_get_wtime() - t4_start;
 
-    // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b  (parallelize outer loops)
+    // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b
     double t5_start = omp_get_wtime();
     std::vector<double> U1(N1 * D1), U2(N2 * D2);
 
-    // Disable BLAS threading for small DGEMV calls
 #if !defined(__APPLE__)
     int saved_blas_threads_phase5 = blas_get_num_threads();
     blas_set_num_threads(1);
@@ -648,71 +646,70 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
 
     t_phase5 = omp_get_wtime() - t5_start;
 
-    // 6) Per-block: scale Gram by C[a,b], then rank-1 correction via GER
+    // 6) All blocks: compute D1×D2 Gram on-the-fly per (a,b), fuse scale + rank-1 + write H_out.
+    //    Avoids ever writing the cold N1*D1 × N2*D2 global Gram matrix; each D1×D2 Gblk
+    //    (D=27: 5832 bytes) stays hot in L1 cache.
     double t6_start = omp_get_wtime();
     if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N2);  // reasonable default
+        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N2);
 
-    // Disable BLAS threading to avoid oversubscription with small operations
 #if !defined(__APPLE__)
     int saved_blas_threads = blas_get_num_threads();
     blas_set_num_threads(1);
-    const char* debug_env = std::getenv("KERNELFORGE_DEBUG");
-    if (debug_env && std::atoi(debug_env) != 0) {
-        printf("[DEBUG] Phase 6: Disabled BLAS threading (was %d threads, now 1)\n", saved_blas_threads);
-    }
 #endif
 
 #pragma omp parallel
     {
-        std::vector<double> v1(D1), v2(D2);  // private buffers per thread
+        double *Gblk = aligned_alloc_64(D1 * D2);  // thread-local D1×D2 Gram scratch
+        std::vector<double> v1(D1), v2(D2);
 
 #pragma omp for schedule(static)
         for (std::size_t a = 0; a < N1; ++a) {
-            const double *__restrict U1a = U1.data() + a * D1;
-            const double *__restrict V1X2a =
-                V1X2_all + (a * D1) * N2;  // (D1 x N2), row-major
+            const double *__restrict U1a    = U1.data() + a * D1;
+            const double *__restrict V1X2a  = V1X2_all + (a * D1) * N2;  // (D1×N2)
+            const double *__restrict J1a_hat = J1_hat + a * D1 * M;       // (D1×M)
 
             for (std::size_t b0 = 0; b0 < N2; b0 += tile_B) {
                 const std::size_t bend = std::min(N2, b0 + tile_B);
 
                 for (std::size_t b = b0; b < bend; ++b) {
-                    const double cab = C[a * N2 + b];
+                    const double cab  = C[a * N2 + b];
                     const double c4ab = C4[a * N2 + b];
 
-                    double *__restrict Hblk = H_out + (a * D1) * big_cols + b * D2;
+                    // Gram block: Gblk(D1×D2) = J1_hat[a*D1:, :] @ J2_hat[b*D2:, :]^T
+                    const double *__restrict J2b_hat = J2_hat + b * D2 * M;
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                (int)D1, (int)D2, (int)M,
+                                1.0, J1a_hat, (int)M, J2b_hat, (int)M,
+                                0.0, Gblk, (int)D2);
 
-                    // Scale Gram block by cab: D1 rows × D2 cols within the big row-major matrix
-                    for (std::size_t i = 0; i < D1; ++i) {
-                        cblas_dscal((int)D2, cab, Hblk + i * big_cols, 1);
-                    }
-
-// v1 = U1[a] - V1X2_all[aD1:(a+1)D1, b]
+                    // v1 = U1[a] - V1X2_all[aD1:(a+1)D1, b]
 #pragma omp simd
-                    for (std::size_t i = 0; i < D1; ++i) {
+                    for (std::size_t i = 0; i < D1; ++i)
                         v1[i] = U1a[i] - V1X2a[i * N2 + b];
-                    }
 
                     // v2 = V2X1_all[bD2:(b+1)D2, a] - U2[b]
-                    const double *__restrict U2b = U2.data() + b * D2;
-                    const double *__restrict V2X1col =
-                        V2X1_all + (b * D2) * N1 + a;  // column 'a' in row-major
+                    const double *__restrict U2b    = U2.data() + b * D2;
+                    const double *__restrict V2X1ba = V2X1_all + (b * D2) * N1 + a;  // col a
 #pragma omp simd
-                    for (std::size_t j = 0; j < D2; ++j) {
-                        v2[j] = V2X1col[j * N1] - U2b[j];
-                    }
+                    for (std::size_t j = 0; j < D2; ++j)
+                        v2[j] = V2X1ba[j * N1] - U2b[j];
 
-                    // Rank-1 correction: H(a,b) -= c4ab * v1 v2^T  (Level-2 BLAS)
-                    // Probably single-threaded
-                    cblas_dger(CblasRowMajor, (int)D1, (int)D2, -c4ab, v1.data(), 1, v2.data(), 1,
-                               Hblk, (int)big_cols);
+                    // Fused scale + rank-1 + write to H_out block
+                    double *__restrict Hblk = H_out + (a * D1) * big_cols + b * D2;
+                    for (std::size_t i = 0; i < D1; ++i) {
+                        double *__restrict Hrow = Hblk + i * big_cols;
+#pragma omp simd
+                        for (std::size_t j = 0; j < D2; ++j)
+                            Hrow[j] = Gblk[i * D2 + j] * cab - c4ab * v1[i] * v2[j];
+                    }
                 }
             }
         }
+        aligned_free_64(Gblk);
     }
     t_phase6 = omp_get_wtime() - t6_start;
 
-    // Restore BLAS threading
 #if !defined(__APPLE__)
     blas_set_num_threads(saved_blas_threads);
 #endif
@@ -740,7 +737,7 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
     // Free aligned allocations
     aligned_free_64(V2X1_all);
     aligned_free_64(V1X2_all);
-    aligned_free_64(J2_all_cat);
+    aligned_free_64(J2_hat);
     aligned_free_64(J1_hat);
     aligned_free_64(C4);
     aligned_free_64(C);
@@ -831,11 +828,11 @@ void kernel_gaussian_hessian_symm(
     }
     t_phase2 = omp_get_wtime() - t2_start;
 
-    // 3) Base Gram only lower: H_out := J_hat @ J_hat^T  via DSYRK (lower)
+    // 3) No global Gram matrix. D×D Gram blocks computed on-the-fly in phase 6.
+    //    Avoids allocating/writing/reading the BIG×BIG = (N*D)² H_out in phase 3/6,
+    //    which at N=1000, D=27 is 5.8 GB and bottlenecked by cold-page memory bandwidth.
     double t3_start = omp_get_wtime();
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, (int)BIG, (int)M, 1.0, J_hat,
-                (int)M, 0.0, H_out, (int)BIG);
-    t_phase3 = omp_get_wtime() - t3_start;
+    t_phase3 = omp_get_wtime() - t3_start;  // nothing to do
 
     // 4) Projection table V = J_hat @ X1^T  (BIG x N)
     double t4_start = omp_get_wtime();
@@ -848,7 +845,6 @@ void kernel_gaussian_hessian_symm(
     double t5_start = omp_get_wtime();
     std::vector<double> U(N * D);
 
-    // Disable BLAS threading for small DGEMV calls
 #if !defined(__APPLE__)
     int saved_blas_threads_phase5_symm = blas_get_num_threads();
     blas_set_num_threads(1);
@@ -857,7 +853,7 @@ void kernel_gaussian_hessian_symm(
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
         const double *__restrict x = X1 + a * M;
-        const double *__restrict Ja = dX1 + (a * M) * D;  // (M x D)
+        const double *__restrict Ja = dX1 + (a * M) * D;
         double *__restrict Ua = U.data() + a * D;
         cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D, 1.0, Ja, (int)D, x, 1, 0.0, Ua, 1);
     }
@@ -868,12 +864,13 @@ void kernel_gaussian_hessian_symm(
 
     t_phase5 = omp_get_wtime() - t5_start;
 
-    // 6) Per-block (lower triangle only): scale Gram by C[a,b], then rank-1 correction via GER
+    // 6) Lower-triangle blocks: compute D×D Gram on-the-fly per (a,b), fuse scale + rank-1.
+    //    Avoids ever writing the cold BIG×BIG global Gram matrix; each D×D Gblk
+    //    (D=27: 5832 bytes) stays hot in L1 cache.
     double t6_start = omp_get_wtime();
     if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);  // sane default tile width
+        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
 
-    // Disable BLAS threading to avoid oversubscription with small operations
 #if !defined(__APPLE__)
     int saved_blas_threads_symm = blas_get_num_threads();
     blas_set_num_threads(1);
@@ -881,65 +878,64 @@ void kernel_gaussian_hessian_symm(
 
 #pragma omp parallel
     {
-        std::vector<double> v1(D), v2(D);  // private buffers
+        double *Gblk = aligned_alloc_64(D * D);  // thread-local D×D Gram scratch
+        std::vector<double> v1(D), v2(D);
 
 #pragma omp for schedule(static)
         for (std::size_t a = 0; a < N; ++a) {
             const double *__restrict Ua = U.data() + a * D;
-            const double *__restrict Va = V + (a * D) * N;  // (D x N), row-major
+            const double *__restrict Va = V + (a * D) * N;
+            const double *__restrict Ja_hat = J_hat + a * D * M;  // (D×M)
 
             for (std::size_t b0 = 0; b0 < a + 1; b0 += tile_B) {
                 const std::size_t bend = std::min<std::size_t>(a + 1, b0 + tile_B);
 
                 for (std::size_t b = b0; b < bend; ++b) {
-                    const double cab = C[a * N + b];
+                    const double cab  = C[a * N + b];
                     const double c4ab = C4[a * N + b];
 
-                    // H(a,b) submatrix top-left
-                    double *__restrict Hblk = H_out + (a * D) * BIG + b * D;
+                    // Gram block: Gblk(D×D) = J_hat[a*D:(a+1)*D, :] @ J_hat[b*D:(b+1)*D, :]^T
+                    const double *__restrict Jb_hat = J_hat + b * D * M;
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                (int)D, (int)D, (int)M,
+                                1.0, Ja_hat, (int)M, Jb_hat, (int)M,
+                                0.0, Gblk, (int)D);
 
-                    // Scale Gram block by cab (row by row)
-                    for (std::size_t i = 0; i < D; ++i) {
-                        cblas_dscal((int)D, cab, Hblk + i * BIG, 1);
-                    }
-
-// v1 = U[a] - V[aD:(a+1)D, b]
+                    // v1 = U[a] - V[aD:(a+1)D, b]
 #pragma omp simd
-                    for (std::size_t i = 0; i < D; ++i) {
+                    for (std::size_t i = 0; i < D; ++i)
                         v1[i] = Ua[i] - Va[i * N + b];
-                    }
 
                     // v2 = V[bD:(b+1)D, a] - U[b]
                     const double *__restrict Ub = U.data() + b * D;
                     const double *__restrict Vb = V + (b * D) * N;
 #pragma omp simd
-                    for (std::size_t j = 0; j < D; ++j) {
+                    for (std::size_t j = 0; j < D; ++j)
                         v2[j] = Vb[j * N + a] - Ub[j];
-                    }
 
-                    // Rank-1 correction: H(a,b) -= c4ab * v1 v2^T
-                    cblas_dger(CblasRowMajor, (int)D, (int)D, -c4ab, v1.data(), 1, v2.data(), 1,
-                               Hblk, (int)BIG);
+                    // Fused scale + rank-1 correction, write lower-triangle block of H_out.
+                    // H_out[aD+i, bD+j] = Gblk[i,j]*cab - c4ab*v1[i]*v2[j]
+                    // Only the lower triangle is filled (consistent with original behaviour;
+                    // the caller/test only reads H_out[i,j] for j<=i).
+                    double *__restrict Hblk = H_out + (a * D) * BIG + b * D;
+                    for (std::size_t i = 0; i < D; ++i) {
+                        double *__restrict Hrow = Hblk + i * BIG;
+#pragma omp simd
+                        for (std::size_t j = 0; j < D; ++j)
+                            Hrow[j] = Gblk[i * D + j] * cab - c4ab * v1[i] * v2[j];
+                    }
                 }
             }
         }
+        aligned_free_64(Gblk);
     }
     t_phase6 = omp_get_wtime() - t6_start;
 
-    // Restore BLAS threading
 #if !defined(__APPLE__)
     blas_set_num_threads(saved_blas_threads_symm);
 #endif
 
-    // // 7) Mirror lower → upper
-    // for (std::size_t i = 0; i < BIG; ++i) {
-    //     const double* __restrict src = H_out + i*BIG;
-    //     for (std::size_t j = 0; j < i; ++j) {
-    //         H_out[j*BIG + i] = src[j];
-    //     }
-    // }
-
-    // Profiling output (can be controlled via environment variable)
+    // Profiling output
     const char* profile_env = std::getenv("KERNELFORGE_PROFILE");
     if (profile_env && std::atoi(profile_env) != 0) {
         double t_total = omp_get_wtime() - t_start;
@@ -950,16 +946,15 @@ void kernel_gaussian_hessian_symm(
             printf("Output size: %zu x %zu (lower triangle only)\n", BIG, BIG);
             printf("Phase 1 (distance coefficients):  %8.4f ms  (%5.1f%%)\n", t_phase1*1000, 100*t_phase1/t_total);
             printf("Phase 2 (pack Jacobians):          %8.4f ms  (%5.1f%%)\n", t_phase2*1000, 100*t_phase2/t_total);
-            printf("Phase 3 (base Gram DSYRK):         %8.4f ms  (%5.1f%%)\n", t_phase3*1000, 100*t_phase3/t_total);
+            printf("Phase 3 (base Gram):               %8.4f ms  (%5.1f%%)  [on-the-fly per block in phase 6]\n", t_phase3*1000, 100*t_phase3/t_total);
             printf("Phase 4 (projection table):        %8.4f ms  (%5.1f%%)\n", t_phase4*1000, 100*t_phase4/t_total);
             printf("Phase 5 (self projections):        %8.4f ms  (%5.1f%%)\n", t_phase5*1000, 100*t_phase5/t_total);
-            printf("Phase 6 (per-block corrections):   %8.4f ms  (%5.1f%%)\n", t_phase6*1000, 100*t_phase6/t_total);
+            printf("Phase 6 (per-block Gram+correct):  %8.4f ms  (%5.1f%%)\n", t_phase6*1000, 100*t_phase6/t_total);
             printf("TOTAL:                             %8.4f ms\n", t_total*1000);
             printf("===============================================\n\n");
         }
     }
 
-    // Free aligned allocations
     aligned_free_64(V);
     aligned_free_64(J_hat);
     aligned_free_64(C4);
@@ -1012,10 +1007,10 @@ void kernel_gaussian_hessian_symm_rfp(
     double t_start = omp_get_wtime();
     double t_phase1, t_phase2, t_phase3, t_phase4, t_phase5, t_phase6;
 
-    // Zero output
-    std::memset(H_rfp, 0, rfp_size * sizeof(double));
+    // NOTE: H_rfp is NOT zeroed here. Every element is written exactly once in
+    // phase 6, so a prior memset would only waste time on a cold 2.9 GB buffer.
 
-    // 1) Distances → C = K/s^2 and C4 = K/s^4
+    // 1) Distances → C = K/s^2 and C4 = K/s^4  (identical to hessian_symm)
     std::vector<double> n(N);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
@@ -1052,12 +1047,12 @@ void kernel_gaussian_hessian_symm_rfp(
     }
     t_phase1 = omp_get_wtime() - t_start;
 
-    // 2) Pack J_hat (N*D x M) from dX1 (N,M,D): row i=(a*D+dj) is column dj of (M x D)
+    // 2) Pack J_hat (N*D x M): row (a*D+dj) = column dj of J_a  (identical to hessian_symm)
     double t2_start = omp_get_wtime();
     double *J_hat = aligned_alloc_64(BIG * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
-        const double *__restrict J = dX1 + (a * M) * D;  // (M x D)
+        const double *__restrict J = dX1 + (a * M) * D;
         for (std::size_t dj = 0; dj < D; ++dj) {
             double *__restrict row = J_hat + (a * D + dj) * M;
 #pragma omp simd
@@ -1067,53 +1062,50 @@ void kernel_gaussian_hessian_symm_rfp(
     }
     t_phase2 = omp_get_wtime() - t2_start;
 
-    // 3) Base Gram lower triangle via DSYRK, but we compute to temp full matrix first
-    // (DSYRK only writes lower, we need both for the loop below)
+    // 3) No global Gram matrix allocated here.
+    //    The D×D Gram block for each (a,b) pair is computed on-the-fly in phase 6
+    //    via a small DGEMM (D×M) @ (M×D) → (D×D), using a thread-local scratch buffer.
+    //    This avoids allocating the BIG×BIG = (N*D)² temp matrix (~5.8 GB for N=1000,D=27)
+    //    that the previous implementation used, and eliminates its ~2.4 GB/s-limited memset.
     double t3_start = omp_get_wtime();
-    double *H_temp = aligned_alloc_64(BIG * BIG);
-    std::memset(H_temp, 0, BIG * BIG * sizeof(double));
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, (int)BIG, (int)M, 1.0, J_hat,
-                (int)M, 0.0, H_temp, (int)BIG);
-    t_phase3 = omp_get_wtime() - t3_start;
+    t_phase3 = omp_get_wtime() - t3_start;  // nothing to do
 
-    // 4) Projection table V = J_hat @ X1^T  (BIG x N)
+    // 4) Projection table V = J_hat @ X1^T  (BIG x N)  (identical to hessian_symm)
     double t4_start = omp_get_wtime();
     double *V = aligned_alloc_64(BIG * N);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)BIG, (int)N, (int)M, 1.0,
                 J_hat, (int)M, X1, (int)M, 0.0, V, (int)N);
     t_phase4 = omp_get_wtime() - t4_start;
 
-    // 5) Self projections: U[a] = J_a^T x_a  (N x D)
+    // 5) Self projections: U[a] = J_a^T x_a  (N x D)  (identical to hessian_symm)
     double t5_start = omp_get_wtime();
     std::vector<double> U(N * D);
 
-    // Disable BLAS threading for small DGEMV calls
 #if !defined(__APPLE__)
-    int saved_blas_threads_phase5_symm = blas_get_num_threads();
+    int saved_blas_threads_phase5 = blas_get_num_threads();
     blas_set_num_threads(1);
 #endif
 
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
         const double *__restrict x = X1 + a * M;
-        const double *__restrict Ja = dX1 + (a * M) * D;  // (M x D)
+        const double *__restrict Ja = dX1 + (a * M) * D;
         double *__restrict Ua = U.data() + a * D;
         cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D, 1.0, Ja, (int)D, x, 1, 0.0, Ua, 1);
     }
 
 #if !defined(__APPLE__)
-    blas_set_num_threads(saved_blas_threads_phase5_symm);
+    blas_set_num_threads(saved_blas_threads_phase5);
 #endif
 
     t_phase5 = omp_get_wtime() - t5_start;
 
-    // 6) Per-block (lower triangle only): scale Gram by C[a,b], then rank-1 correction via GER
-    // Then write to RFP format
+    // 6) Per-block lower-triangle: compute D×D Gram on-the-fly, apply scaling +
+    //    rank-1 correction, write directly to RFP. No H_temp needed.
     double t6_start = omp_get_wtime();
     if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);  // sane default tile width
+        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
 
-    // Disable BLAS threading to avoid oversubscription with small operations
 #if !defined(__APPLE__)
     int saved_blas_threads_symm = blas_get_num_threads();
     blas_set_num_threads(1);
@@ -1121,69 +1113,65 @@ void kernel_gaussian_hessian_symm_rfp(
 
 #pragma omp parallel
     {
-        std::vector<double> v1(D), v2(D);  // private buffers
+        // Thread-local scratch: D×D Gram block + v1/v2 correction vectors
+        double *Gblk = aligned_alloc_64(D * D);
+        std::vector<double> v1(D), v2(D);
 
 #pragma omp for schedule(static)
         for (std::size_t a = 0; a < N; ++a) {
             const double *__restrict Ua = U.data() + a * D;
-            const double *__restrict Va = V + (a * D) * N;  // (D x N), row-major
+            const double *__restrict Va = V + (a * D) * N;
+            // J_hat rows for block a: J_hat + a*D*M, shape (D × M)
+            const double *__restrict Ja_hat = J_hat + a * D * M;
 
             for (std::size_t b0 = 0; b0 < a + 1; b0 += tile_B) {
                 const std::size_t bend = std::min<std::size_t>(a + 1, b0 + tile_B);
 
                 for (std::size_t b = b0; b < bend; ++b) {
-                    const double cab = C[a * N + b];
+                    const double cab  = C[a * N + b];
                     const double c4ab = C4[a * N + b];
 
-                    // H(a,b) submatrix from temp matrix
-                    const double *__restrict Hblk_src = H_temp + (a * D) * BIG + b * D;
+                    // Compute Gram block: Gblk(D×D) = J_hat[a*D:(a+1)*D, :] @ J_hat[b*D:(b+1)*D, :]^T
+                    // J_hat rows are (D×M) for each molecule block.
+                    const double *__restrict Jb_hat = J_hat + b * D * M;
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                (int)D, (int)D, (int)M,
+                                1.0, Ja_hat, (int)M, Jb_hat, (int)M,
+                                0.0, Gblk, (int)D);
 
                     // v1 = U[a] - V[aD:(a+1)D, b]
 #pragma omp simd
-                    for (std::size_t i = 0; i < D; ++i) {
+                    for (std::size_t i = 0; i < D; ++i)
                         v1[i] = Ua[i] - Va[i * N + b];
-                    }
 
                     // v2 = V[bD:(b+1)D, a] - U[b]
                     const double *__restrict Ub = U.data() + b * D;
                     const double *__restrict Vb = V + (b * D) * N;
 #pragma omp simd
-                    for (std::size_t j = 0; j < D; ++j) {
+                    for (std::size_t j = 0; j < D; ++j)
                         v2[j] = Vb[j * N + a] - Ub[j];
-                    }
 
-                    // Apply scaling and rank-1 correction, write to RFP
+                    // Apply scaling + rank-1 correction and write to RFP.
+                    // Global indices: row = a*D+i, col = b*D+j, row >= col for lower tri.
+                    // For a > b all entries are lower-tri (row >= col always).
+                    // For a == b only lower triangle (i >= j) is written.
                     for (std::size_t i = 0; i < D; ++i) {
-                        for (std::size_t j = 0; j < D; ++j) {
-                            const std::size_t row = a * D + i;
+                        const std::size_t row = a * D + i;
+                        const std::size_t j_max = (a == b) ? (i + 1) : D;
+                        for (std::size_t j = 0; j < j_max; ++j) {
                             const std::size_t col = b * D + j;
-                            
-                            // Read from temp (only lower triangle is valid from DSYRK)
-                            double val;
-                            if (row >= col) {
-                                val = Hblk_src[i * BIG + j];
-                            } else {
-                                // Transpose access
-                                val = H_temp[col * BIG + row];
-                            }
-                            
-                            // Apply transformations
-                            val = val * cab - c4ab * v1[i] * v2[j];
-                            
-                            // Write to RFP (store lower triangle only)
-                            if (row >= col) {
-                                const std::size_t idx = rfp_index_upper_N(BIG, col, row);
-                                H_rfp[idx] = val;
-                            }
+                            const double val = Gblk[i * D + j] * cab - c4ab * v1[i] * v2[j];
+                            // RFP upper: rfp_index_upper_N(BIG, col, row) with col <= row
+                            H_rfp[rfp_index_upper_N(BIG, col, row)] = val;
                         }
                     }
                 }
             }
         }
+        aligned_free_64(Gblk);
     }
     t_phase6 = omp_get_wtime() - t6_start;
 
-    // Restore BLAS threading
 #if !defined(__APPLE__)
     blas_set_num_threads(saved_blas_threads_symm);
 #endif
@@ -1196,21 +1184,19 @@ void kernel_gaussian_hessian_symm_rfp(
         {
             printf("\n=== kernel_gaussian_hessian_symm_rfp profiling ===\n");
             printf("Problem size: N=%zu, M=%zu, D=%zu\n", N, M, D);
-            printf("Output size: %zu (RFP packed, saves %.1f%% memory)\n", 
+            printf("Output size: %zu (RFP packed, saves %.1f%% memory)\n",
                    rfp_size, 100.0 * (1.0 - 0.5*(BIG+1)/BIG));
             printf("Phase 1 (distance coefficients):  %8.4f ms  (%5.1f%%)\n", t_phase1*1000, 100*t_phase1/t_total);
             printf("Phase 2 (pack Jacobians):          %8.4f ms  (%5.1f%%)\n", t_phase2*1000, 100*t_phase2/t_total);
-            printf("Phase 3 (base Gram DSYRK):         %8.4f ms  (%5.1f%%)\n", t_phase3*1000, 100*t_phase3/t_total);
+            printf("Phase 3 (base Gram):               %8.4f ms  (%5.1f%%)  [on-the-fly per block in phase 6]\n", t_phase3*1000, 100*t_phase3/t_total);
             printf("Phase 4 (projection table):        %8.4f ms  (%5.1f%%)\n", t_phase4*1000, 100*t_phase4/t_total);
             printf("Phase 5 (self projections):        %8.4f ms  (%5.1f%%)\n", t_phase5*1000, 100*t_phase5/t_total);
-            printf("Phase 6 (per-block corrections):   %8.4f ms  (%5.1f%%)\n", t_phase6*1000, 100*t_phase6/t_total);
+            printf("Phase 6 (per-block Gram+correct):  %8.4f ms  (%5.1f%%)\n", t_phase6*1000, 100*t_phase6/t_total);
             printf("TOTAL:                             %8.4f ms\n", t_total*1000);
             printf("====================================================\n\n");
         }
     }
 
-    // Free allocations
-    aligned_free_64(H_temp);
     aligned_free_64(V);
     aligned_free_64(J_hat);
     aligned_free_64(C4);

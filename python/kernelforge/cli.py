@@ -353,7 +353,7 @@ def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
 def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_hessian_symm_rfp using ethanol inverse distance (N=200, ~2s)."""
     data = load_ethanol_raw_data()
-    n = 500
+    n = 1000
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
@@ -385,7 +385,7 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
 def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_hessian_symm using ethanol inverse distance (N=200, ~2s)."""
     data = load_ethanol_raw_data()
-    n = 500
+    n = 1000
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
@@ -417,7 +417,7 @@ def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
 def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
     """Benchmark global kernel_gaussian_hessian using ethanol inverse distance (N=300, ~2s)."""
     data = load_ethanol_raw_data()
-    n = 500
+    n = 1000
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
