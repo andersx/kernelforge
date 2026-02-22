@@ -310,11 +310,11 @@ def benchmark_global_kernel_gaussian_symm() -> tuple[float, str]:
     data = load_ethanol_raw_data()
     n = 1000
     R = data["R"][:n]
-    
+
     # Generate inverse distance representations
     X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
     X = np.array(X_list)
-    
+
     rep_size = X.shape[1]
     alpha = 0.5 / (rep_size * 2.0)
 
@@ -330,11 +330,11 @@ def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     data = load_ethanol_raw_data()
     n = 1000
     R = data["R"][:n]
-    
+
     # Generate inverse distance representations
     X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
     X = np.array(X_list)
-    
+
     rep_size = X.shape[1]
     alpha = 0.5 / (rep_size * 2.0)
 
@@ -350,15 +350,15 @@ def benchmark_global_kernel_gaussian() -> tuple[float, str]:
     data = load_ethanol_raw_data()
     n = 1000
     R = data["R"][:n]
-    
+
     # Generate inverse distance representations
     X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
     X = np.array(X_list)
-    
+
     n_train = 500
     X1 = X[:n_train]
     X2 = X[n_train:]
-    
+
     rep_size = X.shape[1]
     alpha = 0.5 / (rep_size * 2.0)
 
@@ -366,7 +366,10 @@ def benchmark_global_kernel_gaussian() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian(X1, X2, alpha)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, Ethanol)"
+    return (
+        elapsed,
+        f"global::kernel_gaussian (N1={n_train}, N2={n - n_train}, rep_size={rep_size}, Ethanol)",
+    )
 
 
 def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
@@ -376,7 +379,7 @@ def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
-    
+
     # Generate inverse distance representations and Jacobians
     X_list = []
     dX_list = []
@@ -384,15 +387,15 @@ def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
         x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
         X_list.append(x)
         dX_list.append(dx)
-    
+
     X = np.array(X_list)
     dX = np.array(dX_list)
-    
+
     n_train = 300
     X1 = X[:n_train]
     dX1 = dX[:n_train]
     X2 = X[n_train:]
-    
+
     rep_size = X.shape[1]
     sigma = 2.0
 
@@ -400,7 +403,10 @@ def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_jacobian (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
+    return (
+        elapsed,
+        f"global::kernel_gaussian_jacobian (N1={n_train}, N2={n - n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
 
 
 def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
@@ -410,7 +416,7 @@ def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
-    
+
     # Generate inverse distance representations and Jacobians
     X_list = []
     dX_list = []
@@ -418,15 +424,15 @@ def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
         x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
         X_list.append(x)
         dX_list.append(dx)
-    
+
     X = np.array(X_list)
     dX = np.array(dX_list)
-    
+
     n_train = 700
     X1 = X[:n_train]
     X2 = X[n_train:]
     dX2 = dX[n_train:]
-    
+
     rep_size = X.shape[1]
     sigma = 2.0
 
@@ -434,7 +440,10 @@ def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_jacobian_t (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
+    return (
+        elapsed,
+        f"global::kernel_gaussian_jacobian_t (N1={n_train}, N2={n - n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
 
 
 def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
@@ -444,7 +453,7 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
-    
+
     # Generate inverse distance representations and Jacobians
     X_list = []
     dX_list = []
@@ -452,10 +461,10 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
         x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
         X_list.append(x)
         dX_list.append(dx)
-    
+
     X = np.array(X_list)
     dX = np.array(dX_list)
-    
+
     rep_size = X.shape[1]
     sigma = 2.5
 
@@ -463,7 +472,10 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian_symm_rfp (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
 
 
 def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
@@ -473,7 +485,7 @@ def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
-    
+
     # Generate inverse distance representations and Jacobians
     X_list = []
     dX_list = []
@@ -481,10 +493,10 @@ def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
         x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
         X_list.append(x)
         dX_list.append(dx)
-    
+
     X = np.array(X_list)
     dX = np.array(dX_list)
-    
+
     rep_size = X.shape[1]
     sigma = 2.5
 
@@ -492,7 +504,10 @@ def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian_symm(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian_symm (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
 
 
 def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
@@ -507,8 +522,10 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, rep_size={M}, n_atoms={D//3})"
-
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian_symm_rfp (N={N}, rep_size={M}, n_atoms={D // 3})",
+    )
 
 
 def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
@@ -518,7 +535,7 @@ def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
     R = data["R"][:n]
     z = data["z"]
     n_atoms = len(z)
-    
+
     # Generate inverse distance representations and Jacobians
     X_list = []
     dX_list = []
@@ -526,16 +543,16 @@ def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
         x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
         X_list.append(x)
         dX_list.append(dx)
-    
+
     X = np.array(X_list)
     dX = np.array(dX_list)
-    
+
     n_train = 150
     X1 = X[:n_train]
     dX1 = dX[:n_train]
     X2 = X[n_train:]
     dX2 = dX[n_train:]
-    
+
     rep_size = X.shape[1]
     sigma = 2.5
 
@@ -543,7 +560,10 @@ def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian (N1={n_train}, N2={n-n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)"
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian (N1={n_train}, N2={n - n_train}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
 
 
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
@@ -559,8 +579,7 @@ def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
-
+    return elapsed, f"local::kernel_gaussian_symm_rfp (Ethanol, N={n})"
 
 
 def benchmark_local_kernel_gaussian_symm() -> tuple[float, str]:
@@ -576,7 +595,7 @@ def benchmark_local_kernel_gaussian_symm() -> tuple[float, str]:
     _ = kernel_gaussian_symm(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_symm (Ethanol, N={n})"
+    return elapsed, f"local::kernel_gaussian_symm (Ethanol, N={n})"
 
 
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
@@ -592,8 +611,7 @@ def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
-
+    return elapsed, f"local::kernel_gaussian_symm_rfp (Ethanol, N={n})"
 
 
 def benchmark_local_kernel_gaussian() -> tuple[float, str]:
@@ -614,7 +632,7 @@ def benchmark_local_kernel_gaussian() -> tuple[float, str]:
     _ = kernel_gaussian(X_train, X_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian (Ethanol, N1={n_train}, N2={n - n_train})"
+    return elapsed, f"local::kernel_gaussian (Ethanol, N1={n_train}, N2={n - n_train})"
 
 
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
@@ -630,8 +648,7 @@ def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
-
+    return elapsed, f"local::kernel_gaussian_symm_rfp (Ethanol, N={n})"
 
 
 def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
@@ -654,7 +671,7 @@ def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
     _ = kernel_gaussian_jacobian(X_train, X_test, dX_test, Q_train, Q_test, N_train, N_test, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_jacobian (Ethanol, N1={n_train}, N2={n - n_train})"
+    return elapsed, f"local::kernel_gaussian_jacobian (Ethanol, N1={n_train}, N2={n - n_train})"
 
 
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
@@ -670,8 +687,7 @@ def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
-
+    return elapsed, f"local::kernel_gaussian_symm_rfp (Ethanol, N={n})"
 
 
 def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
@@ -688,7 +704,7 @@ def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     _ = kernel_gaussian_hessian_symm(X, dX, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_hessian_symm (Ethanol, N={n})"
+    return elapsed, f"local::kernel_gaussian_hessian_symm (Ethanol, N={n})"
 
 
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
@@ -704,8 +720,7 @@ def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
     _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
-
+    return elapsed, f"local::kernel_gaussian_symm_rfp (Ethanol, N={n})"
 
 
 def benchmark_local_kernel_gaussian_hessian() -> tuple[float, str]:
@@ -730,7 +745,7 @@ def benchmark_local_kernel_gaussian_hessian() -> tuple[float, str]:
     )
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"kernel_gaussian_hessian (Ethanol, N1={n_train}, N2={n - n_train})"
+    return elapsed, f"local::kernel_gaussian_hessian (Ethanol, N1={n_train}, N2={n - n_train})"
 
 
 def benchmark_rff_features() -> tuple[float, str]:
@@ -745,7 +760,7 @@ def benchmark_rff_features() -> tuple[float, str]:
     _ = rff_features(X, W, b)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_features (N={N}, rep_size={rep_size}, D={D})"
+    return elapsed, f"rff::rff_features (N={N}, rep_size={rep_size}, D={D})"
 
 
 def _make_qm7b_elemental_inputs(n_mols: int, D: int, rng: np.random.Generator) -> dict[str, Any]:
@@ -787,7 +802,7 @@ def benchmark_rff_features_elemental() -> tuple[float, str]:
     _ = rff_features_elemental(X, Q, W, b)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_features_elemental (N=100, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_features_elemental (N=100, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gradient_elemental() -> tuple[float, str]:
@@ -805,7 +820,7 @@ def benchmark_rff_gradient_elemental() -> tuple[float, str]:
     _ = rff_gradient_elemental(X, dX, Q, W, b)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_gradient_elemental (N={n_mols}, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gradient_elemental (N={n_mols}, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gramian_elemental() -> tuple[float, str]:
@@ -822,7 +837,7 @@ def benchmark_rff_gramian_elemental() -> tuple[float, str]:
     _ = rff_gramian_elemental(X, Q, W, b, Y)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_gramian_elemental (N={n_mols}, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gramian_elemental (N={n_mols}, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gramian_elemental_gradient() -> tuple[float, str]:
@@ -844,7 +859,7 @@ def benchmark_rff_gramian_elemental_gradient() -> tuple[float, str]:
     _ = rff_gramian_elemental_gradient(X, dX, Q, W, b, Y, F)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff_gramian_elemental_gradient (N={n_mols}, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gramian_elemental_gradient (N={n_mols}, D={D}, QM7b-like)"
 
 
 BENCHMARKS = {
@@ -945,7 +960,7 @@ def print_header(suite_name: str) -> None:
 def print_result(bench_name: str, elapsed_ms: float, description: str) -> None:
     """Print a single benchmark result."""
     elapsed_s = elapsed_ms / 1000.0
-    print(f"  {description:<50} {elapsed_s:>8.4f} s")
+    print(f"  {description:<70} {elapsed_s:>8.4f} s")
 
 
 def print_footer(total_ms: float, count: int) -> None:
