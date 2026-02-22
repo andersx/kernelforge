@@ -95,12 +95,9 @@ def demo_large_kernel_rfp(n=50_000, d=128, sigma=1.0, regularize=1e-6):
     assert K_rfp.shape[0] == n * (n + 1) // 2
 
     # Solve kernel ridge regression using RFP Cholesky
-    print(f"\nSolving Kα = y using RFP Cholesky (regularize={regularize})...")
-    # Note: solve_cholesky_rfp_L overwrites K_rfp, so we pass a copy
-    K_rfp_copy = K_rfp.copy()
-    alpha_coeffs = km.solve_cholesky_rfp_L(
-        K_rfp_copy, y, regularize=regularize, uplo="U", transr="N"
-    )
+    # cho_solve_rfp overwrites K_rfp, so pass a copy to preserve the original
+    print(f"\nSolving Kα = y using RFP Cholesky (l2={regularize})...")
+    alpha_coeffs = km.cho_solve_rfp(K_rfp.copy(), y, l2=regularize)
 
     print(f"  Solution α shape: {alpha_coeffs.shape}")
     print(f"  α min/max: [{alpha_coeffs.min():.6f}, {alpha_coeffs.max():.6f}]")

@@ -548,7 +548,7 @@ def test_cho_solve_rfp_basic():
 
     y = rng.standard_normal(N)
 
-    # Solve via cho_solve_rfp — does NOT modify K_rfp (internal copy)
+    # Solve via cho_solve_rfp — overwrites K_rfp with Cholesky factor
     alpha = kernelmath.cho_solve_rfp(K_rfp, y, l2=l2)
     assert alpha.shape == (N,)
 
@@ -557,51 +557,6 @@ def test_cho_solve_rfp_basic():
     K_reg = K_full + l2 * np.eye(N)
     residual = np.linalg.norm(K_reg @ alpha - y)
     assert residual < 1e-5, f"Residual {residual:.2e} too large"
-
-
-def test_cho_solve_rfp_does_not_modify_input():
-    """cho_solve_rfp must NOT modify its K_rfp input (unlike solve_cholesky_rfp_L)."""
-    N = 15
-    sigma = 1.0
-    X, _ = _load_ethanol(N)
-    from kernelforge.global_kernels import kernel_gaussian_symm_rfp
-
-    K_rfp = kernel_gaussian_symm_rfp(X, -1.0 / (2.0 * sigma**2))
-    K_rfp_original = K_rfp.copy()
-
-    rng = np.random.default_rng(7)
-    y = rng.standard_normal(N)
-
-    kernelmath.cho_solve_rfp(K_rfp, y, l2=1e-6)
-
-    np.testing.assert_array_equal(
-        K_rfp, K_rfp_original, err_msg="cho_solve_rfp modified its K_rfp input"
-    )
-
-
-def test_cho_solve_rfp_matches_solve_cholesky_rfp_L():
-    """cho_solve_rfp gives the same result as solve_cholesky_rfp_L with explicit copy."""
-    N = 20
-    sigma = 1.0
-    l2 = 1e-5
-    X, _ = _load_ethanol(N)
-    from kernelforge.global_kernels import kernel_gaussian_symm_rfp
-
-    K_rfp = kernel_gaussian_symm_rfp(X, -1.0 / (2.0 * sigma**2))
-
-    rng = np.random.default_rng(99)
-    y = rng.standard_normal(N)
-
-    alpha_new = kernelmath.cho_solve_rfp(K_rfp, y, l2=l2)
-    alpha_old = kernelmath.solve_cholesky_rfp_L(K_rfp.copy(), y, regularize=l2, uplo="U")
-
-    np.testing.assert_allclose(
-        alpha_new,
-        alpha_old,
-        rtol=1e-14,
-        atol=1e-14,
-        err_msg="cho_solve_rfp disagrees with solve_cholesky_rfp_L",
-    )
 
 
 def test_cho_solve_rfp_zero_l2():
