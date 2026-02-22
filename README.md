@@ -160,8 +160,8 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Setup GHA to build PyPI wheels
   - [x] Test Linux build matrices
   - [x] Test MacOS build matrices
-  - [ ] Test Windows build matrices
-  - [x] Add build for all Python version >=3.11
+  - [ ] ~~Test Windows build matrices~~ No.
+  - [x] Add build for all Python version >=3.10
   - [ ] Plan structure for saving models for inference as `.npz` files
 - Ensure correct linking with optimized BLAS/LAPACK libraries:
   - [x] OpenBLAS (Linux) <- also used in wheels
@@ -170,10 +170,11 @@ The goal is to remove pain-points of existing QML libraries
 - Add global kernels:
   - [x] Gaussian kernel
   - [x] Jacobian/gradient kernel
-  - [ ] Optimized Jacobian kernel for single inference
+  - [ ] Optimized kernel for single inference (for MD)
   - [x] Hessian kernel
   - [x] GDML-like kernel
-  - [ ] Full GPR kernel
+  - [x] Full GPR kernel
+  - [x] All kernels in RFP format
 - Add local kernels:
   - [x] Gaussian kernel
   - [x] Jacobian/gradient kernel
@@ -182,10 +183,10 @@ The goal is to remove pain-points of existing QML libraries
   - [ ] Full GPR kernel
   - [ ] Optimized GPR kernel with pre-computed terms for single inference/MD
 - Add random Fourier features kernel code:
-  - [ ] Fourier-basis sampler
-  - [ ] RFF kernel
-  - [ ] RFF gradient kernel
-  - [ ] RFF chunked DSYRK kernel
+  - [ ] Fourier-basis sampler in C++ with OpenMP parallelization
+  - [x] RFF kernel
+  - [x] RFF gradient kernel
+  - [x] RFF chunked DSYRK kernel
   - [ ] Optimized RFF gradient kernel for single inference/MD
   - The same as above, just for Hadamard features when I find the time?
 - GDML and sGDML kernels:
@@ -204,6 +205,7 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Cholesky in-place solver
     - [x] L2-reg kwarg
     - [x] Toggle destructive vs non-destructive
+  - [x] RFP format in-place Cholesky solver
   - [ ] QR and/or SVD for non-square matrices
 - Add moleular descriptors with derivatives:
   - [ ] Coulomb matrix + misc variants without derivatives
