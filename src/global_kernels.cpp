@@ -287,12 +287,12 @@ void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::si
     const double gemm_alpha = -2.0 * alpha;
     const double gemm_beta = 0.0;
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                static_cast<int>(n1),                 // M
-                static_cast<int>(n2),                 // N
-                static_cast<int>(d),                  // K
-                gemm_alpha, X1, static_cast<int>(d),  // A, lda
-                X2, static_cast<int>(d),              // B, ldb  (Trans)
-                gemm_beta, K, static_cast<int>(n2));  // C
+                static_cast<blas_int>(n1),                 // M
+                static_cast<blas_int>(n2),                 // N
+                static_cast<blas_int>(d),                  // K
+                gemm_alpha, X1, static_cast<blas_int>(d),  // A, lda
+                X2, static_cast<blas_int>(d),              // B, ldb  (Trans)
+                gemm_beta, K, static_cast<blas_int>(n2));  // C
 
     // 2) Rowwise self norms
     std::vector<double> nrm1(n1), nrm2(n2);
@@ -303,12 +303,12 @@ void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::si
     std::vector<double> one_n1(n1, 1.0), one_n2(n2, 1.0);
 
     // 3) K += alpha * (ones_n2 * nrm1^T)   => GER(m=n1, n=n2)
-    cblas_dger(CblasRowMajor, static_cast<int>(n1), static_cast<int>(n2), alpha, one_n1.data(), 1,
-               nrm2.data(), 1, K, static_cast<int>(n2));
+    cblas_dger(CblasRowMajor, static_cast<blas_int>(n1), static_cast<blas_int>(n2), alpha, one_n1.data(), 1,
+               nrm2.data(), 1, K, static_cast<blas_int>(n2));
 
     // 4) K += alpha * (nrm2 * ones_n1^T)
-    cblas_dger(CblasRowMajor, static_cast<int>(n1), static_cast<int>(n2), alpha, nrm1.data(), 1,
-               one_n2.data(), 1, K, static_cast<int>(n2));
+    cblas_dger(CblasRowMajor, static_cast<blas_int>(n1), static_cast<blas_int>(n2), alpha, nrm1.data(), 1,
+               one_n2.data(), 1, K, static_cast<blas_int>(n2));
 
     // 5) Elementwise exp
     const std::size_t total = n2 * n1;
@@ -377,9 +377,9 @@ void kernel_gaussian_jacobian(const double *X1, const double *dX1, const double 
             // J1a is (M x D) row-major in memory.
             // Row-major DGEMM: op(A)=A^T ⇒ (D x M), lda = D; B=W (M x N2), ldb=N2; C(Kblock) (D x N2),
             // ldc=N2
-            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, static_cast<int>(D),
-                        static_cast<int>(N2), static_cast<int>(M), 1.0, J1a, static_cast<int>(D),
-                        W_local, static_cast<int>(N2), 0.0, Kblock, static_cast<int>(N2));
+            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, static_cast<blas_int>(D),
+                        static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0, J1a, static_cast<blas_int>(D),
+                        W_local, static_cast<blas_int>(N2), 0.0, Kblock, static_cast<blas_int>(N2));
         }
         
         // Free thread-local buffer
@@ -465,14 +465,14 @@ void kernel_gaussian_jacobian_t(const double *X1, const double *X2, const double
             // W_local is (M × N1) row-major, transposed to (N1 × M)
             // J2b is (M × D) row-major
             cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                        static_cast<int>(N1),
-                        static_cast<int>(D),
-                        static_cast<int>(M),
+                        static_cast<blas_int>(N1),
+                        static_cast<blas_int>(D),
+                        static_cast<blas_int>(M),
                         1.0,
-                        W_local, static_cast<int>(N1),
-                        J2b, static_cast<int>(D),
+                        W_local, static_cast<blas_int>(N1),
+                        J2b, static_cast<blas_int>(D),
                         0.0,
-                        Kblock, static_cast<int>(D));
+                        Kblock, static_cast<blas_int>(D));
             
             // Copy Kblock to the appropriate columns of K_out
             // K_out is (N1, N2*D) row-major: K_out[a, b*D : (b+1)*D] = Kblock[a, :]
@@ -560,8 +560,8 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
 
     // S = X1 @ X2^T  (N1 x N2)  ← let BLAS thread this
     double *S = aligned_alloc_64(N1 * N2);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)N1, (int)N2, (int)M, 1.0, X1, (int)M,
-                X2, (int)M, 0.0, S, (int)N2);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(N1), static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0, X1, static_cast<blas_int>(M),
+                X2, static_cast<blas_int>(M), 0.0, S, static_cast<blas_int>(N2));
 
     // C, C4
     double *C = aligned_alloc_64(N1 * N2);
@@ -615,12 +615,12 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
     //                        V2X1 = J2_hat @ X1^T (big_cols × N1)
     double t4_start = omp_get_wtime();
     double *V1X2_all = aligned_alloc_64(big_rows * N2);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)big_rows, (int)N2, (int)M, 1.0,
-                J1_hat, (int)M, X2, (int)M, 0.0, V1X2_all, (int)N2);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big_rows), static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0,
+                J1_hat, static_cast<blas_int>(M), X2, static_cast<blas_int>(M), 0.0, V1X2_all, static_cast<blas_int>(N2));
 
     double *V2X1_all = aligned_alloc_64(big_cols * N1);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)big_cols, (int)N1, (int)M, 1.0,
-                J2_hat, (int)M, X1, (int)M, 0.0, V2X1_all, (int)N1);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big_cols), static_cast<blas_int>(N1), static_cast<blas_int>(M), 1.0,
+                J2_hat, static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V2X1_all, static_cast<blas_int>(N1));
     t_phase4 = omp_get_wtime() - t4_start;
 
     // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b
@@ -636,7 +636,7 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
     for (std::size_t a = 0; a < N1; ++a) {
         const double *__restrict x1 = X1 + a * M;
         const double *__restrict J1 = dX1 + (a * M) * D1;
-        cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D1, 1.0, J1, (int)D1, x1, 1, 0.0,
+        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D1), 1.0, J1, static_cast<blas_int>(D1), x1, 1, 0.0,
                     U1.data() + a * D1, 1);
     }
 
@@ -644,7 +644,7 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
     for (std::size_t b = 0; b < N2; ++b) {
         const double *__restrict x2 = X2 + b * M;
         const double *__restrict J2 = dX2 + (b * M) * D2;
-        cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D2, 1.0, J2, (int)D2, x2, 1, 0.0,
+        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D2), 1.0, J2, static_cast<blas_int>(D2), x2, 1, 0.0,
                     U2.data() + b * D2, 1);
     }
 
@@ -687,9 +687,9 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
                     // Gram block: Gblk(D1×D2) = J1_hat[a*D1:, :] @ J2_hat[b*D2:, :]^T
                     const double *__restrict J2b_hat = J2_hat + b * D2 * M;
                     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                (int)D1, (int)D2, (int)M,
-                                1.0, J1a_hat, (int)M, J2b_hat, (int)M,
-                                0.0, Gblk, (int)D2);
+                                static_cast<blas_int>(D1), static_cast<blas_int>(D2), static_cast<blas_int>(M),
+                                1.0, J1a_hat, static_cast<blas_int>(M), J2b_hat, static_cast<blas_int>(M),
+                                0.0, Gblk, static_cast<blas_int>(D2));
 
                     // v1 = U1[a] - V1X2_all[aD1:(a+1)D1, b]
 #pragma omp simd
@@ -799,8 +799,8 @@ void kernel_gaussian_hessian_symm(
     // S = X1 @ X1^T (lower) via DSYRK, then mirror to upper for convenient reads
     double *S = aligned_alloc_64(N * N);
     std::memset(S, 0, N * N * sizeof(double));
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, (int)N, (int)M, 1.0, X1, (int)M, 0.0,
-                S, (int)N);
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, X1, static_cast<blas_int>(M), 0.0,
+                S, static_cast<blas_int>(N));
 #pragma omp parallel for
     for (std::size_t i = 0; i < N; ++i) {
         for (std::size_t j = i + 1; j < N; ++j) {
@@ -845,8 +845,8 @@ void kernel_gaussian_hessian_symm(
     // 4) Projection table V = J_hat @ X1^T  (BIG x N)
     double t4_start = omp_get_wtime();
     double *V = aligned_alloc_64(BIG * N);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)BIG, (int)N, (int)M, 1.0,
-                J_hat, (int)M, X1, (int)M, 0.0, V, (int)N);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(BIG), static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0,
+                J_hat, static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V, static_cast<blas_int>(N));
     t_phase4 = omp_get_wtime() - t4_start;
 
     // 5) Self projections: U[a] = J_a^T x_a  (N x D)
@@ -863,7 +863,7 @@ void kernel_gaussian_hessian_symm(
         const double *__restrict x = X1 + a * M;
         const double *__restrict Ja = dX1 + (a * M) * D;
         double *__restrict Ua = U.data() + a * D;
-        cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D, 1.0, Ja, (int)D, x, 1, 0.0, Ua, 1);
+        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D), 1.0, Ja, static_cast<blas_int>(D), x, 1, 0.0, Ua, 1);
     }
 
 #if !defined(__APPLE__)
@@ -905,9 +905,9 @@ void kernel_gaussian_hessian_symm(
                     // Gram block: Gblk(D×D) = J_hat[a*D:(a+1)*D, :] @ J_hat[b*D:(b+1)*D, :]^T
                     const double *__restrict Jb_hat = J_hat + b * D * M;
                     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                (int)D, (int)D, (int)M,
-                                1.0, Ja_hat, (int)M, Jb_hat, (int)M,
-                                0.0, Gblk, (int)D);
+                                static_cast<blas_int>(D), static_cast<blas_int>(D), static_cast<blas_int>(M),
+                                1.0, Ja_hat, static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M),
+                                0.0, Gblk, static_cast<blas_int>(D));
 
                     // v1 = U[a] - V[aD:(a+1)D, b]
 #pragma omp simd
@@ -1054,8 +1054,8 @@ void kernel_gaussian_hessian_symm_rfp(
     // S = X1 @ X1^T (lower) via DSYRK, then mirror to upper for convenient reads
     double *S = aligned_alloc_64(N * N);
     std::memset(S, 0, N * N * sizeof(double));
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, (int)N, (int)M, 1.0, X1, (int)M, 0.0,
-                S, (int)N);
+    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, X1, static_cast<blas_int>(M), 0.0,
+                S, static_cast<blas_int>(N));
 #pragma omp parallel for
     for (std::size_t i = 0; i < N; ++i) {
         for (std::size_t j = i + 1; j < N; ++j) {
@@ -1102,8 +1102,8 @@ void kernel_gaussian_hessian_symm_rfp(
     // 4) Projection table V = J_hat @ X1^T  (BIG x N)  (identical to hessian_symm)
     double t4_start = omp_get_wtime();
     double *V = aligned_alloc_64(BIG * N);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (int)BIG, (int)N, (int)M, 1.0,
-                J_hat, (int)M, X1, (int)M, 0.0, V, (int)N);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(BIG), static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0,
+                J_hat, static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V, static_cast<blas_int>(N));
     t_phase4 = omp_get_wtime() - t4_start;
 
     // 5) Self projections: U[a] = J_a^T x_a  (N x D)  (identical to hessian_symm)
@@ -1120,7 +1120,7 @@ void kernel_gaussian_hessian_symm_rfp(
         const double *__restrict x = X1 + a * M;
         const double *__restrict Ja = dX1 + (a * M) * D;
         double *__restrict Ua = U.data() + a * D;
-        cblas_dgemv(CblasRowMajor, CblasTrans, (int)M, (int)D, 1.0, Ja, (int)D, x, 1, 0.0, Ua, 1);
+        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D), 1.0, Ja, static_cast<blas_int>(D), x, 1, 0.0, Ua, 1);
     }
 
 #if !defined(__APPLE__)
@@ -1164,9 +1164,9 @@ void kernel_gaussian_hessian_symm_rfp(
                     // J_hat rows are (D×M) for each molecule block.
                     const double *__restrict Jb_hat = J_hat + b * D * M;
                     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                (int)D, (int)D, (int)M,
-                                1.0, Ja_hat, (int)M, Jb_hat, (int)M,
-                                0.0, Gblk, (int)D);
+                                static_cast<blas_int>(D), static_cast<blas_int>(D), static_cast<blas_int>(M),
+                                1.0, Ja_hat, static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M),
+                                0.0, Gblk, static_cast<blas_int>(D));
 
                     // v1 = U[a] - V[aD:(a+1)D, b]
 #pragma omp simd
@@ -1299,8 +1299,8 @@ void kernel_gaussian_full(
 
     double *S = aligned_alloc_64(N1 * N2);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                (int)N1, (int)N2, (int)M,
-                1.0, X1, (int)M, X2, (int)M, 0.0, S, (int)N2);
+                static_cast<blas_int>(N1), static_cast<blas_int>(N2), static_cast<blas_int>(M),
+                1.0, X1, static_cast<blas_int>(M), X2, static_cast<blas_int>(M), 0.0, S, static_cast<blas_int>(N2));
 
     double *C  = aligned_alloc_64(N1 * N2);
     double *C4 = aligned_alloc_64(N1 * N2);
@@ -1347,13 +1347,13 @@ void kernel_gaussian_full(
     // -------------------------------------------------------------------------
     double *V1X2 = aligned_alloc_64(big_rows * N2);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                (int)big_rows, (int)N2, (int)M,
-                1.0, J1_hat, (int)M, X2, (int)M, 0.0, V1X2, (int)N2);
+                static_cast<blas_int>(big_rows), static_cast<blas_int>(N2), static_cast<blas_int>(M),
+                1.0, J1_hat, static_cast<blas_int>(M), X2, static_cast<blas_int>(M), 0.0, V1X2, static_cast<blas_int>(N2));
 
     double *V2X1 = aligned_alloc_64(big_cols * N1);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                (int)big_cols, (int)N1, (int)M,
-                1.0, J2_hat, (int)M, X1, (int)M, 0.0, V2X1, (int)N1);
+                static_cast<blas_int>(big_cols), static_cast<blas_int>(N1), static_cast<blas_int>(M),
+                1.0, J2_hat, static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V2X1, static_cast<blas_int>(N1));
 
     // -------------------------------------------------------------------------
     // Phase 4: Self projections U1[a*D1+d] = J1_hat[a,d,:] · X1[a,:]
@@ -1369,16 +1369,16 @@ void kernel_gaussian_full(
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
         cblas_dgemv(CblasRowMajor, CblasTrans,
-                    (int)M, (int)D1, 1.0,
-                    dX1 + a * M * D1, (int)D1,
+                    static_cast<blas_int>(M), static_cast<blas_int>(D1), 1.0,
+                    dX1 + a * M * D1, static_cast<blas_int>(D1),
                     X1  + a * M, 1,
                     0.0, U1.data() + a * D1, 1);
     }
 #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
         cblas_dgemv(CblasRowMajor, CblasTrans,
-                    (int)M, (int)D2, 1.0,
-                    dX2 + b * M * D2, (int)D2,
+                    static_cast<blas_int>(M), static_cast<blas_int>(D2), 1.0,
+                    dX2 + b * M * D2, static_cast<blas_int>(D2),
                     X2  + b * M, 1,
                     0.0, U2.data() + b * D2, 1);
     }
@@ -1457,9 +1457,9 @@ void kernel_gaussian_full(
                     // Gram block: Gblk(D1 x D2) = J1_hat[a*D1:,:] @ J2_hat[b*D2:,:]^T
                     const double *J2b_hat = J2_hat + b * D2 * M;
                     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                (int)D1, (int)D2, (int)M,
-                                1.0, J1a_hat, (int)M, J2b_hat, (int)M,
-                                0.0, Gblk, (int)D2);
+                                static_cast<blas_int>(D1), static_cast<blas_int>(D2), static_cast<blas_int>(M),
+                                1.0, J1a_hat, static_cast<blas_int>(M), J2b_hat, static_cast<blas_int>(M),
+                                0.0, Gblk, static_cast<blas_int>(D2));
 
                     // v1[d] = U1[a*D1+d] - V1X2[a*D1+d, b]
 #pragma omp simd
@@ -1563,7 +1563,7 @@ void kernel_gaussian_full_symm(
     // S = X @ X^T  (symmetric, N x N)
     double *S = aligned_alloc_64(N * N);
     cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
-                (int)N, (int)M, 1.0, X, (int)M, 0.0, S, (int)N);
+                static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, X, static_cast<blas_int>(M), 0.0, S, static_cast<blas_int>(N));
     // Fill upper from lower for distance calculation convenience
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a)
@@ -1600,8 +1600,8 @@ void kernel_gaussian_full_symm(
     // ---- Phase 3: Projection table V (big x N) = J_hat @ X^T ----
     double *V = aligned_alloc_64(big * N);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                (int)big, (int)N, (int)M,
-                1.0, J_hat, (int)M, X, (int)M, 0.0, V, (int)N);
+                static_cast<blas_int>(big), static_cast<blas_int>(N), static_cast<blas_int>(M),
+                1.0, J_hat, static_cast<blas_int>(M), X, static_cast<blas_int>(M), 0.0, V, static_cast<blas_int>(N));
 
     // ---- Phase 4: Self projections U[a*D+d] = J_hat[a,d,:] · X[a,:] ----
     std::vector<double> U(big);
@@ -1614,8 +1614,8 @@ void kernel_gaussian_full_symm(
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
         cblas_dgemv(CblasRowMajor, CblasTrans,
-                    (int)M, (int)D, 1.0,
-                    dX + a * M * D, (int)D,
+                    static_cast<blas_int>(M), static_cast<blas_int>(D), 1.0,
+                    dX + a * M * D, static_cast<blas_int>(D),
                     X  + a * M, 1,
                     0.0, U.data() + a * D, 1);
     }
@@ -1698,9 +1698,9 @@ void kernel_gaussian_full_symm(
                 // ---- Hessian block [N+a*D+d1, N+b*D+d2] (lower triangle: b <= a) ----
                 const double *Jb_hat = J_hat + b * D * M;
                 cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                            (int)D, (int)D, (int)M,
-                            1.0, Ja_hat, (int)M, Jb_hat, (int)M,
-                            0.0, Gblk, (int)D);
+                            static_cast<blas_int>(D), static_cast<blas_int>(D), static_cast<blas_int>(M),
+                            1.0, Ja_hat, static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M),
+                            0.0, Gblk, static_cast<blas_int>(D));
 
                 // v1[d] = U[a,d] - V[a,d,b]
 #pragma omp simd
@@ -1823,7 +1823,7 @@ void kernel_gaussian_full_symm_rfp(
 
     double *S = aligned_alloc_64(N * N);
     cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans,
-                (int)N, (int)M, 1.0, X, (int)M, 0.0, S, (int)N);
+                static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, X, static_cast<blas_int>(M), 0.0, S, static_cast<blas_int>(N));
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a)
         for (std::size_t b = a + 1; b < N; ++b)
@@ -1856,8 +1856,8 @@ void kernel_gaussian_full_symm_rfp(
     // ---- Phase 3: Projection table V (big x N) ----
     double *V = aligned_alloc_64(big * N);
     cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                (int)big, (int)N, (int)M,
-                1.0, J_hat, (int)M, X, (int)M, 0.0, V, (int)N);
+                static_cast<blas_int>(big), static_cast<blas_int>(N), static_cast<blas_int>(M),
+                1.0, J_hat, static_cast<blas_int>(M), X, static_cast<blas_int>(M), 0.0, V, static_cast<blas_int>(N));
 
     // ---- Phase 4: Self projections ----
     std::vector<double> U(big);
@@ -1870,8 +1870,8 @@ void kernel_gaussian_full_symm_rfp(
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
         cblas_dgemv(CblasRowMajor, CblasTrans,
-                    (int)M, (int)D, 1.0,
-                    dX + a * M * D, (int)D, X + a * M, 1,
+                    static_cast<blas_int>(M), static_cast<blas_int>(D), 1.0,
+                    dX + a * M * D, static_cast<blas_int>(D), X + a * M, 1,
                     0.0, U.data() + a * D, 1);
     }
 
@@ -1947,9 +1947,9 @@ void kernel_gaussian_full_symm_rfp(
                 // For a < b: all D*D entries (both d1<d2 and d1>=d2 positions)
                 // For a == b: upper triangle d1 <= d2
                 cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                            (int)D, (int)D, (int)M,
-                            1.0, Ja_hat, (int)M, Jb_hat, (int)M,
-                            0.0, Gblk, (int)D);
+                            static_cast<blas_int>(D), static_cast<blas_int>(D), static_cast<blas_int>(M),
+                            1.0, Ja_hat, static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M),
+                            0.0, Gblk, static_cast<blas_int>(D));
 
 #pragma omp simd
                 for (std::size_t d = 0; d < D; ++d) v1[d] = Ua[d] - Va[d * N + b];
