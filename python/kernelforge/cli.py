@@ -361,7 +361,7 @@ def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_jacobian(X1, dX1, X2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_jacobian (N1={N1}, N2={N2}, M={M}, D={D})"
+    return elapsed, f"global::kernel_gaussian_jacobian (N1={N1}, N2={N2}, rep_size={M}, n_atoms={D//3})"
 
 
 def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
@@ -377,7 +377,7 @@ def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_jacobian_t (N1={N1}, N2={N2}, M={M}, D={D})"
+    return elapsed, f"global::kernel_gaussian_jacobian_t (N1={N1}, N2={N2}, rep_size={M}, n_atoms={D//3})"
 
 
 
@@ -393,7 +393,7 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, M={M}, D={D})"
+    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, rep_size={M}, n_atoms={D//3})"
 
 
 
@@ -409,7 +409,7 @@ def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian_symm(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm (N={N}, M={M}, D={D})"
+    return elapsed, f"global::kernel_gaussian_hessian_symm (N={N}, rep_size={M}, n_atoms={D//3})"
 
 
 def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
@@ -424,7 +424,7 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, M={M}, D={D})"
+    return elapsed, f"global::kernel_gaussian_hessian_symm_rfp (N={N}, rep_size={M}, n_atoms={D//3})"
 
 
 
@@ -442,7 +442,7 @@ def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
     _ = global_kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"global::kernel_gaussian_hessian (N1={N1}, N2={N2}, M={M}, D={D})"
+    return elapsed, f"global::kernel_gaussian_hessian (N1={N1}, N2={N2}, rep_size={M}, n_atoms={D//3})"
 
 
 def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
