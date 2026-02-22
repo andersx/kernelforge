@@ -47,7 +47,7 @@ static py::array_t<double> cho_solve_rfp_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> K_rfp_in,  // 1-D RFP
     py::array_t<double, py::array::c_style | py::array::forcecast> y_in,      // 1-D
     double l2 = 0.0) {
-    auto Kbuf = K_rfp_in.request(true);  // writable: factorization overwrites K_rfp
+    auto Kbuf = K_rfp_in.request();  // factorization overwrites K_rfp in-place
     auto ybuf = y_in.request();
 
     if (Kbuf.ndim != 1 || ybuf.ndim != 1)
@@ -58,6 +58,7 @@ static py::array_t<double> cho_solve_rfp_py(
     if (static_cast<std::size_t>(Kbuf.shape[0]) != need)
         throw std::runtime_error("K_rfp length must be n*(n+1)/2");
 
+    // Cast away const: the caller accepts that K_rfp is overwritten (documented).
     auto *K_rfp = static_cast<double *>(Kbuf.ptr);
     const auto *y = static_cast<const double *>(ybuf.ptr);
 
