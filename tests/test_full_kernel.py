@@ -54,7 +54,7 @@ def _load_ethanol(n: int):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("N1,N2", [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
 def test_full_asymm_scalar_block(N1, N2):
     """Scalar (energy-energy) sub-block matches standalone kernel_gaussian."""
     sigma = 2.0
@@ -75,7 +75,7 @@ def test_full_asymm_scalar_block(N1, N2):
     )
 
 
-@pytest.mark.parametrize("N1,N2", [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
 def test_full_asymm_jacobian_block(N1, N2):
     """Jacobian (force-energy) sub-block matches standalone kernel_gaussian_jacobian."""
     sigma = 2.0
@@ -95,7 +95,7 @@ def test_full_asymm_jacobian_block(N1, N2):
     )
 
 
-@pytest.mark.parametrize("N1,N2", [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
 def test_full_asymm_jacobian_t_block(N1, N2):
     """Jacobian_t (energy-force) sub-block matches standalone kernel_gaussian_jacobian_t."""
     sigma = 2.0
@@ -115,7 +115,7 @@ def test_full_asymm_jacobian_t_block(N1, N2):
     )
 
 
-@pytest.mark.parametrize("N1,N2", [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
 def test_full_asymm_hessian_block(N1, N2):
     """Hessian (force-force) sub-block matches standalone kernel_gaussian_hessian."""
     sigma = 2.0
@@ -134,7 +134,7 @@ def test_full_asymm_hessian_block(N1, N2):
     )
 
 
-@pytest.mark.parametrize("N1,N2,tile_B", [(10, 10, 1), (10, 10, 3), (10, 10, 64)])
+@pytest.mark.parametrize(("N1", "N2", "tile_B"), [(10, 10, 1), (10, 10, 3), (10, 10, 64)])
 def test_full_asymm_tile_consistency(N1, N2, tile_B):
     """Different tile_B values give identical results."""
     sigma = 1.5
@@ -507,7 +507,7 @@ def test_full_symm_rfp_output_length():
     assert len(K_rfp) == BIG * (BIG + 1) // 2
 
 
-@pytest.mark.parametrize("N,tile_B", [(8, 1), (8, 3), (8, 64)])
+@pytest.mark.parametrize(("N", "tile_B"), [(8, 1), (8, 3), (8, 64)])
 def test_full_symm_rfp_tile_consistency(N, tile_B):
     """RFP full kernel is identical for different tile_B values."""
     sigma = 1.5

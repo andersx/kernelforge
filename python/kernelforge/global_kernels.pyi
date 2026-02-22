@@ -38,3 +38,23 @@ def kernel_gaussian_hessian_symm_rfp(
     sigma: float,
     tile_B: int | None = None,
 ) -> NDArray[np.float64]: ...
+def kernel_gaussian_full(
+    X1: NDArray[np.float64],
+    dX1: NDArray[np.float64],
+    X2: NDArray[np.float64],
+    dX2: NDArray[np.float64],
+    sigma: float,
+    tile_B: int | None = None,
+) -> NDArray[np.float64]: ...
+def kernel_gaussian_full_symm(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    sigma: float,
+    tile_B: int | None = None,
+) -> NDArray[np.float64]: ...
+def kernel_gaussian_full_symm_rfp(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    sigma: float,
+    tile_B: int | None = None,
+) -> NDArray[np.float64]: ...

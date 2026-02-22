@@ -29,9 +29,9 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install libomp llvm
 
-      - name: Install OpenBLAS (Linux only)
+      - name: Install OpenBLAS ILP64 + LAPACKE (Linux only)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y libopenblas-dev
+        run: sudo apt-get install -y libopenblas64-dev libopenblas64-pthread-dev liblapacke-dev
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
@@ -59,7 +59,8 @@ jobs:
         run: |
           uv sync --dev --all-extras
           uv pip install scikit-build-core pybind11 setuptools-scm
-          uv pip install -e .[test] --no-build-isolation
+          CMAKE_ARGS="-DKF_BLAS_ILP64=ON" \
+            uv pip install -e .[test] --no-build-isolation
 
 
       - name: Run pytest

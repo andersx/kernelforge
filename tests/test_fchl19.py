@@ -27,7 +27,7 @@ class FCHL19Params(TypedDict, total=False):
 def _call_generate(
     coords: NDArray[np.float64],
     nuclear_z: NDArray[np.int32],
-    **kwargs: Any,  # noqa: ANN401
+    **kwargs: Any,
 ) -> NDArray[np.float64]:
     """
     Wrapper to call the extension using named args, handling either arg order

@@ -9,8 +9,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 from kernelforge import global_kernels, invdist_repr
+from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 from kernelforge.kitchen_sinks import (
     rff_features,
     rff_features_elemental,
@@ -19,12 +19,12 @@ from kernelforge.kitchen_sinks import (
     rff_gramian_elemental_gradient,
 )
 from kernelforge.local_kernels import (
-    kernel_gaussian_symm_rfp,
     kernel_gaussian,
     kernel_gaussian_hessian,
     kernel_gaussian_hessian_symm,
     kernel_gaussian_jacobian,
     kernel_gaussian_symm,
+    kernel_gaussian_symm_rfp,
 )
 
 PROGRAM_NAME = "KernelForge Kernel Benchmarks"
@@ -41,7 +41,8 @@ def load_ethanol_raw_data() -> dict[str, Any]:
     """Load raw ethanol MD17 data from sgdml.org (555K structures). Auto-downloads if needed.
 
     Returns a dict with keys: R (coordinates), z (atomic numbers), E (energies), F (forces).
-    Data is eagerly loaded and cached in memory on first call to avoid slow disk I/O on subsequent calls.
+    Data is eagerly loaded and cached in memory on first call to avoid slow disk I/O on
+    subsequent calls.
     """
     global _ethanol_data_cache
 
@@ -233,7 +234,8 @@ def benchmark_global_kernel_gaussian_symm() -> tuple[float, str]:
 
 
 def benchmark_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_symm_rfp (tiled DGEMM, no N×N buffer) using ethanol inverse distance."""
+    """Benchmark global kernel_gaussian_symm_rfp (tiled DGEMM, no NxN buffer) using ethanol
+    inverse distance."""
     data = load_ethanol_raw_data()
     n = 10000
     R = data["R"][:n]
@@ -267,7 +269,7 @@ def benchmark_global_kernel_gaussian() -> tuple[float, str]:
     alpha = 0.5 / (rep_size * 2.0)
 
     start = time.perf_counter()
-    k = global_kernels.kernel_gaussian(X1, X2, alpha)
+    _ = global_kernels.kernel_gaussian(X1, X2, alpha)
     elapsed = (time.perf_counter() - start) * 1000
 
     return (
@@ -309,7 +311,8 @@ def benchmark_global_kernel_gaussian_jacobian() -> tuple[float, str]:
 
     return (
         elapsed,
-        f"global::kernel_gaussian_jacobian (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+        f"global::kernel_gaussian_jacobian"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
     )
 
 
@@ -346,12 +349,14 @@ def benchmark_global_kernel_gaussian_jacobian_t() -> tuple[float, str]:
 
     return (
         elapsed,
-        f"global::kernel_gaussian_jacobian_t (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+        f"global::kernel_gaussian_jacobian_t"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
     )
 
 
 def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_hessian_symm_rfp using ethanol inverse distance (N=200, ~2s)."""
+    """Benchmark global kernel_gaussian_hessian_symm_rfp using ethanol inverse distance
+    (N=200, ~2s)."""
     data = load_ethanol_raw_data()
     n = 1000
     R = data["R"][:n]
@@ -378,7 +383,8 @@ def benchmark_global_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
 
     return (
         elapsed,
-        f"global::kernel_gaussian_hessian_symm_rfp (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+        f"global::kernel_gaussian_hessian_symm_rfp"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
     )
 
 
@@ -410,7 +416,8 @@ def benchmark_global_kernel_gaussian_hessian_symm() -> tuple[float, str]:
 
     return (
         elapsed,
-        f"global::kernel_gaussian_hessian_symm (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+        f"global::kernel_gaussian_hessian_symm"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
     )
 
 
@@ -482,7 +489,8 @@ def benchmark_global_kernel_gaussian_full() -> tuple[float, str]:
 
 
 def benchmark_global_kernel_gaussian_full_symm() -> tuple[float, str]:
-    """Benchmark global kernel_gaussian_full_symm (symmetric, N=1000) using ethanol inverse distance."""
+    """Benchmark global kernel_gaussian_full_symm (symmetric, N=1000) using ethanol
+    inverse distance."""
     data = load_ethanol_raw_data()
     n = 1000
     R = data["R"][:n]
@@ -506,7 +514,8 @@ def benchmark_global_kernel_gaussian_full_symm() -> tuple[float, str]:
 
     return (
         elapsed,
-        f"global::kernel_gaussian_full_symm (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+        f"global::kernel_gaussian_full_symm"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
     )
 
 
@@ -535,7 +544,8 @@ def benchmark_global_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
 
     return (
         elapsed,
-        f"global::kernel_gaussian_full_symm_rfp (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+        f"global::kernel_gaussian_full_symm_rfp"
+        f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
     )
 
 

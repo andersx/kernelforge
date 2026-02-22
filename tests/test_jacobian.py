@@ -193,7 +193,7 @@ def test_jacobian_t_shapes() -> None:
 
 
 def test_jacobian_t_equals_jacobian_transposed() -> None:
-    """Test that kernel_gaussian_jacobian_t(X2, X1, dX1, σ) == kernel_gaussian_jacobian(X1, dX1, X2, σ).T"""
+    """Test jacobian_t(X2, X1, dX1, s) == jacobian(X1, dX1, X2, s).T (s=sigma)."""
     rng = np.random.default_rng(11)
 
     N1, N2 = 3, 4
