@@ -6,13 +6,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ILP64 BLAS/LAPACK support (64-bit integers)
 option(KF_BLAS_ILP64 "Use 64-bit integers for BLAS/LAPACK (ILP64)" OFF)
 
-# Platform tweaks
 if(APPLE)
 
-  # Required for "new lapack" in Accelerate
   set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "" FORCE)
   add_compile_definitions(ACCELERATE_NEW_LAPACK)
   set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
@@ -28,10 +25,8 @@ if(APPLE)
 
 endif()
 
-# Position-independent code for all targets (helps for Python extensions)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Dependencies
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 execute_process(
   COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
@@ -57,7 +52,6 @@ endif()
 set(KF_BLAS_VENDOR "AUTO" CACHE STRING "BLAS vendor: AUTO, MKL, OpenBLAS")
 set_property(CACHE KF_BLAS_VENDOR PROPERTY STRINGS AUTO MKL OpenBLAS)
 
-# ILP64 configuration (64-bit integers for BLAS/LAPACK)
 if(KF_BLAS_ILP64)
   add_compile_definitions(KF_BLAS_ILP64)
 endif()
@@ -71,7 +65,7 @@ if(APPLE)
   message(STATUS "BLAS backend: Accelerate (Apple)")
 
 elseif(NOT KF_BLAS_VENDOR STREQUAL "OpenBLAS")
-  # Linux/Windows: Try Intel MKL first (unless explicitly set to OpenBLAS)
+  # Linux: Try Intel MKL first (unless explicitly set to OpenBLAS)
   # MKL configuration:
   #   - MKL_THREADING=gnu_thread: Use GNU OpenMP (libgomp) instead of Intel OpenMP (libiomp5)
   #   - MKL_LINK=dynamic: Dynamic linking (shared libraries)
@@ -86,7 +80,7 @@ elseif(NOT KF_BLAS_VENDOR STREQUAL "OpenBLAS")
 
   # Add standard MKL install location to CMake prefix path
   list(PREPEND CMAKE_PREFIX_PATH /opt/intel/oneapi/mkl/latest)
-  
+
   # Try to find MKL (QUIET: don't error if not found)
   find_package(MKL QUIET)
 
@@ -110,7 +104,7 @@ if(NOT DEFINED KF_BLAS_BACKEND)
     set(BLA_SIZEOF_INTEGER 8)
     # OPENBLAS_USE64BITINT define is set in blas_config.h
   endif()
-  
+
   find_package(BLAS REQUIRED)
   set(KF_BLAS_BACKEND "OpenBLAS")
   message(STATUS "BLAS backend: OpenBLAS/generic BLAS")
