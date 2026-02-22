@@ -11,6 +11,11 @@ def solve_cholesky_rfp_L(
     uplo: str = "U",
     transr: str = "N",
 ) -> NDArray[np.float64]: ...
+def cho_solve_rfp(
+    K_rfp: NDArray[np.float64],
+    y: NDArray[np.float64],
+    l2: float = 0.0,
+) -> NDArray[np.float64]: ...
 def full_to_rfp(
     A: NDArray[np.float64], uplo: str = "U", transr: str = "N"
 ) -> NDArray[np.float64]: ...

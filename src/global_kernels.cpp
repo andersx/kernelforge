@@ -54,11 +54,19 @@ void kernel_gaussian_symm(const double *Xptr, blas_int n, blas_int rep_size, dou
     std::vector<double> onevec(n_size, 1.0);
     cblas_dsyr2(CblasRowMajor, CblasLower, n, 1.0, onevec.data(), 1, diag.data(), 1, Kptr, n);
 
-// 4) Elementwise exp on the lower triangle (i <= j)
+// 4) Elementwise exp on the lower triangle (row j >= col i)
 #pragma omp parallel for schedule(guided)
     for (blas_int j = 0; j < n; ++j) {
         for (blas_int i = 0; i <= j; ++i) {
             Kptr[j * n + i] = std::exp(Kptr[j * n + i]);
+        }
+    }
+
+    // 5) Mirror lower triangle to upper triangle
+#pragma omp parallel for schedule(static)
+    for (blas_int j = 0; j < n; ++j) {
+        for (blas_int i = 0; i < j; ++i) {
+            Kptr[i * n + j] = Kptr[j * n + i];
         }
     }
 }
@@ -935,6 +943,27 @@ void kernel_gaussian_hessian_symm(
     blas_set_num_threads(saved_blas_threads_symm);
 #endif
 
+    // 7) Mirror lower-triangle D×D blocks to upper triangle.
+    //    For each (a, b) with a > b, copy the D×D block at [a*D:, b*D:] → [b*D:, a*D:].
+#pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N; ++a) {
+        for (std::size_t b = 0; b < a; ++b) {
+            for (std::size_t d1 = 0; d1 < D; ++d1) {
+                for (std::size_t d2 = 0; d2 < D; ++d2) {
+                    H_out[(b * D + d2) * BIG + (a * D + d1)] =
+                        H_out[(a * D + d1) * BIG + (b * D + d2)];
+                }
+            }
+        }
+        // Mirror diagonal block lower→upper within the D×D block at [a*D:, a*D:]
+        for (std::size_t d1 = 0; d1 < D; ++d1) {
+            for (std::size_t d2 = 0; d2 < d1; ++d2) {
+                H_out[(a * D + d2) * BIG + (a * D + d1)] =
+                    H_out[(a * D + d1) * BIG + (a * D + d2)];
+            }
+        }
+    }
+
     // Profiling output
     const char* profile_env = std::getenv("KERNELFORGE_PROFILE");
     if (profile_env && std::atoi(profile_env) != 0) {
@@ -943,7 +972,7 @@ void kernel_gaussian_hessian_symm(
         {
             printf("\n=== kernel_gaussian_hessian_symm profiling ===\n");
             printf("Problem size: N=%zu, M=%zu, D=%zu\n", N, M, D);
-            printf("Output size: %zu x %zu (lower triangle only)\n", BIG, BIG);
+            printf("Output size: %zu x %zu (full symmetric)\n", BIG, BIG);
             printf("Phase 1 (distance coefficients):  %8.4f ms  (%5.1f%%)\n", t_phase1*1000, 100*t_phase1/t_total);
             printf("Phase 2 (pack Jacobians):          %8.4f ms  (%5.1f%%)\n", t_phase2*1000, 100*t_phase2/t_total);
             printf("Phase 3 (base Gram):               %8.4f ms  (%5.1f%%)  [on-the-fly per block in phase 6]\n", t_phase3*1000, 100*t_phase3/t_total);
@@ -1681,12 +1710,23 @@ void kernel_gaussian_full_symm(
                 for (std::size_t d = 0; d < D; ++d) v2[d] = Vb[d * N + a] - Ub[d];
 
                 if (a == b) {
-                    // Diagonal hessian block: only lower triangle
+                    // Diagonal hessian block: fill lower triangle then mirror to upper
                     for (std::size_t d1 = 0; d1 < D; ++d1) {
                         double *Hrow = rows_hess_a + d1 * full_cols + N + b * D;
                         for (std::size_t d2 = 0; d2 <= d1; ++d2)
                             Hrow[d2] = Gblk[d1 * D + d2] * cab - c4ab * v1[d1] * v2[d2];
                     }
+                    // Mirror lower→upper within diagonal D×D block
+                    for (std::size_t d1 = 0; d1 < D; ++d1) {
+                        for (std::size_t d2 = d1 + 1; d2 < D; ++d2) {
+                            rows_hess_a[d1 * full_cols + N + b * D + d2] =
+                                rows_hess_a[d2 * full_cols + N + b * D + d1];
+                        }
+                    }
+                    // Also mirror the off-diagonal hessian blocks to upper-right
+                    // (already handled by the b<a else branch for off-diagonal blocks,
+                    //  but the block [N+a*D:, N+a*D:] upper portion also needs mirroring
+                    //  into [N+b*D:, N+a*D:] — not needed since b==a here)
                 } else {
                     // Off-diagonal: fill all D×D entries for [N+a*D:, N+b*D:]
                     for (std::size_t d1 = 0; d1 < D; ++d1) {
@@ -1695,6 +1735,8 @@ void kernel_gaussian_full_symm(
                         for (std::size_t d2 = 0; d2 < D; ++d2)
                             Hrow[d2] = Gblk[d1 * D + d2] * cab - c4ab * v1[d1] * v2[d2];
                     }
+                    // Mirror transposed block [N+b*D:, N+a*D:] = [N+a*D:, N+b*D:]^T
+                    // (Done in a separate post-loop pass to avoid OpenMP race conditions)
                 }
             }
         }
@@ -1705,13 +1747,30 @@ void kernel_gaussian_full_symm(
     blas_set_num_threads(saved_blas_threads);
 #endif
 
+    // ---- Mirror off-diagonal hessian blocks to upper triangle ----
+    // For each pair (a > b), the block at [N+a*D:, N+b*D:] (D×D) has been filled.
+    // We now copy it transposed to [N+b*D:, N+a*D:].
+#pragma omp parallel for schedule(static)
+    for (std::size_t a = 1; a < N; ++a) {
+        for (std::size_t b = 0; b < a; ++b) {
+            for (std::size_t d1 = 0; d1 < D; ++d1) {
+                for (std::size_t d2 = 0; d2 < D; ++d2) {
+                    // Source: K_full[N+a*D+d1, N+b*D+d2]
+                    // Dest:   K_full[N+b*D+d2, N+a*D+d1]
+                    K_full[(N + b * D + d2) * full_cols + (N + a * D + d1)] =
+                        K_full[(N + a * D + d1) * full_cols + (N + b * D + d2)];
+                }
+            }
+        }
+    }
+
     // Profiling
     const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
     if (profile_env && std::atoi(profile_env) != 0) {
         double t_total = omp_get_wtime() - t_start;
         printf("\n=== kernel_gaussian_full_symm profiling ===\n");
         printf("Problem size: N=%zu, M=%zu, D=%zu\n", N, M, D);
-        printf("Output size: %zu x %zu (lower triangle)\n", BIG, BIG);
+        printf("Output size: %zu x %zu (full symmetric)\n", BIG, BIG);
         printf("TOTAL: %8.4f ms\n", t_total * 1000);
         printf("===========================================\n\n");
     }
