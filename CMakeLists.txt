@@ -6,10 +6,10 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Platform tweaks
+option(KF_BLAS_ILP64 "Use 64-bit integers for BLAS/LAPACK (ILP64)" OFF)
+
 if(APPLE)
 
-  # Required for "new lapack" in Accelerate
   set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "" FORCE)
   add_compile_definitions(ACCELERATE_NEW_LAPACK)
   set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
@@ -25,10 +25,8 @@ if(APPLE)
 
 endif()
 
-# Position-independent code for all targets (helps for Python extensions)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Dependencies
 find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 execute_process(
   COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
@@ -49,16 +47,85 @@ if (OpenMP_CXX_FOUND)
   endif()
 endif()
 
-# Use Accelerate on Apple, otherwise BLAS (MKL, OpenBLAS, etc)
+# BLAS vendor selection (Linux only; macOS always uses Accelerate)
+# Values: AUTO (default), MKL, OpenBLAS
+set(KF_BLAS_VENDOR "AUTO" CACHE STRING "BLAS vendor: AUTO, MKL, OpenBLAS")
+set_property(CACHE KF_BLAS_VENDOR PROPERTY STRINGS AUTO MKL OpenBLAS)
+
+if(KF_BLAS_ILP64)
+  add_compile_definitions(KF_BLAS_ILP64)
+endif()
+
+# ---- BLAS/LAPACK backend detection -------------------------------------------
 if(APPLE)
+  # macOS: Always use Accelerate framework
+  # ILP64 defines are set in blas_config.h (ACCELERATE_BLAS_ILP64, ACCELERATE_LAPACK_ILP64)
   find_library(ACCELERATE Accelerate REQUIRED)
-else()
+  set(KF_BLAS_BACKEND "Accelerate")
+  message(STATUS "BLAS backend: Accelerate (Apple)")
+
+elseif(NOT KF_BLAS_VENDOR STREQUAL "OpenBLAS")
+  # Linux: Try Intel MKL first (unless explicitly set to OpenBLAS)
+  # MKL configuration:
+  #   - MKL_THREADING=gnu_thread: Use GNU OpenMP (libgomp) instead of Intel OpenMP (libiomp5)
+  #   - MKL_LINK=dynamic: Dynamic linking (shared libraries)
+  #   - MKL_INTERFACE=lp64/ilp64: 32-bit or 64-bit integers
+  set(MKL_THREADING gnu_thread)  # Use libgomp (GCC/Clang OpenMP), not libiomp5
+  set(MKL_LINK dynamic)
+  if(KF_BLAS_ILP64)
+    set(MKL_INTERFACE ilp64)
+  else()
+    set(MKL_INTERFACE lp64)
+  endif()
+
+  # Add standard MKL install location to CMake prefix path
+  list(PREPEND CMAKE_PREFIX_PATH /opt/intel/oneapi/mkl/latest)
+
+  # Try to find MKL (QUIET: don't error if not found)
+  find_package(MKL QUIET)
+
+  if(MKL_FOUND)
+    # MKL found: Set compile definitions
+    add_compile_definitions(KF_USE_MKL)
+    # MKL_ILP64 define is set in blas_config.h when KF_BLAS_ILP64 is defined
+    set(KF_BLAS_BACKEND "MKL")
+    message(STATUS "BLAS backend: Intel MKL (${MKL_INTERFACE}, ${MKL_THREADING})")
+  elseif(KF_BLAS_VENDOR STREQUAL "MKL")
+    # MKL explicitly requested but not found: error
+    message(FATAL_ERROR "Intel MKL explicitly requested (KF_BLAS_VENDOR=MKL) but not found. "
+                        "Install MKL or set KF_BLAS_VENDOR=OpenBLAS or KF_BLAS_VENDOR=AUTO.")
+  endif()
+endif()
+
+# Fallback: Use generic BLAS (OpenBLAS, ATLAS, reference BLAS, etc.)
+if(NOT DEFINED KF_BLAS_BACKEND)
+  if(KF_BLAS_ILP64)
+    # OpenBLAS ILP64: requires BLA_SIZEOF_INTEGER=8
+    set(BLA_SIZEOF_INTEGER 8)
+    # OPENBLAS_USE64BITINT define is set in blas_config.h
+  endif()
+
   find_package(BLAS REQUIRED)
+  set(KF_BLAS_BACKEND "OpenBLAS")
+  message(STATUS "BLAS backend: OpenBLAS/generic BLAS")
 endif()
 
 # Common interface for headers from Python/pybind11
 add_library(kf_common INTERFACE)
 target_link_libraries(kf_common INTERFACE pybind11::headers Python::Module)
+
+# Common interface for BLAS backend (provides include directories)
+add_library(kf_blas INTERFACE)
+if(KF_BLAS_BACKEND STREQUAL "Accelerate")
+  # Accelerate doesn't need explicit include directories
+  target_link_libraries(kf_blas INTERFACE ${ACCELERATE})
+elseif(KF_BLAS_BACKEND STREQUAL "MKL")
+  # MKL::MKL provides both include directories and libraries
+  target_link_libraries(kf_blas INTERFACE MKL::MKL)
+else()
+  # BLAS::BLAS provides libraries (include paths may vary by system)
+  target_link_libraries(kf_blas INTERFACE BLAS::BLAS)
+endif()
 
 # ---- Small helpers to avoid repetition --------------------------------------
 # Track created modules/objlibs so we can link things in one go later
@@ -72,15 +139,14 @@ set(_KF_ALL_OBJLIBS "")
 function(kf_add_cpp_module base obj_src bind_src)
   set(obj kf_${base})
   add_library(${obj} OBJECT ${obj_src})
-  target_link_libraries(${obj} PRIVATE kf_common)
-  target_link_libraries(${obj} PRIVATE OpenMP::OpenMP_CXX) # <-- compile flags propagate
+  target_link_libraries(${obj} PRIVATE kf_common kf_blas OpenMP::OpenMP_CXX)
 
   pybind11_add_module(${base} MODULE
     ${bind_src}
     $<TARGET_OBJECTS:${obj}>
   )
   set_target_properties(${base} PROPERTIES OUTPUT_NAME "${base}")
-  target_link_libraries(${base} PRIVATE OpenMP::OpenMP_CXX) # <-- link flags
+  target_link_libraries(${base} PRIVATE kf_blas OpenMP::OpenMP_CXX)
 
   list(APPEND _KF_ALL_MODULES ${base})
   list(APPEND _KF_ALL_OBJLIBS ${obj})
@@ -118,7 +184,7 @@ kf_add_cpp_module(kernelmath      src/math.cpp            src/math_bindings.cpp)
 add_library(kf_kitchen_sinks OBJECT
   src/rff_features.cpp
   src/rff_elemental.cpp)
-target_link_libraries(kf_kitchen_sinks PRIVATE kf_common OpenMP::OpenMP_CXX)
+target_link_libraries(kf_kitchen_sinks PRIVATE kf_common kf_blas OpenMP::OpenMP_CXX)
 kf_apply_cxx_flags(kf_kitchen_sinks)
 
 pybind11_add_module(kitchen_sinks MODULE
@@ -126,6 +192,7 @@ pybind11_add_module(kitchen_sinks MODULE
   src/rff_elemental_bindings.cpp
   $<TARGET_OBJECTS:kf_kitchen_sinks>)
 set_target_properties(kitchen_sinks PROPERTIES OUTPUT_NAME "kitchen_sinks")
+target_link_libraries(kitchen_sinks PRIVATE kf_blas)
 
 # Apply C++ flags to the object libs (not to the module targets)
 foreach(obj ${_KF_ALL_OBJLIBS})
@@ -143,17 +210,8 @@ if (OpenMP_CXX_FOUND)
   target_link_libraries(kitchen_sinks PRIVATE OpenMP::OpenMP_CXX)
 endif()
 
-# ---- BLAS/LAPACK backend selection (link all modules) -----------------------
-# kitchen_sinks is managed manually (not in _KF_ALL_MODULES), so append it here.
-foreach(m ${_KF_ALL_MODULES} kitchen_sinks)
-  if(APPLE)
-    target_link_libraries(${m} PRIVATE ${ACCELERATE})
-  elseif(WIN32)
-    target_link_libraries(${m} PRIVATE MKL::MKL)
-  else()
-    target_link_libraries(${m} PRIVATE BLAS::BLAS)
-  endif()
-endforeach()
+# Note: BLAS backend linking is handled via kf_blas interface library
+# (linked in kf_add_cpp_module and kitchen_sinks setup)
 
 # ---- Install ----------------------------------------------------------------
 install(TARGETS global_kernels local_kernels fchl19_repr invdist_repr kernelmath kitchen_sinks

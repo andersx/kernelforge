@@ -7,37 +7,35 @@
 
 // Third-party libraries
 #include <omp.h>
-#if defined(__APPLE__)
-    #include <Accelerate/Accelerate.h>
-#else
-    #include <cblas.h>
-#endif
 
 // Project headers
 #include "aligned_alloc64.hpp"
+#include "blas_config.h"
 #include "constants.hpp"
 
 namespace kf {
 
-void kernel_gaussian_symm(const double *Xptr, int n, int rep_size, double alpha, double *Kptr) {
+void kernel_gaussian_symm(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
+                          double *Kptr) {
     // 1) DSYRK (RowMajor, lower triangle): K = (-2*alpha) * X * X^T + 0*K
     cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, n, rep_size, -2.0 * alpha, Xptr, rep_size,
                 0.0, Kptr, n);
 
     // 2) diag = -0.5 * diag(K)
-    std::vector<double> diag(n);
-    for (int i = 0; i < n; ++i) {
+    const std::size_t n_size = static_cast<std::size_t>(n);
+    std::vector<double> diag(n_size);
+    for (blas_int i = 0; i < n; ++i) {
         diag[i] = -0.5 * Kptr[i * n + i];
     }
 
     // 3) K += 1 * (1*diag^T + diag*1^T) on LOWER via dsyr2
-    std::vector<double> onevec(n, 1.0);
+    std::vector<double> onevec(n_size, 1.0);
     cblas_dsyr2(CblasRowMajor, CblasLower, n, 1.0, onevec.data(), 1, diag.data(), 1, Kptr, n);
 
 // 4) Elementwise exp on the lower triangle (i <= j)
 #pragma omp parallel for schedule(guided)
-    for (int j = 0; j < n; ++j) {
-        for (int i = 0; i <= j; ++i) {
+    for (blas_int j = 0; j < n; ++j) {
+        for (blas_int i = 0; i <= j; ++i) {
             Kptr[j * n + i] = std::exp(Kptr[j * n + i]);
         }
     }
@@ -502,6 +500,109 @@ void kernel_gaussian_hessian_symm(
     aligned_free_64(C4);
     aligned_free_64(C);
     aligned_free_64(S);
+}
+
+// Helper: RFP index for TRANSR='N', UPLO='U' (upper triangle, i <= j)
+static inline std::size_t rfp_index_upper_N(blas_int n, blas_int i, blas_int j) {
+    // Precondition: 0 <= i <= j < n
+    const blas_int k = n / 2;
+    const blas_int stride = (n % 2 == 0) ? (n + 1) : n;
+    if (j >= k) {
+        return static_cast<std::size_t>(j - k) * static_cast<std::size_t>(stride) +
+               static_cast<std::size_t>(i);
+    } else {
+        return static_cast<std::size_t>(i) * static_cast<std::size_t>(stride) +
+               static_cast<std::size_t>(j + k + 1);
+    }
+}
+
+void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
+                              double *arf) {
+    // Compute symmetric Gaussian kernel directly into RFP format
+    // Output: arf[n*(n+1)/2] in Rectangular Full Packed (RFP) format
+    // 
+    // Internal storage: Fortran TRANSR='N', UPLO='U' (upper triangle packed)
+    // Python API usage: rfp_to_full(arf, n, uplo='L') — note uplo='L' due to swap_uplo trick
+    // 
+    // This avoids allocating the full n×n matrix (saves 2× memory for large n)
+
+    if (n <= 0 || rep_size <= 0)
+        throw std::invalid_argument("n and rep_size must be > 0");
+    if (!Xptr || !arf)
+        throw std::invalid_argument("Xptr and arf must be non-null");
+
+    const std::size_t n_size = static_cast<std::size_t>(n);
+    const std::size_t rep_size_size = static_cast<std::size_t>(rep_size);
+    const std::size_t nt = n_size * (n_size + 1) / 2;
+
+    // Zero the RFP output
+    std::memset(arf, 0, nt * sizeof(double));
+
+    // 1) Precompute squared norms: sq[i] = alpha * ||X[i]||^2
+    std::vector<double> sq(n_size);
+    for (blas_int i = 0; i < n; ++i) {
+        const double *row = Xptr + static_cast<std::size_t>(i) * rep_size_size;
+        double acc = 0.0;
+        for (blas_int k = 0; k < rep_size; ++k)
+            acc += row[k] * row[k];
+        sq[i] = alpha * acc;
+    }
+
+    // 2) Tiled DGEMM to compute kernel entries directly into RFP
+    // Tile size — tuned for L2/L3 cache
+    const blas_int TILE = 512;
+
+    // Allocate scratch buffer for DGEMM tile results
+    double *G_tile = aligned_alloc_64(static_cast<std::size_t>(TILE) * TILE);
+    if (!G_tile)
+        throw std::bad_alloc();
+
+    // Process lower triangle tiles (i0 <= j0)
+    for (blas_int j0 = 0; j0 < n; j0 += TILE) {
+        const blas_int jb = std::min(TILE, n - j0);
+        const double *Xj = Xptr + static_cast<std::size_t>(j0) * rep_size_size;
+
+        for (blas_int i0 = 0; i0 <= j0; i0 += TILE) {
+            const blas_int ib = std::min(TILE, n - i0);
+            const double *Xi = Xptr + static_cast<std::size_t>(i0) * rep_size_size;
+
+            if (i0 == j0) {
+                // Diagonal tile: use DSYRK (upper triangle)
+                cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans, ib, rep_size, -2.0 * alpha, Xi,
+                            rep_size, 0.0, G_tile, ib);
+
+                // Write upper triangle of this tile to RFP
+                for (blas_int j_loc = 0; j_loc < jb; ++j_loc) {
+                    const blas_int j = j0 + j_loc;
+                    for (blas_int i_loc = 0; i_loc <= j_loc; ++i_loc) {
+                        const blas_int i = i0 + i_loc;
+                        const double g_ij = G_tile[static_cast<std::size_t>(i_loc) * ib + j_loc];
+                        const double k_ij = std::exp(sq[i] + sq[j] + g_ij);
+                        const std::size_t rfp_idx = rfp_index_upper_N(n, i, j);
+                        arf[rfp_idx] = k_ij;
+                    }
+                }
+            } else {
+                // Off-diagonal tile: use DGEMM (full rectangle)
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, ib, jb, rep_size, -2.0 * alpha,
+                            Xi, rep_size, Xj, rep_size, 0.0, G_tile, jb);
+
+                // Write all entries (i < j) from this tile to RFP
+                for (blas_int j_loc = 0; j_loc < jb; ++j_loc) {
+                    const blas_int j = j0 + j_loc;
+                    for (blas_int i_loc = 0; i_loc < ib; ++i_loc) {
+                        const blas_int i = i0 + i_loc;
+                        const double g_ij = G_tile[static_cast<std::size_t>(i_loc) * jb + j_loc];
+                        const double k_ij = std::exp(sq[i] + sq[j] + g_ij);
+                        const std::size_t rfp_idx = rfp_index_upper_N(n, i, j);
+                        arf[rfp_idx] = k_ij;
+                    }
+                }
+            }
+        }
+    }
+
+    aligned_free_64(G_tile);
 }
 
 }  // namespace kf

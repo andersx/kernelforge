@@ -1,9 +1,14 @@
 #pragma once
 #include <cstddef>
+#include "blas_int.h"
 
 namespace kf {
 
-void kernel_gaussian_symm(const double *Xptr, int n, int rep_size, double alpha, double *Kptr);
+void kernel_gaussian_symm(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
+                          double *Kptr);
+
+void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
+                              double *arf);
 
 void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::size_t n2, std::size_t d,
                      double alpha, double *K);
