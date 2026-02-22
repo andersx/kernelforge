@@ -21,6 +21,7 @@ from kernelforge.kitchen_sinks import (
     rff_gramian_elemental_gradient,
 )
 from kernelforge.local_kernels import (
+    kernel_gaussian_symm_rfp,
     kernel_gaussian,
     kernel_gaussian_hessian,
     kernel_gaussian_hessian_symm,
@@ -444,6 +445,23 @@ def benchmark_global_kernel_gaussian_hessian() -> tuple[float, str]:
     return elapsed, f"global::kernel_gaussian_hessian (N1={N1}, N2={N2}, M={M}, D={D})"
 
 
+def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm_rfp (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
+
+
+
 def benchmark_local_kernel_gaussian_symm() -> tuple[float, str]:
     """Benchmark local kernel_gaussian_symm (N=1200, ~2s)."""
     n = 1000
@@ -458,6 +476,23 @@ def benchmark_local_kernel_gaussian_symm() -> tuple[float, str]:
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"kernel_gaussian_symm (Ethanol, N={n})"
+
+
+def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm_rfp (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
+
 
 
 def benchmark_local_kernel_gaussian() -> tuple[float, str]:
@@ -479,6 +514,23 @@ def benchmark_local_kernel_gaussian() -> tuple[float, str]:
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"kernel_gaussian (Ethanol, N1={n_train}, N2={n - n_train})"
+
+
+def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm_rfp (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
+
 
 
 def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
@@ -504,6 +556,23 @@ def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
     return elapsed, f"kernel_gaussian_jacobian (Ethanol, N1={n_train}, N2={n - n_train})"
 
 
+def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm_rfp (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
+
+
+
 def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     """Benchmark local kernel_gaussian_hessian_symm (N=270, ~2s)."""
     n = 250
@@ -519,6 +588,23 @@ def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"kernel_gaussian_hessian_symm (Ethanol, N={n})"
+
+
+def benchmark_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_symm_rfp (N=1000, ~2s)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.0
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_symm_rfp(X, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"kernel_gaussian_symm_rfp (Ethanol, N={n})"
+
 
 
 def benchmark_local_kernel_gaussian_hessian() -> tuple[float, str]:
@@ -680,6 +766,7 @@ BENCHMARKS = {
     "global_kernel_gaussian_hessian_symm_rfp": benchmark_global_kernel_gaussian_hessian_symm_rfp,
     "global_kernel_gaussian_hessian": benchmark_global_kernel_gaussian_hessian,
     "local_kernel_gaussian_symm": benchmark_local_kernel_gaussian_symm,
+    "local_kernel_gaussian_symm_rfp": benchmark_local_kernel_gaussian_symm_rfp,
     "local_kernel_gaussian": benchmark_local_kernel_gaussian,
     "local_kernel_gaussian_jacobian": benchmark_local_kernel_gaussian_jacobian,
     "local_kernel_gaussian_hessian_symm": benchmark_local_kernel_gaussian_hessian_symm,
@@ -723,6 +810,7 @@ SUITES = {
     ],
     "local-kernels": [
         "local_kernel_gaussian_symm",
+        "local_kernel_gaussian_symm_rfp",
         "local_kernel_gaussian",
         "local_kernel_gaussian_jacobian",
         "local_kernel_gaussian_hessian_symm",
