@@ -181,7 +181,7 @@ void kernel_gaussian(const std::vector<double> &x1,  // (nm1, max_atoms1, rep_si
         return;
 
     // ---- Tunable tile size ----
-    const int B = 8192;  // try 1024–4096; 8192 if you have RAM (B×B doubles scratch)
+    const int B = 8192;
 
     for (int label : labels) {
         // Pack rows/cols for this label
@@ -225,7 +225,6 @@ void kernel_gaussian(const std::vector<double> &x1,  // (nm1, max_atoms1, rep_si
                 const int bj = j0 / B;
 
                 // Cblk(ib×jb) = -2 * Ai0(ib×rep) * Bj0(jb×rep)^T
-                // RowMajor: M=ib, N=jb, K=rep_size, lda=rep_size, ldb=rep_size, ldc=jb
                 cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                             static_cast<blas_int>(ib), static_cast<blas_int>(jb),
                             static_cast<blas_int>(rep_size), -2.0, Ai0,
@@ -233,7 +232,7 @@ void kernel_gaussian(const std::vector<double> &x1,  // (nm1, max_atoms1, rep_si
                             static_cast<blas_int>(rep_size), 0.0, Cblk,
                             static_cast<blas_int>(jb));
 
-// Accumulate this tile into K
+                // Accumulate this tile into K
 #pragma omp parallel for schedule(guided)
                 for (int a = 0; a < nm1; ++a) {
                     const auto &Ia = bucketsR[a][bi];
@@ -246,25 +245,22 @@ void kernel_gaussian(const std::vector<double> &x1,  // (nm1, max_atoms1, rep_si
                             continue;
 
                         double kab = 0.0;
+                        const int mJ = (int)Jb.size();
 
                         for (int gi : Ia) {
-                            const int li = gi - i0;  // 0..ib-1
+                            const int li = gi - i0;
                             const double rn = pk.row_n2[gi];
                             const double *__restrict Grow = Cblk + (size_t)li * jb;
 
-                            // Unroll over columns in this block
-                            const int mJ = (int)Jb.size();
+                            // 4-way unroll with simd hint on the remainder
                             int t = 0;
                             for (; t + 3 < mJ; t += 4) {
                                 const int j0g = Jb[t + 0], j1g = Jb[t + 1];
                                 const int j2g = Jb[t + 2], j3g = Jb[t + 3];
-                                const int l0 = j0g - j0, l1 = j1g - j0;
-                                const int l2 = j2g - j0, l3 = j3g - j0;
-
-                                kab += std::exp((rn + pk.col_n2[j0g] + Grow[l0]) * inv_sigma2) +
-                                       std::exp((rn + pk.col_n2[j1g] + Grow[l1]) * inv_sigma2) +
-                                       std::exp((rn + pk.col_n2[j2g] + Grow[l2]) * inv_sigma2) +
-                                       std::exp((rn + pk.col_n2[j3g] + Grow[l3]) * inv_sigma2);
+                                kab += std::exp((rn + pk.col_n2[j0g] + Grow[j0g - j0]) * inv_sigma2) +
+                                       std::exp((rn + pk.col_n2[j1g] + Grow[j1g - j0]) * inv_sigma2) +
+                                       std::exp((rn + pk.col_n2[j2g] + Grow[j2g - j0]) * inv_sigma2) +
+                                       std::exp((rn + pk.col_n2[j3g] + Grow[j3g - j0]) * inv_sigma2);
                             }
                             for (; t < mJ; ++t) {
                                 const int jg = Jb[t];
@@ -412,11 +408,10 @@ void kernel_gaussian_symm_rfp(
     if (labels.empty())
         return;
 
-    // Tile size (tune as before)
+    // Tile size
     const int B = 8192;
 
     for (int label : labels) {
-        // Pack per-label rows (same as your symmetric path)
         PackedLabelSym pk = pack_label_block_sym_T(label, x, nm, max_atoms, rep_size, q, n);
         const int R = pk.R;
         if (R == 0)
@@ -464,13 +459,16 @@ void kernel_gaussian_symm_rfp(
                     for (int gi : Ia) {
                         const int li = gi - i0;  // [0..ib)
                         const double rn_i = pk.row_n2[gi];
-                        for (int gj : Ib) {
-                            const int lj = gj - i0;  // [0..ib)
+                        // Diagonal tile: need upper-tri index (li <= lj branch).
+                        // Branch prevents full unroll; use simd hint on the inner loop.
+#pragma omp simd reduction(+:kab)
+                        for (int t = 0; t < (int)Ib.size(); ++t) {
+                            const int gj = Ib[t];
+                            const int lj = gj - i0;
                             const int r = (li <= lj) ? li : lj;
                             const int c = (li <= lj) ? lj : li;
-                            const double cij = Cblk[(size_t)r * ib + c];
-                            const double l2 = rn_i + pk.row_n2[gj] + cij;
-                            kab += std::exp(l2 * inv_sigma2);
+                            kab += std::exp((rn_i + pk.row_n2[gj] + Cblk[(size_t)r * ib + c]) *
+                                           inv_sigma2);
                         }
                     }
                     // Write once to RFP (a<=b)
@@ -504,14 +502,27 @@ void kernel_gaussian_symm_rfp(
                             continue;
 
                         double kab = 0.0;
+                        const int mJ = (int)Jb.size();
+
                         for (int gi : Ia) {
-                            const int li = gi - i0;  // [0..ib)
+                            const int li = gi - i0;
                             const double rn_i = pk.row_n2[gi];
-                            for (int gj : Jb) {
-                                const int lj = gj - j0;  // [0..jb)
-                                const double cij = Cblk[(size_t)li * jb + lj];
-                                const double l2 = rn_i + pk.row_n2[gj] + cij;
-                                kab += std::exp(l2 * inv_sigma2);
+                            const double *__restrict Crow = Cblk + (size_t)li * jb;
+
+                            // 4-way unroll: off-diagonal tile has a plain rectangular
+                            // Cblk with no branch, so full unroll is safe.
+                            int t = 0;
+                            for (; t + 3 < mJ; t += 4) {
+                                const int gj0 = Jb[t + 0], gj1 = Jb[t + 1];
+                                const int gj2 = Jb[t + 2], gj3 = Jb[t + 3];
+                                kab += std::exp((rn_i + pk.row_n2[gj0] + Crow[gj0 - j0]) * inv_sigma2) +
+                                       std::exp((rn_i + pk.row_n2[gj1] + Crow[gj1 - j0]) * inv_sigma2) +
+                                       std::exp((rn_i + pk.row_n2[gj2] + Crow[gj2 - j0]) * inv_sigma2) +
+                                       std::exp((rn_i + pk.row_n2[gj3] + Crow[gj3 - j0]) * inv_sigma2);
+                            }
+                            for (; t < mJ; ++t) {
+                                const int gj = Jb[t];
+                                kab += std::exp((rn_i + pk.row_n2[gj] + Crow[gj - j0]) * inv_sigma2);
                             }
                         }
                         // Self-kernel cross-block pairs counted twice
@@ -560,7 +571,7 @@ void kernel_gaussian_symm(const std::vector<double> &x,  // (nm, max_atoms, rep_
     if (labels.empty())
         return;
 
-    const int B = 8192;  // tile size; tune 512–2048
+    const int B = 8192;
 
     for (int label : labels) {
         PackedLabelSym pk = pack_label_block_sym_T(label, x, nm, max_atoms, rep_size, q, n);
@@ -570,7 +581,7 @@ void kernel_gaussian_symm(const std::vector<double> &x,  // (nm, max_atoms, rep_
 
         const int num_blocks = (R + B - 1) / B;
 
-        // bucket molecule rows by block id
+        // Bucket molecule rows by block id
         std::vector<std::vector<std::vector<int>>> buckets(
             nm, std::vector<std::vector<int>>(num_blocks));
         for (int a = 0; a < nm; ++a) {
@@ -579,7 +590,7 @@ void kernel_gaussian_symm(const std::vector<double> &x,  // (nm, max_atoms, rep_
                 buckets[a][gi / B].push_back(gi);
         }
 
-        // ---- aligned scratch tile (reused for all tiles of this label) ----
+        // Aligned scratch tile (reused for all tiles of this label)
         double *Cblk = aligned_alloc_64((size_t)B * B);
         if (!Cblk)
             throw std::bad_alloc();
@@ -610,14 +621,16 @@ void kernel_gaussian_symm(const std::vector<double> &x,  // (nm, max_atoms, rep_
                     for (int gi : Ia) {
                         const int li = gi - i0;  // [0..ib)
                         const double rn_i = pk.row_n2[gi];
-                        for (int gj : Ib) {
-                            const int lj = gj - i0;  // [0..ib)
-                            // index with LDC = ib (upper-tri)
+                        // Diagonal tile: upper-tri index requires branch on li vs lj.
+                        // Use simd hint; compiler can still vectorise the exp with SVML.
+#pragma omp simd reduction(+:kab)
+                        for (int t = 0; t < (int)Ib.size(); ++t) {
+                            const int gj = Ib[t];
+                            const int lj = gj - i0;
                             const int r = (li <= lj) ? li : lj;
                             const int c = (li <= lj) ? lj : li;
-                            const double cij = Cblk[(size_t)r * ib + c];
-                            const double l2 = rn_i + pk.row_n2[gj] + cij;
-                            kab += std::exp(l2 * inv_sigma2);
+                            kab += std::exp((rn_i + pk.row_n2[gj] + Cblk[(size_t)r * ib + c]) *
+                                           inv_sigma2);
                         }
                     }
                     kernel[(size_t)a * nm + b] += kab;
@@ -651,18 +664,29 @@ void kernel_gaussian_symm(const std::vector<double> &x,  // (nm, max_atoms, rep_
                             continue;
 
                         double kab = 0.0;
+                        const int mJ = (int)Jb.size();
+
                         for (int gi : Ia) {
-                            const int li = gi - i0;  // [0..ib)
+                            const int li = gi - i0;
                             const double rn_i = pk.row_n2[gi];
-                            for (int gj : Jb) {
-                                const int lj = gj - j0;  // [0..jb)
-                                // index with LDC = jb (full rectangle)
-                                const double cij = Cblk[(size_t)li * jb + lj];
-                                const double l2 = rn_i + pk.row_n2[gj] + cij;
-                                kab += std::exp(l2 * inv_sigma2);
+                            const double *__restrict Crow = Cblk + (size_t)li * jb;
+
+                            // 4-way unroll: rectangular Cblk, no branch needed.
+                            int t = 0;
+                            for (; t + 3 < mJ; t += 4) {
+                                const int gj0 = Jb[t + 0], gj1 = Jb[t + 1];
+                                const int gj2 = Jb[t + 2], gj3 = Jb[t + 3];
+                                kab += std::exp((rn_i + pk.row_n2[gj0] + Crow[gj0 - j0]) * inv_sigma2) +
+                                       std::exp((rn_i + pk.row_n2[gj1] + Crow[gj1 - j0]) * inv_sigma2) +
+                                       std::exp((rn_i + pk.row_n2[gj2] + Crow[gj2 - j0]) * inv_sigma2) +
+                                       std::exp((rn_i + pk.row_n2[gj3] + Crow[gj3 - j0]) * inv_sigma2);
+                            }
+                            for (; t < mJ; ++t) {
+                                const int gj = Jb[t];
+                                kab += std::exp((rn_i + pk.row_n2[gj] + Crow[gj - j0]) * inv_sigma2);
                             }
                         }
-                        // count cross-block self-pairs twice to match full (i,j)+(j,i)
+                        // Count cross-block self-pairs twice to match full (i,j)+(j,i)
                         if (a == b)
                             kab *= 2.0;
 
