@@ -168,3 +168,189 @@ def test_shape_errors_raise_valueerror() -> None:
 
     with pytest.raises(ValueError, match=r".*"):
         _ = fchl.kernel_gaussian_jacobian(x1, x2, dX2_bad, q1, q2, n1, n2, sigma)
+
+
+# ---------------------------------------------------------------------------
+# kernel_gaussian_jacobian_t tests
+# ---------------------------------------------------------------------------
+
+
+def slow_ref_grad_t(
+    x1: NDArray[np.float64],
+    x2: NDArray[np.float64],
+    dX1: NDArray[np.float64],
+    q1: NDArray[np.int32],
+    q2: NDArray[np.int32],
+    n1: NDArray[np.int32],
+    n2: NDArray[np.int32],
+    sigma: float,
+) -> NDArray[np.float64]:
+    """
+    NumPy reference for kernel_gaussian_jacobian_t.
+      For each a,j1 and b,j2 with matching labels, accumulate:
+        K_t[offs_a + r, b] += alpha * dot(dX1[a,j1,:,r], d)
+      where d = x1[a,j1,:] - x2[b,j2,:]
+            l2 = dot(d, d)
+            alpha = exp(l2 * inv_2sigma2) * inv_sigma2
+    """
+    nm1, max_atoms1, rep = x1.shape
+    nm2, max_atoms2, _ = x2.shape
+    offs1 = np.zeros(nm1, dtype=int)
+    acc = 0
+    for a in range(nm1):
+        na = int(n1[a])
+        na = 0 if na < 0 else min(na, max_atoms1)
+        offs1[a] = acc
+        acc += 3 * na
+    naq1 = acc
+
+    K = np.zeros((naq1, nm2), dtype=np.float64)
+
+    inv_2sigma2 = -1.0 / (2.0 * sigma * sigma)
+    inv_sigma2 = -1.0 / (sigma * sigma)
+
+    for a in range(nm1):
+        na = int(n1[a])
+        na = 0 if na < 0 else min(na, max_atoms1)
+        base = offs1[a]
+        for j1 in range(na):
+            lbl1 = q1[a, j1]
+            for b in range(nm2):
+                nb = int(n2[b])
+                nb = 0 if nb < 0 else min(nb, max_atoms2)
+                if nb == 0:
+                    continue
+                for j2 in range(nb):
+                    if lbl1 != q2[b, j2]:
+                        continue
+                    d = x1[a, j1, :] - x2[b, j2, :]
+                    l2 = float(np.dot(d, d))
+                    alpha = np.exp(l2 * inv_2sigma2) * inv_sigma2
+                    # dX1 slice: shape (rep, 3*na); take first 3*na rows of last dim
+                    A = dX1[a, j1, :, : 3 * na]  # (rep, 3*na)
+                    # GEMV: y += alpha * A^T * d  -> shape (3*na,)
+                    K[base : base + 3 * na, b] += alpha * (A.T @ d)
+
+    return K
+
+
+@pytest.mark.parametrize("seed", [0, 1234])
+def test_jacobian_t_matches_reference(seed: int) -> None:
+    rng = np.random.default_rng(seed)
+
+    nm1, nm2 = 3, 4
+    max_atoms1, max_atoms2 = 5, 6
+    rep = 7
+    n_species = 4
+    sigma = 1.23
+
+    x1 = rng.normal(size=(nm1, max_atoms1, rep)).astype(np.float64)
+    x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
+    dX1 = rng.normal(size=(nm1, max_atoms1, rep, 3 * max_atoms1)).astype(np.float64)
+
+    q1 = rng.integers(0, n_species, size=(nm1, max_atoms1)).astype(np.int32)
+    q2 = rng.integers(0, n_species, size=(nm2, max_atoms2)).astype(np.int32)
+
+    n1 = rng.integers(1, max_atoms1 + 1, size=(nm1,)).astype(np.int32)
+    n2 = rng.integers(1, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
+
+    K = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
+    K_ref = slow_ref_grad_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
+
+    assert K.shape == K_ref.shape
+    np.testing.assert_allclose(K, K_ref, rtol=1e-10, atol=1e-10)
+
+
+def test_jacobian_t_transpose_property() -> None:
+    """kernel_gaussian_jacobian_t(x1,x2,dX1,...) == kernel_gaussian_jacobian(x2,x1,dX1,...).T"""
+    rng = np.random.default_rng(42)
+
+    nm1, nm2 = 3, 4
+    max_atoms = 5  # same max_atoms so we can swap roles
+    rep = 6
+    n_species = 3
+    sigma = 0.9
+
+    x1 = rng.normal(size=(nm1, max_atoms, rep)).astype(np.float64)
+    x2 = rng.normal(size=(nm2, max_atoms, rep)).astype(np.float64)
+    dX1 = rng.normal(size=(nm1, max_atoms, rep, 3 * max_atoms)).astype(np.float64)
+
+    q1 = rng.integers(0, n_species, size=(nm1, max_atoms)).astype(np.int32)
+    q2 = rng.integers(0, n_species, size=(nm2, max_atoms)).astype(np.int32)
+
+    n1 = rng.integers(1, max_atoms + 1, size=(nm1,)).astype(np.int32)
+    n2 = rng.integers(1, max_atoms + 1, size=(nm2,)).astype(np.int32)
+
+    # kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2) -> (naq1, nm2)
+    K_t = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
+
+    # kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1) -> (nm2, naq1)
+    # Swapping x1/x2 flips the diff d -> -d, so result is negated.
+    K_jac = fchl.kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1, sigma)
+
+    np.testing.assert_allclose(K_t, -K_jac.T, rtol=1e-10, atol=1e-10)
+
+
+def test_jacobian_t_no_matches_yields_zero_matrix() -> None:
+    rng = np.random.default_rng(42)
+    nm1, nm2 = 2, 3
+    max_atoms1, max_atoms2 = 3, 4
+    rep = 4
+    sigma = 0.9
+
+    x1 = rng.normal(size=(nm1, max_atoms1, rep)).astype(np.float64)
+    x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
+    dX1 = rng.normal(size=(nm1, max_atoms1, rep, 3 * max_atoms1)).astype(np.float64)
+
+    q1 = np.zeros((nm1, max_atoms1), dtype=np.int32)
+    q2 = np.ones((nm2, max_atoms2), dtype=np.int32) * 7  # disjoint
+
+    n1 = np.full((nm1,), max_atoms1, dtype=np.int32)
+    n2 = np.full((nm2,), max_atoms2, dtype=np.int32)
+
+    K = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
+    naq1 = 3 * nm1 * max_atoms1
+    assert K.shape == (naq1, nm2)
+    assert np.allclose(K, 0.0)
+
+
+def test_jacobian_t_empty_n1_returns_0_by_nm2() -> None:
+    rng = np.random.default_rng(7)
+    nm1, nm2 = 3, 2
+    max_atoms1, max_atoms2 = 4, 3
+    rep = 3
+    sigma = 1.0
+
+    x1 = rng.normal(size=(nm1, max_atoms1, rep)).astype(np.float64)
+    x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
+    dX1 = rng.normal(size=(nm1, max_atoms1, rep, 3 * max_atoms1)).astype(np.float64)
+
+    q1 = rng.integers(0, 2, size=(nm1, max_atoms1)).astype(np.int32)
+    q2 = rng.integers(0, 2, size=(nm2, max_atoms2)).astype(np.int32)
+
+    n1 = np.zeros((nm1,), dtype=np.int32)  # no atoms -> naq1 = 0
+    n2 = rng.integers(1, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
+
+    K = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
+    assert K.shape == (0, nm2)
+    assert K.size == 0
+
+
+def test_jacobian_t_shape_errors_raise_valueerror() -> None:
+    rng = np.random.default_rng(9)
+    nm1, nm2 = 2, 2
+    max_atoms1, max_atoms2 = 3, 3
+    rep = 4
+    sigma = 1.0
+
+    x1 = rng.normal(size=(nm1, max_atoms1, rep)).astype(np.float64)
+    x2 = rng.normal(size=(nm2, max_atoms2, rep)).astype(np.float64)
+    # wrong last dimension in dX1
+    dX1_bad = rng.normal(size=(nm1, max_atoms1, rep, 3 * max_atoms1 - 1)).astype(np.float64)
+    q1 = rng.integers(0, 2, size=(nm1, max_atoms1)).astype(np.int32)
+    q2 = rng.integers(0, 2, size=(nm2, max_atoms2)).astype(np.int32)
+    n1 = rng.integers(0, max_atoms1 + 1, size=(nm1,)).astype(np.int32)
+    n2 = rng.integers(0, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
+
+    with pytest.raises(ValueError, match=r".*"):
+        _ = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1_bad, q1, q2, n1, n2, sigma)

@@ -801,11 +801,8 @@ void kernel_gaussian_jacobian(
     // Tile width: D is (T x rep_size), H is (T x ncols_max).
     // Working set per thread: T*(rep_size + ncols_max)*8 bytes.
     // Target: fit in L2 (512 KB per core). ncols_max = 3*max_atoms2.
-    // T=128: 128*(384+27)*8 = 421 KB for ethanol -> L2.
-    // Use 128 as a reasonable default; larger datasets with more atoms/mol
-    // may benefit from smaller T, but 128 is a safe choice.
+    // T=256: 256*(384+27)*8 = 842 KB for ethanol -> fits with prefetch overlap.
     constexpr int BATCH_T = 256;
-    constexpr int T_MIN_GEMM = 8;  // below this, GEMV often wins
 
     // D_scaled: (T x rep_size) row-major — build_D writes D[t*rep+k], sequential per t.
     // H:        (T x ncols_max) row-major — scatter reads H[t*ncols:], sequential per t.
@@ -849,34 +846,6 @@ void kernel_gaussian_jacobian(
                 for (size_t t0 = 0; t0 < aj1_list.size(); t0 += BATCH_T) {
                     const int T = (int)std::min<size_t>(BATCH_T, aj1_list.size() - t0);
 
-                    if (T < T_MIN_GEMM) {
-                        // ---- GEMV fallback for tiny batches ----
-                        // Reuse D[0..rep) as a temporary diff vector.
-                        for (int t = 0; t < T; ++t) {
-                            const int a  = aj1_list[t0 + t].first;
-                            const int j1 = aj1_list[t0 + t].second;
-                            const double *x1_aj1 = &x1[((size_t)a * max_atoms1 + j1) * rep_size];
-
-                            double l2 = 0.0;
-                            for (int k = 0; k < rep_size; ++k) {
-                                const double diff = x1_aj1[k] - x2_bj2[k];
-                                D[k] = diff;
-                                l2 += diff * diff;
-                            }
-                            const double alpha = std::exp(l2 * inv_2sigma2) * inv_sigma2;
-
-                            cblas_dgemv(CblasRowMajor, CblasTrans,
-                                        static_cast<blas_int>(rep_size),
-                                        static_cast<blas_int>(ncols), alpha, A,
-                                        static_cast<blas_int>(lda_rowmaj),
-                                        D, static_cast<blas_int>(1),
-                                        1.0, &kernel_out[(size_t)a * naq2 + out_offset],
-                                        static_cast<blas_int>(1));
-                        }
-                        continue;
-                    }
-
-                    // ---- Batched DGEMM path ----
                     // 1) Build D (T x rep_size): row t = alpha_t * (x1[a,j1] - x2[b,j2]).
                     //    Writing D[t*rep+k] is sequential for each t — no cache thrash.
                     for (int t = 0; t < T; ++t) {
@@ -917,6 +886,173 @@ void kernel_gaussian_jacobian(
                     }
                 }  // tiles
             }  // j2
+        }  // omp for
+
+        aligned_free_64(D);
+        aligned_free_64(H);
+    }  // omp parallel
+}
+
+// ###################################
+// # FCHL19 JACOBIAN KERNEL (TRANSPOSED) #
+// ###################################
+// kernel_gaussian_jacobian_t: Jacobians on set-1 side (dX1).
+// Output shape: (naq1, nm2), where naq1 = 3 * sum(n1).
+//
+// Mathematical relationship (sign flips because diff d = x1-x2 -> x2-x1 when roles swap):
+//   kernel_gaussian_jacobian_t(x1, x2, dX1, ...) ==
+//       -kernel_gaussian_jacobian(x2, x1, dX1, ...).T
+//
+// For each matching-label pair (a,j1) from set-1 and (b,j2) from set-2:
+//   d = x1[a,j1] - x2[b,j2]
+//   alpha = exp(-|d|^2 / 2sigma^2) * (-1/sigma^2)
+//   K_t[naq1_off_a + r, b] += alpha * A1[r, :] @ d   for r in [0, 3*n1[a])
+// where A1 = dX1[a, j1, :, :] shape (rep_size, 3*max_atoms1) row-major.
+void kernel_gaussian_jacobian_t(
+    const std::vector<double> &x1,   // (nm1, max_atoms1, rep)
+    const std::vector<double> &x2,   // (nm2, max_atoms2, rep)
+    const std::vector<double> &dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
+    const std::vector<int> &q1,      // (nm1, max_atoms1)
+    const std::vector<int> &q2,      // (nm2, max_atoms2)
+    const std::vector<int> &n1,      // (nm1)
+    const std::vector<int> &n2,      // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    int naq1,  // must equal 3 * sum(n1)
+    double sigma,
+    double *kernel_out  // (naq1, nm2) row-major
+) {
+    if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
+        throw std::invalid_argument("All dims must be positive.");
+    if (!std::isfinite(sigma) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be positive and finite.");
+    if (!kernel_out)
+        throw std::invalid_argument("kernel_out is null.");
+
+    const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
+    const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t dXN = (size_t)nm1 * max_atoms1 * rep_size * (3 * (size_t)max_atoms1);
+    const size_t q1N = (size_t)nm1 * max_atoms1;
+    const size_t q2N = (size_t)nm2 * max_atoms2;
+
+    if (x1.size() != x1N || x2.size() != x2N)
+        throw std::invalid_argument("x1/x2 size mismatch.");
+    if (dX1.size() != dXN)
+        throw std::invalid_argument("dX1 size mismatch.");
+    if (q1.size() != q1N || q2.size() != q2N)
+        throw std::invalid_argument("q1/q2 size mismatch.");
+    if ((int)n1.size() != nm1 || (int)n2.size() != nm2)
+        throw std::invalid_argument("n1/n2 size mismatch.");
+
+    // per-a offsets and nrows (3 * n1[a])
+    std::vector<int> offs1(nm1), nrows_a(nm1);
+    int acc = 0;
+    for (int a = 0; a < nm1; ++a) {
+        const int na = std::max(0, std::min(n1[a], max_atoms1));
+        offs1[a] = acc;
+        nrows_a[a] = 3 * na;
+        acc += nrows_a[a];
+    }
+    if (naq1 != acc)
+        throw std::invalid_argument("naq1 != 3*sum(n1)");
+
+    // zero output
+    std::fill(kernel_out, kernel_out + (size_t)naq1 * nm2, 0.0);
+
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma2 = -1.0 / (sigma * sigma);
+
+    // Build per-label list of (b, j2) only for valid j2 < n2[b]
+    std::unordered_map<int, std::vector<std::pair<int, int>>> lj2;
+    lj2.reserve(128);
+    for (int b = 0; b < nm2; ++b) {
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        for (int j2 = 0; j2 < nb; ++j2) {
+            const int lbl = q2[(size_t)b * max_atoms2 + j2];
+            lj2[lbl].emplace_back(b, j2);
+        }
+    }
+
+    // Tile width: D is (T x rep_size), H is (T x nrows_max).
+    // nrows_max = 3*max_atoms1.
+    constexpr int BATCH_T = 256;
+    const int nrows_max = 3 * max_atoms1;
+
+// Parallelize over a: each thread owns a disjoint row block of kernel_out.
+#pragma omp parallel default(none)                                                          \
+    shared(x1, x2, dX1, q1, q2, n1, n2, nm1, nm2, max_atoms1, max_atoms2, rep_size, naq1, \
+               kernel_out, lj2, offs1, nrows_a, inv_2sigma2, inv_sigma2, nrows_max)
+    {
+        // Thread-local scratch: D is (T x rep_size), H is (T x nrows_max).
+        double *D = aligned_alloc_64((size_t)BATCH_T * rep_size);
+        double *H = aligned_alloc_64((size_t)BATCH_T * nrows_max);
+
+#pragma omp for schedule(dynamic)
+        for (int a = 0; a < nm1; ++a) {
+            const int nrows = nrows_a[a];
+            if (nrows == 0)
+                continue;
+
+            const int out_offset = offs1[a];  // row offset into kernel_out
+            const int lda_rowmaj = 3 * max_atoms1;
+
+            for (int j1 = 0; j1 < nrows / 3; ++j1) {
+                const int label = q1[(size_t)a * max_atoms1 + j1];
+                auto it = lj2.find(label);
+                if (it == lj2.end() || it->second.empty())
+                    continue;
+
+                const auto &bj2_list = it->second;
+
+                // A1 = dX1(a, j1, :, :): shape (rep_size, 3*max_atoms1) row-major
+                const double *A1 = &dX1[base_dx1(a, j1, nm1, max_atoms1, rep_size)];
+                // x1 row for (a,j1)
+                const double *x1_aj1 = &x1[((size_t)a * max_atoms1 + j1) * rep_size];
+
+                // Process (b,j2) pairs in tiles of width BATCH_T
+                for (size_t t0 = 0; t0 < bj2_list.size(); t0 += BATCH_T) {
+                    const int T = (int)std::min<size_t>(BATCH_T, bj2_list.size() - t0);
+
+                    // 1) Build D (T x rep_size): row t = alpha_t * (x1[a,j1] - x2[b,j2]).
+                    for (int t = 0; t < T; ++t) {
+                        const int b  = bj2_list[t0 + t].first;
+                        const int j2 = bj2_list[t0 + t].second;
+                        const double *x2_bj2 = &x2[((size_t)b * max_atoms2 + j2) * rep_size];
+
+                        double l2 = 0.0;
+                        double *Drow = D + (size_t)t * rep_size;
+                        for (int k = 0; k < rep_size; ++k) {
+                            const double diff = x1_aj1[k] - x2_bj2[k];
+                            Drow[k] = diff;
+                            l2 += diff * diff;
+                        }
+                        const double alpha_t = std::exp(l2 * inv_2sigma2) * inv_sigma2;
+                        for (int k = 0; k < rep_size; ++k)
+                            Drow[k] *= alpha_t;
+                    }
+
+                    // 2) H(T x nrows) = D(T x rep) @ A1(rep x nrows)
+                    //    A1 is (rep x lda_rowmaj) row-major; we use nrows columns.
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                                static_cast<blas_int>(T), static_cast<blas_int>(nrows),
+                                static_cast<blas_int>(rep_size), 1.0,
+                                D, static_cast<blas_int>(rep_size),
+                                A1, static_cast<blas_int>(lda_rowmaj),
+                                0.0, H, static_cast<blas_int>(nrows_max));
+
+                    // 3) Scatter-add H rows into kernel_out.
+                    //    kernel_out is (naq1, nm2) row-major.
+                    //    H[t, r] contributes to kernel_out[out_offset + r, b].
+                    //    We write column b of the output row block — this is a column
+                    //    scatter, so we transpose: for each derivative row r, write
+                    //    kernel_out[(out_offset+r)*nm2 + b] += H[t*nrows_max + r].
+                    for (int t = 0; t < T; ++t) {
+                        const int b = bj2_list[t0 + t].first;
+                        const double *hrow = H + (size_t)t * nrows_max;
+                        for (int r = 0; r < nrows; ++r)
+                            kernel_out[(size_t)(out_offset + r) * nm2 + b] += hrow[r];
+                    }
+                }  // tiles
+            }  // j1
         }  // omp for
 
         aligned_free_64(D);

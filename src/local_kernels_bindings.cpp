@@ -237,6 +237,102 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     return K;
 }
 
+static py::array_t<double> fatomic_local_gradient_kernel_t_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> x1,  // (nm1, max_atoms1, rep)
+    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
+    py::array_t<double, py::array::c_style | py::array::forcecast>
+        dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
+    py::array_t<int, py::array::c_style | py::array::forcecast> q1,  // (nm1, max_atoms1)
+    py::array_t<int, py::array::c_style | py::array::forcecast> q2,  // (nm2, max_atoms2)
+    py::array_t<int, py::array::c_style | py::array::forcecast> n1,  // (nm1,)
+    py::array_t<int, py::array::c_style | py::array::forcecast> n2,  // (nm2,)
+    double sigma) {
+    // --- shape checks ---
+    if (x1.ndim() != 3 || x2.ndim() != 3 || dX1.ndim() != 4 || q1.ndim() != 2 || q2.ndim() != 2 ||
+        n1.ndim() != 1 || n2.ndim() != 1) {
+        throw std::invalid_argument(
+            "Expected shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
+            "dX1(nm1,max_atoms1,rep,3*max_atoms1), q1(nm1,max_atoms1), q2(nm2,max_atoms2), "
+            "n1(nm1), n2(nm2).");
+    }
+
+    const int nm1 = static_cast<int>(x1.shape(0));
+    const int nm2 = static_cast<int>(x2.shape(0));
+    const int max_atoms1 = static_cast<int>(x1.shape(1));
+    const int max_atoms2 = static_cast<int>(x2.shape(1));
+    const int rep_size = static_cast<int>(x1.shape(2));
+
+    if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
+        throw std::invalid_argument("x2 shape mismatch.");
+    if (dX1.shape(0) != nm1 || dX1.shape(1) != max_atoms1 || dX1.shape(2) != rep_size ||
+        dX1.shape(3) != 3 * max_atoms1)
+        throw std::invalid_argument(
+            "dX1 shape mismatch (must be (nm1,max_atoms1,rep,3*max_atoms1)).");
+    if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
+        throw std::invalid_argument("q1 shape mismatch.");
+    if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
+        throw std::invalid_argument("q2 shape mismatch.");
+    if (n1.shape(0) != nm1)
+        throw std::invalid_argument("n1 length mismatch.");
+    if (n2.shape(0) != nm2)
+        throw std::invalid_argument("n2 length mismatch.");
+
+    // Flatten into std::vector (C-contiguous thanks to c_style|forcecast)
+    const std::size_t x1N = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size;
+    const std::size_t x2N = static_cast<std::size_t>(nm2) * max_atoms2 * rep_size;
+    const std::size_t dXN = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size *
+                            (3 * static_cast<std::size_t>(max_atoms1));
+    const std::size_t q1N = static_cast<std::size_t>(nm1) * max_atoms1;
+    const std::size_t q2N = static_cast<std::size_t>(nm2) * max_atoms2;
+
+    std::vector<double> x1v(x1N), x2v(x2N), dX1v(dXN);
+    std::vector<int> q1v(q1N), q2v(q2N), n1v(nm1), n2v(nm2);
+
+    std::copy_n(x1.data(), x1N, x1v.begin());
+    std::copy_n(x2.data(), x2N, x2v.begin());
+    std::copy_n(dX1.data(), dXN, dX1v.begin());
+    std::copy_n(q1.data(), q1N, q1v.begin());
+    std::copy_n(q2.data(), q2N, q2v.begin());
+    std::copy_n(n1.data(), static_cast<std::size_t>(nm1), n1v.begin());
+    std::copy_n(n2.data(), static_cast<std::size_t>(nm2), n2v.begin());
+
+    // Compute naq1 = 3 * sum(n1)
+    long long naq1_ll = 0;
+    for (int a = 0; a < nm1; ++a) {
+        int na = n1v[a];
+        if (na < 0) na = 0;
+        if (na > max_atoms1) na = max_atoms1;
+        naq1_ll += 3ll * na;
+    }
+    if (naq1_ll <= 0) {
+        // Return an empty (0, nm2) array if there are no derivatives
+        std::vector<py::ssize_t> shape{static_cast<py::ssize_t>(0), static_cast<py::ssize_t>(nm2)};
+        std::vector<py::ssize_t> strides{py::ssize_t(nm2 * sizeof(double)), py::ssize_t(sizeof(double))};
+        return py::array_t<double>(shape, strides);
+    }
+    if (naq1_ll > std::numeric_limits<py::ssize_t>::max())
+        throw std::overflow_error("naq1 is too large.");
+    const int naq1 = static_cast<int>(naq1_ll);
+
+    // Create aligned output (naq1, nm2), row-major
+    double *Kptr = aligned_alloc_64(static_cast<std::size_t>(naq1) * nm2);
+    auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
+
+    py::array_t<double> K(
+        {static_cast<py::ssize_t>(naq1), static_cast<py::ssize_t>(nm2)},
+        {static_cast<py::ssize_t>(nm2 * sizeof(double)), static_cast<py::ssize_t>(sizeof(double))},
+        Kptr, capsule);
+
+    // Call C++ implementation (releases GIL for BLAS/OpenMP)
+    {
+        py::gil_scoped_release release;
+        kf::fchl19::kernel_gaussian_jacobian_t(x1v, x2v, dX1v, q1v, q2v, n1v, n2v, nm1, nm2,
+                                               max_atoms1, max_atoms2, rep_size, naq1, sigma, Kptr);
+    }
+
+    return K;
+}
+
 static py::array_t<double> fgdml_kernel_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> x1,  // (nm1, max_atoms1, rep)
     py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
@@ -545,6 +641,29 @@ Args:
 
 Returns:
   K: (nm1, naq2) where naq2 = 3 * sum(n2)
+)");
+
+    m.def("kernel_gaussian_jacobian_t", &fatomic_local_gradient_kernel_t_py, py::arg("x1"),
+          py::arg("x2"), py::arg("dX1"), py::arg("q1"), py::arg("q2"), py::arg("n1"), py::arg("n2"),
+          py::arg("sigma"),
+          R"(Compute the transposed Gaussian Jacobian kernel (gradient w.r.t. coordinates of set-1).
+
+Args:
+  x1:  (nm1, max_atoms1, rep)
+  x2:  (nm2, max_atoms2, rep)
+  dX1: (nm1, max_atoms1, rep, 3*max_atoms1)
+  q1:  (nm1, max_atoms1)
+  q2:  (nm2, max_atoms2)
+  n1:  (nm1,)
+  n2:  (nm2,)
+  sigma: positive float
+
+Returns:
+  K: (naq1, nm2) where naq1 = 3 * sum(n1)
+
+Property:
+  kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma) ==
+      -kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1, sigma).T
 )");
 
     m.def("kernel_gaussian", &flocal_kernel_py, py::arg("x1"), py::arg("x2"), py::arg("q1"),

@@ -23,6 +23,7 @@ from kernelforge.local_kernels import (
     kernel_gaussian_hessian,
     kernel_gaussian_hessian_symm,
     kernel_gaussian_jacobian,
+    kernel_gaussian_jacobian_t,
     kernel_gaussian_symm,
     kernel_gaussian_symm_rfp,
 )
@@ -678,6 +679,31 @@ def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
     return elapsed, f"local::kernel_gaussian_jacobian (Ethanol, N={n})"
 
 
+def benchmark_local_kernel_gaussian_jacobian_t() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_jacobian_t (N=600, ~2s)."""
+    n = 600
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
+
+    # Use same data for both train and test (for comparability with jacobian)
+    X_train, X_test = X, X
+    dX_train = dX
+    Q_train, Q_test = Q, Q
+    N_train, N_test = N, N
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_jacobian_t(
+        X_train, X_test, dX_train, Q_train, Q_test, N_train, N_test, sigma
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_jacobian_t (Ethanol, N={n})"
+
+
 def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
     """Benchmark local kernel_gaussian_hessian_symm (N=270, ~2s)."""
     n = 250
@@ -857,6 +883,7 @@ BENCHMARKS = {
     "local_kernel_gaussian_symm_rfp_qm7b": benchmark_local_kernel_gaussian_symm_rfp_qm7b,
     "local_kernel_gaussian_qm7b": benchmark_local_kernel_gaussian_qm7b,
     "local_kernel_gaussian_jacobian": benchmark_local_kernel_gaussian_jacobian,
+    "local_kernel_gaussian_jacobian_t": benchmark_local_kernel_gaussian_jacobian_t,
     "local_kernel_gaussian_hessian_symm": benchmark_local_kernel_gaussian_hessian_symm,
     "local_kernel_gaussian_hessian": benchmark_local_kernel_gaussian_hessian,
     "rff_features": benchmark_rff_features,
@@ -895,6 +922,7 @@ SUITES = {
         "local_kernel_gaussian_symm_rfp_qm7b",
         "local_kernel_gaussian_qm7b",
         "local_kernel_gaussian_jacobian",
+        "local_kernel_gaussian_jacobian_t",
         "local_kernel_gaussian_hessian_symm",
         "local_kernel_gaussian_hessian",
     ],
