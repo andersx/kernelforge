@@ -89,5 +89,36 @@ void kernel_gaussian_hessian_symm_rfp(
     double *arf  // length naq*(naq+1)/2, RFP TRANSR='N', UPLO='U'
 );
 
+// Full combined energy+force kernel (asymmetric).
+// Output: ((nm1+naq1) x (nm2+naq2)) row-major matrix.
+// Blocks: [0:nm1,0:nm2]=scalar, [0:nm1,nm2:]=jac_t, [nm1:,0:nm2]=jac, [nm1:,nm2:]=hessian.
+void kernel_gaussian_full(
+    const std::vector<double> &x1, const std::vector<double> &x2,
+    const std::vector<double> &dx1, const std::vector<double> &dx2,
+    const std::vector<int> &q1, const std::vector<int> &q2,
+    const std::vector<int> &n1, const std::vector<int> &n2,
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    int naq1, int naq2, double sigma,
+    double *kernel_out  // ((nm1+naq1) x (nm2+naq2)), row-major
+);
+
+// Full combined energy+force kernel (symmetric, full square output).
+// Output: ((nm+naq) x (nm+naq)) row-major, fully filled symmetric matrix.
+void kernel_gaussian_full_symm(
+    const std::vector<double> &x, const std::vector<double> &dx,
+    const std::vector<int> &q, const std::vector<int> &n,
+    int nm, int max_atoms, int rep_size, int naq, double sigma,
+    double *kernel_out  // ((nm+naq) x (nm+naq)), row-major
+);
+
+// Full combined energy+force kernel (symmetric, RFP output).
+// Output: 1-D array of length BIG*(BIG+1)/2, BIG=nm+naq, TRANSR='N', UPLO='U'.
+void kernel_gaussian_full_symm_rfp(
+    const std::vector<double> &x, const std::vector<double> &dx,
+    const std::vector<int> &q, const std::vector<int> &n,
+    int nm, int max_atoms, int rep_size, int naq, double sigma,
+    double *arf  // length (nm+naq)*(nm+naq+1)/2
+);
+
 }  // namespace fchl19
 }  // namespace kf

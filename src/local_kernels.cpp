@@ -1075,7 +1075,7 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
                   int naq1,  // must be 3 * sum_a n1[a]
                   int naq2,  // must be 3 * sum_b n2[b]
                   double sigma,
-                  double *kernel_out  // (naq2, naq1), row-major => idx = row * naq1 + col
+                   double *kernel_out  // (naq1, naq2), row-major => idx = row * naq2 + col
 ) {
     // ---- validation ----
     if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
@@ -1119,7 +1119,7 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
         throw std::invalid_argument("naq2 != 3*sum(n2)");
 
     // zero output
-    std::fill(kernel_out, kernel_out + (size_t)naq2 * naq1, 0.0);
+    std::fill(kernel_out, kernel_out + (size_t)naq1 * naq2, 0.0);
 
     // scalars
     const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
@@ -1195,7 +1195,7 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
             const int col_off = offs1[a];
             const int lda1 = 3 * max_atoms1;
 
-            double *Kba = &kernel_out[(size_t)row_off * naq1 + col_off];
+            double *Kab = &kernel_out[(size_t)col_off * naq2 + row_off];
             const auto &label_i1 = lab_to_i1[a];
 
             for (int i2 = 0; i2 < nb; ++i2) {
@@ -1259,23 +1259,24 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
                                 D_row, static_cast<blas_int>(1),
                                 0.0, V_row, static_cast<blas_int>(1));
 
-                    // rank-1: Kba += W ⊗ V  (dger)
+                    // rank-1: Kab += V ⊗ W  (dger, rows=ncols_a x cols=ncols_b)
                     cblas_dger(CblasRowMajor,
-                               static_cast<blas_int>(ncols_b),
                                static_cast<blas_int>(ncols_a),
+                               static_cast<blas_int>(ncols_b),
                                1.0,
-                               W_row, static_cast<blas_int>(1),
                                V_row, static_cast<blas_int>(1),
-                               Kba, static_cast<blas_int>(naq1));
+                               W_row, static_cast<blas_int>(1),
+                               Kab, static_cast<blas_int>(naq2));
                 }  // i1
 
-                // ---- static term: Kba += SD2^T @ S_sum ----
+                // ---- static term: Kab += S_sum^T @ SD2  (ncols_a x ncols_b) ----
+                // S_sum is (rep x ncols_a) row-major with stride ncols_a; SD2 is (rep x lda2)
                 cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                            static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
+                            static_cast<blas_int>(ncols_a), static_cast<blas_int>(ncols_b),
                             static_cast<blas_int>(rep_size), 1.0,
-                            SD2, static_cast<blas_int>(lda2),
                             S_sum, static_cast<blas_int>(ncols_a),
-                            1.0, Kba, static_cast<blas_int>(naq1));
+                            SD2, static_cast<blas_int>(lda2),
+                            1.0, Kab, static_cast<blas_int>(naq2));
             }  // i2
         }  // a
 
@@ -1710,6 +1711,736 @@ void kernel_gaussian_hessian_symm_rfp(
                         #pragma omp atomic
 #endif
                         arf[idx] += crow[c];
+                    }
+                }
+            }
+        }  // a
+
+        aligned_free_64(D_row);
+        aligned_free_64(W_row);
+        aligned_free_64(V_row);
+        aligned_free_64(S_sum);
+        aligned_free_64(xbv);
+    }  // b
+}
+
+// ============================================================================
+// Full combined energy+force kernel (asymmetric).
+//
+// Output layout (row-major, shape (nm1 + naq1) x (nm2 + naq2)):
+//   K_full[0:nm1,   0:nm2]   = scalar block      K[a,b] = sum_{i1,i2 label-match} exp(...)
+//   K_full[0:nm1,   nm2:]    = jacobian_t block   (nm1, naq2) — derivative on set-2
+//   K_full[nm1:,    0:nm2]   = jacobian block     (naq1, nm2) — derivative on set-1
+//   K_full[nm1:,    nm2:]    = hessian block      (naq1, naq2)
+//
+// All four blocks are computed in a single fused pass over matching atom pairs.
+// ============================================================================
+void kernel_gaussian_full(
+    const std::vector<double> &x1,   // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &x2,   // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double> &dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const std::vector<int> &q1,      // (nm1, max_atoms1)
+    const std::vector<int> &q2,      // (nm2, max_atoms2)
+    const std::vector<int> &n1,      // (nm1,)
+    const std::vector<int> &n2,      // (nm2,)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    int naq1,  // must equal 3 * sum(n1)
+    int naq2,  // must equal 3 * sum(n2)
+    double sigma,
+    double *kernel_out  // ((nm1+naq1) x (nm2+naq2)), row-major
+) {
+    // ---- validation ----
+    if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
+        throw std::invalid_argument("All dims must be positive.");
+    if (!std::isfinite(sigma) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be positive and finite.");
+    if (!kernel_out)
+        throw std::invalid_argument("kernel_out is null.");
+
+    const size_t x1N  = (size_t)nm1 * max_atoms1 * rep_size;
+    const size_t x2N  = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t dx1N = (size_t)nm1 * max_atoms1 * rep_size * (3 * (size_t)max_atoms1);
+    const size_t dx2N = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
+    if (x1.size() != x1N || x2.size() != x2N)
+        throw std::invalid_argument("x1/x2 size mismatch.");
+    if (dx1.size() != dx1N || dx2.size() != dx2N)
+        throw std::invalid_argument("dx1/dx2 size mismatch.");
+    if (q1.size() != (size_t)nm1 * max_atoms1 || q2.size() != (size_t)nm2 * max_atoms2)
+        throw std::invalid_argument("q1/q2 size mismatch.");
+    if ((int)n1.size() != nm1 || (int)n2.size() != nm2)
+        throw std::invalid_argument("n1/n2 size mismatch.");
+
+    // Offsets in derivative axes
+    std::vector<int> offs1(nm1), offs2(nm2);
+    int sum1 = 0;
+    for (int a = 0; a < nm1; ++a) { offs1[a] = sum1; sum1 += 3 * std::max(0, std::min(n1[a], max_atoms1)); }
+    int sum2 = 0;
+    for (int b = 0; b < nm2; ++b) { offs2[b] = sum2; sum2 += 3 * std::max(0, std::min(n2[b], max_atoms2)); }
+    if (naq1 != sum1) throw std::invalid_argument("naq1 != 3*sum(n1)");
+    if (naq2 != sum2) throw std::invalid_argument("naq2 != 3*sum(n2)");
+
+    const int full_rows = nm1 + naq1;
+    const int full_cols = nm2 + naq2;
+
+    // Zero output
+    std::fill(kernel_out, kernel_out + (size_t)full_rows * full_cols, 0.0);
+
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma4  = -1.0 / (sigma * sigma * sigma * sigma);  // < 0
+    const double sigma2_neg  = -(sigma * sigma);           // < 0
+
+    // Label -> atom-index lists per molecule (set-1)
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_i1(nm1);
+    for (int a = 0; a < nm1; ++a) {
+        const int na = std::max(0, std::min(n1[a], max_atoms1));
+        auto &m = lab_to_i1[a];
+        m.reserve(64);
+        for (int i1 = 0; i1 < na; ++i1)
+            m[q1[(size_t)a * max_atoms1 + i1]].push_back(i1);
+    }
+
+    const int ncols_b_max = 3 * max_atoms2;
+    const int ncols_a_max = 3 * max_atoms1;
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int b = 0; b < nm2; ++b) {
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        if (nb == 0) continue;
+        const int ncols_b = 3 * nb;
+        const int lda2    = 3 * max_atoms2;
+        const int row2_off = offs2[b];   // offset in naq2 axis
+
+        // Thread-local scratch
+        double *D_row = aligned_alloc_64((size_t)rep_size);
+        double *W_row = aligned_alloc_64((size_t)ncols_b_max);
+        double *V_row = aligned_alloc_64((size_t)ncols_a_max);
+        double *S_sum = aligned_alloc_64((size_t)rep_size * ncols_a_max);
+
+        for (int a = 0; a < nm1; ++a) {
+            const int na = std::max(0, std::min(n1[a], max_atoms1));
+            if (na == 0) continue;
+            const int ncols_a = 3 * na;
+            const int lda1    = 3 * max_atoms1;
+            const int col1_off = offs1[a];   // offset in naq1 axis
+
+            const auto &label_i1 = lab_to_i1[a];
+
+            // Pointers into the four output blocks for this (a,b) pair:
+            // Scalar:    K_full[a,             b]              stride full_cols
+            // Jac_t:     K_full[a,             nm2+row2_off+r] stride full_cols
+            // Jacobian:  K_full[nm1+col1_off+c, b]             stride full_cols
+            // Hessian:   K_full[nm1+col1_off+c, nm2+row2_off+r] stride full_cols
+
+            double *scalar_ab  = &kernel_out[(size_t)a * full_cols + b];
+            double *jact_row_a = &kernel_out[(size_t)a * full_cols + nm2 + row2_off];
+            double *jac_col_b  = &kernel_out[(size_t)(nm1 + col1_off) * full_cols + b];
+            double *hess_ab    = &kernel_out[(size_t)(nm1 + col1_off) * full_cols + nm2 + row2_off];
+
+            for (int i2 = 0; i2 < nb; ++i2) {
+                const int label = q2[(size_t)b * max_atoms2 + i2];
+                auto it = label_i1.find(label);
+                if (it == label_i1.end()) continue;
+                const auto &i1_list = it->second;
+                if (i1_list.empty()) continue;
+
+                const double *SD2    = &dx2[base_dx2(b, i2, nm2, max_atoms2, rep_size)];
+                const double *x2_bi2 = &x2[((size_t)b * max_atoms2 + i2) * rep_size];
+
+                // Zero S_sum for this (a, b, i2) — stride is ncols_a
+                std::fill(S_sum, S_sum + (size_t)rep_size * ncols_a, 0.0);
+
+                for (int i1 : i1_list) {
+                    const double *x1_ai1 = &x1[((size_t)a * max_atoms1 + i1) * rep_size];
+                    const double *SD1    = &dx1[base_dx1(a, i1, nm1, max_atoms1, rep_size)];
+
+                    // Squared distance and raw diff
+                    double l2 = 0.0;
+                    for (int k = 0; k < rep_size; ++k) {
+                        const double diff = x1_ai1[k] - x2_bi2[k];
+                        D_row[k] = diff;
+                        l2 += diff * diff;
+                    }
+                    const double exp_base = std::exp(l2 * inv_2sigma2);
+                    const double expd     = inv_sigma4 * exp_base;  // < 0
+                    const double expdiag  = sigma2_neg * expd;      // > 0
+                    const double s        = std::sqrt(-expd);       // sqrt(|expd|)
+                    const double kab_val  = exp_base;               // scalar kernel contribution
+
+                    // --- Scalar block: K[a,b] += exp_base ---
+                    *scalar_ab += kab_val;
+
+                    // --- Jacobian (dX1 side): K_jac[nm1+col1_off+c, b] ---
+                    // For each coord c in dX1: K_jac[c,b] += inv_sigma2 * exp_base * (SD1^T @ D_raw)[c]
+                    // = expd * sigma2_neg * (SD1^T @ D_scaled_by_s / s)[c]
+                    // Equiv: K_jac[c,b] += (SD1^T @ (inv_sigma2*exp_base * D_raw_unscaled))[c]
+                    // We use: D_raw=D_row (before scaling). Build jac_vec = SD1^T @ D_row * (inv_sigma2 * exp_base)
+                    // But D_row is the raw diff; we compute SD1^T @ D_row via Trans GEMV.
+                    // coeff = inv_sigma2 * exp_base = expd * sigma^4 / sigma^2 * (-1/s^2) = ...
+                    // Simplest: coeff = exp_base * inv_sigma2 = -kab_val / sigma^2 = expd * sigma^2 = -expdiag
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -expdiag,                  // = inv_sigma2 * exp_base = expd * sigma^2 * (-1) = expdiag? check signs
+                                SD1, static_cast<blas_int>(lda1),
+                                D_row, static_cast<blas_int>(1),
+                                1.0,   // accumulate
+                                jac_col_b, static_cast<blas_int>(full_cols));  // stride = full_cols (column scatter)
+
+                    // --- Jacobian_t (dX2 side): K_jact[a, nm2+row2_off+r] for r in [0,ncols_b) ---
+                    // K_jact[a,r] = inv_sigma2 * exp_base * (SD2^T @ D_row)[r]
+                    // Each i2 contributes to the full ncols_b range via its SD2 block.
+                    // coeff = inv_sigma2 * exp_base = -expdiag
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                -expdiag,
+                                SD2, static_cast<blas_int>(lda2),
+                                D_row, static_cast<blas_int>(1),
+                                1.0,
+                                jact_row_a, static_cast<blas_int>(1));
+
+                    // --- Hessian static term accumulation (before D_row scaling) ---
+                    // S_sum is (rep x ncols_a) row-major; stride is ncols_a
+                    for (int k = 0; k < rep_size; ++k) {
+                        double       *srow  = S_sum + (size_t)k * ncols_a;
+                        const double *sdrow = SD1   + (size_t)k * lda1;
+                        for (int j = 0; j < ncols_a; ++j)
+                            srow[j] += expdiag * sdrow[j];
+                    }
+
+                    // --- Hessian rank-1: scale D_row by s ---
+                    for (int k = 0; k < rep_size; ++k) D_row[k] *= s;
+
+                    // W = SD2^T @ D_row_scaled  (ncols_b)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                1.0, SD2, static_cast<blas_int>(lda2),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, W_row, static_cast<blas_int>(1));
+
+                    // V = -SD1^T @ D_row_scaled  (ncols_a)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -1.0, SD1, static_cast<blas_int>(lda1),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, V_row, static_cast<blas_int>(1));
+
+                    // rank-1 hessian: hess_ab += V ⊗ W  (ncols_a rows × ncols_b cols)
+                    // hess block layout: row = x1-side (ncols_a), col = x2-side (ncols_b)
+                    cblas_dger(CblasRowMajor,
+                               static_cast<blas_int>(ncols_a),
+                               static_cast<blas_int>(ncols_b),
+                               1.0,
+                               V_row, static_cast<blas_int>(1),
+                               W_row, static_cast<blas_int>(1),
+                               hess_ab, static_cast<blas_int>(full_cols));
+                }  // i1
+
+                // Hessian static term: hess_ab += S_sum^T @ SD2  (ncols_a × ncols_b)
+                // S_sum is (rep x ncols_a) row-major with stride ncols_a; SD2 is (rep x lda2)
+                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            static_cast<blas_int>(ncols_a), static_cast<blas_int>(ncols_b),
+                            static_cast<blas_int>(rep_size), 1.0,
+                            S_sum, static_cast<blas_int>(ncols_a),
+                            SD2, static_cast<blas_int>(lda2),
+                            1.0, hess_ab, static_cast<blas_int>(full_cols));
+
+            }  // i2
+        }  // a
+
+        aligned_free_64(D_row);
+        aligned_free_64(W_row);
+        aligned_free_64(V_row);
+        aligned_free_64(S_sum);
+    }  // b
+}
+
+// ============================================================================
+// Full combined energy+force kernel (symmetric).
+//
+// Output layout (row-major, shape (nm + naq) x (nm + naq)):
+//   K_full[0:nm,  0:nm]   = scalar block   (full, symmetric)
+//   K_full[0:nm,  nm:]    = jacobian_t     (nm, naq)
+//   K_full[nm:,   0:nm]   = jacobian       (naq, nm)
+//   K_full[nm:,   nm:]    = hessian block  (lower triangle only — symmetric)
+//
+// Uses the same fused single-pass approach as the asymmetric variant.
+// ============================================================================
+void kernel_gaussian_full_symm(
+    const std::vector<double> &x,   // (nm, max_atoms, rep_size)
+    const std::vector<double> &dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const std::vector<int> &q,      // (nm, max_atoms)
+    const std::vector<int> &n,      // (nm,)
+    int nm, int max_atoms, int rep_size,
+    int naq,  // must equal 3 * sum(n)
+    double sigma,
+    double *kernel_out  // ((nm+naq) x (nm+naq)), row-major, full symmetric
+) {
+    // ---- validation ----
+    if (nm <= 0 || max_atoms <= 0 || rep_size <= 0)
+        throw std::invalid_argument("dims must be positive");
+    if (!std::isfinite(sigma) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be > 0");
+    if (!kernel_out)
+        throw std::invalid_argument("kernel_out is null");
+
+    const size_t xN  = (size_t)nm * max_atoms * rep_size;
+    const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
+    if (x.size() != xN) throw std::invalid_argument("x size mismatch");
+    if (dx.size() != dxN) throw std::invalid_argument("dx size mismatch");
+    if (q.size() != (size_t)nm * max_atoms) throw std::invalid_argument("q size mismatch");
+    if ((int)n.size() != nm) throw std::invalid_argument("n size mismatch");
+
+    std::vector<int> offs(nm);
+    int sum = 0;
+    for (int m = 0; m < nm; ++m) { offs[m] = sum; sum += 3 * std::max(0, std::min(n[m], max_atoms)); }
+    if (naq != sum) throw std::invalid_argument("naq != 3*sum(n)");
+
+    const int BIG = nm + naq;
+    std::fill(kernel_out, kernel_out + (size_t)BIG * BIG, 0.0);
+
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma4  = -1.0 / (sigma * sigma * sigma * sigma);
+    const double sigma2_neg  = -(sigma * sigma);
+
+    // Label -> atom-index lists per molecule
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_idx(nm);
+    for (int a = 0; a < nm; ++a) {
+        const int na = std::max(0, std::min(n[a], max_atoms));
+        auto &M2 = lab_to_idx[a];
+        M2.reserve(64);
+        for (int i1 = 0; i1 < na; ++i1)
+            M2[q[(size_t)a * max_atoms + i1]].push_back(i1);
+    }
+
+    const int ncols_max = 3 * max_atoms;
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int b = 0; b < nm; ++b) {
+        const int nb = std::max(0, std::min(n[b], max_atoms));
+        if (nb == 0) continue;
+        const int ncols_b = 3 * nb;
+        const int lda_b   = 3 * max_atoms;
+        const int row_off = offs[b];   // naq offset for molecule b
+
+        double *D_row = aligned_alloc_64((size_t)rep_size);
+        double *W_row = aligned_alloc_64((size_t)ncols_max);
+        double *V_row = aligned_alloc_64((size_t)ncols_max);
+        double *S_sum = aligned_alloc_64((size_t)rep_size * ncols_max);
+        double *xbv   = aligned_alloc_64((size_t)rep_size);
+
+        for (int a = 0; a <= b; ++a) {  // lower triangle only
+            const int na = std::max(0, std::min(n[a], max_atoms));
+            if (na == 0) continue;
+            const int ncols_a = 3 * na;
+            const int lda_a   = 3 * max_atoms;
+            const int col_off = offs[a];
+
+            const auto &lab_a = lab_to_idx[a];
+
+            // For diagonal (a==b): use a temp block for hessian to scatter lower-tri only.
+            // For scalar/jac/jact diagonal blocks: accumulate in-place (full diagonal is fine).
+            std::vector<double> Hdiag;
+            double *Hdst    = &kernel_out[(size_t)(nm + col_off) * BIG + (nm + row_off)];
+            int     Hdst_ld = BIG;
+            if (a == b) {
+                Hdiag.assign((size_t)ncols_b * ncols_a, 0.0);
+                Hdst    = Hdiag.data();
+                Hdst_ld = ncols_a;
+            }
+
+            for (int j2 = 0; j2 < nb; ++j2) {
+                const int lbl = q[(size_t)b * max_atoms + j2];
+                auto it_a = lab_a.find(lbl);
+                if (it_a == lab_a.end() || it_a->second.empty()) continue;
+                const auto &i1_list = it_a->second;
+
+                const double *SD_b = &dx[base_dx(b, j2, nm, max_atoms, rep_size)];
+                for (int k = 0; k < rep_size; ++k)
+                    xbv[k] = x[idx_x(b, j2, k, nm, max_atoms, rep_size)];
+
+                std::fill(S_sum, S_sum + (size_t)rep_size * ncols_a, 0.0);
+
+                for (int i1 : i1_list) {
+                    const double *x_ai1 = &x[idx_x(a, i1, 0, nm, max_atoms, rep_size)];
+                    const double *SD_a  = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
+
+                    double l2 = 0.0;
+                    for (int k = 0; k < rep_size; ++k) {
+                        const double diff = x_ai1[k] - xbv[k];
+                        D_row[k] = diff;
+                        l2 += diff * diff;
+                    }
+                    const double eb      = std::exp(l2 * inv_2sigma2);
+                    const double e1      = inv_sigma4 * eb;
+                    const double expdiag = sigma2_neg * e1;
+                    const double s       = std::sqrt(-e1);
+                    const double kval    = eb;
+
+                    // --- Scalar block (lower and mirror) ---
+                    kernel_out[(size_t)a * BIG + b] += kval;
+                    if (a != b) kernel_out[(size_t)b * BIG + a] += kval;
+
+                    // --- Jacobian: K_jac[nm+col_off+c, b] = -expdiag*(SD_a^T@D_row)[c] ---
+                    // dK_{ab}/dR_{a,c}: a-side derivative, D_row = X_a - X_b
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -expdiag,
+                                SD_a, static_cast<blas_int>(lda_a),
+                                D_row, static_cast<blas_int>(1),
+                                1.0,
+                                &kernel_out[(size_t)(nm + col_off) * BIG + b],
+                                static_cast<blas_int>(BIG));  // column scatter
+
+                    // --- Jacobian_t: K_jact[a, nm+row_off+r] = +expdiag*(SD_b^T@D_row)[r] ---
+                    // dK_{ab}/dR_{b,r}: b-side derivative.  K_jact = K_jac^T for symmetric kernel.
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                expdiag,
+                                SD_b, static_cast<blas_int>(lda_b),
+                                D_row, static_cast<blas_int>(1),
+                                1.0,
+                                &kernel_out[(size_t)a * BIG + nm + row_off],
+                                static_cast<blas_int>(1));
+
+                    if (a != b) {
+                        // Mirror jac: K_jac[nm+row_off+r, a] = K_jact^T[nm+row_off+r, a]
+                        //           = K_jact[a, nm+row_off+r] = +expdiag*(SD_b^T@D_row)[r]
+                        // For pair (b,a) diff = -D_row: -expdiag*(SD_b^T@(-D_row)) = +expdiag*(SD_b^T@D_row) ✓
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    static_cast<blas_int>(rep_size),
+                                    static_cast<blas_int>(ncols_b),
+                                    expdiag,
+                                    SD_b, static_cast<blas_int>(lda_b),
+                                    D_row, static_cast<blas_int>(1),
+                                    1.0,
+                                    &kernel_out[(size_t)(nm + row_off) * BIG + a],
+                                    static_cast<blas_int>(BIG));
+
+                        // Mirror jact: K_jact[b, nm+col_off+c] = K_jac^T[b, nm+col_off+c]
+                        //            = K_jac[nm+col_off+c, b] = -expdiag*(SD_a^T@D_row)[c]
+                        // For pair (b,a) diff = -D_row: +expdiag*(SD_a^T@(-D_row)) = -expdiag*(SD_a^T@D_row) ✓
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    static_cast<blas_int>(rep_size),
+                                    static_cast<blas_int>(ncols_a),
+                                    -expdiag,
+                                    SD_a, static_cast<blas_int>(lda_a),
+                                    D_row, static_cast<blas_int>(1),
+                                    1.0,
+                                    &kernel_out[(size_t)b * BIG + nm + col_off],
+                                    static_cast<blas_int>(1));
+                    }
+
+                    // S_sum accumulation
+                    for (int k = 0; k < rep_size; ++k) {
+                        double       *srow  = S_sum + (size_t)k * ncols_a;
+                        const double *sdrow = SD_a  + (size_t)k * lda_a;
+                        for (int j = 0; j < ncols_a; ++j)
+                            srow[j] += expdiag * sdrow[j];
+                    }
+
+                    // Scale D_row for hessian rank-1
+                    for (int k = 0; k < rep_size; ++k) D_row[k] *= s;
+
+                    // W = SD_b^T @ D_row_scaled  (ncols_b)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                1.0, SD_b, static_cast<blas_int>(lda_b),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, W_row, static_cast<blas_int>(1));
+
+                    // V = -SD_a^T @ D_row_scaled  (ncols_a)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -1.0, SD_a, static_cast<blas_int>(lda_a),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, V_row, static_cast<blas_int>(1));
+
+                    // rank-1 hessian: Hdst += V ⊗ W  (ncols_a rows × ncols_b cols)
+                    cblas_dger(CblasRowMajor,
+                               static_cast<blas_int>(ncols_a),
+                               static_cast<blas_int>(ncols_b),
+                               1.0,
+                               V_row, static_cast<blas_int>(1),
+                               W_row, static_cast<blas_int>(1),
+                               Hdst, static_cast<blas_int>(Hdst_ld));
+                }  // i1
+
+                // Hessian static term: Hdst += S_sum^T @ SD_b  (ncols_a × ncols_b)
+                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            static_cast<blas_int>(ncols_a), static_cast<blas_int>(ncols_b),
+                            static_cast<blas_int>(rep_size), 1.0,
+                            S_sum, static_cast<blas_int>(ncols_a),
+                            SD_b, static_cast<blas_int>(lda_b),
+                            1.0, Hdst, static_cast<blas_int>(Hdst_ld));
+            }  // j2
+
+            // Scatter hessian blocks
+            // Hdst layout: ncols_a rows (a-side) × ncols_b cols (b-side)
+            // Hdst[c, r] = H[nm+col_off+c, nm+row_off+r]  (already written in-place for a!=b)
+            if (a == b) {
+                // Diagonal a==b: col_off==row_off, ncols_a==ncols_b.
+                // Scatter lower triangle only: K_full[nm+col_off+r, nm+col_off+c] for r >= c.
+                for (int c = 0; c < ncols_a; ++c) {
+                    const double *dcol = Hdiag.data() + (size_t)c * ncols_b;
+                    for (int r = c; r < ncols_b; ++r) {
+                        kernel_out[(size_t)(nm + row_off + r) * BIG + (nm + col_off + c)] += dcol[r];
+                    }
+                }
+            } else {
+                // Off-diagonal a < b: Hdst already written at (nm+col_off)*BIG+(nm+row_off).
+                // Mirror: K_full[nm+row_off+r, nm+col_off+c] = K_full[nm+col_off+c, nm+row_off+r]
+                for (int c = 0; c < ncols_a; ++c) {
+                    for (int r = 0; r < ncols_b; ++r) {
+                        const double val = kernel_out[(size_t)(nm + col_off + c) * BIG + (nm + row_off + r)];
+                        kernel_out[(size_t)(nm + row_off + r) * BIG + (nm + col_off + c)] = val;
+                    }
+                }
+            }
+        }  // a
+
+        aligned_free_64(D_row);
+        aligned_free_64(W_row);
+        aligned_free_64(V_row);
+        aligned_free_64(S_sum);
+        aligned_free_64(xbv);
+    }  // b
+}
+
+// ============================================================================
+// Full combined energy+force kernel (symmetric, RFP output).
+//
+// Output: 1-D array of length BIG*(BIG+1)/2 where BIG = nm + naq,
+//         in RFP TRANSR='N', UPLO='U' format.
+//
+// Block structure in the upper triangle (row <= col):
+//   [a, b]               with a <= b: scalar block
+//   [a, nm+col_off+c]    for all a < nm, all c: jacobian_t block
+//   [nm+col_off+c, nm+row_off+r] with col_off <= row_off (or col_off==row_off, c<=r): hessian block
+// ============================================================================
+void kernel_gaussian_full_symm_rfp(
+    const std::vector<double> &x,   // (nm, max_atoms, rep_size)
+    const std::vector<double> &dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const std::vector<int> &q,      // (nm, max_atoms)
+    const std::vector<int> &n,      // (nm,)
+    int nm, int max_atoms, int rep_size,
+    int naq,  // must equal 3 * sum(n)
+    double sigma,
+    double *arf  // length BIG*(BIG+1)/2, RFP TRANSR='N', UPLO='U'
+) {
+    // ---- validation ----
+    if (nm <= 0 || max_atoms <= 0 || rep_size <= 0)
+        throw std::invalid_argument("dims must be positive");
+    if (!std::isfinite(sigma) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be > 0");
+    if (!arf)
+        throw std::invalid_argument("arf is null");
+
+    const size_t xN  = (size_t)nm * max_atoms * rep_size;
+    const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
+    if (x.size() != xN) throw std::invalid_argument("x size mismatch");
+    if (dx.size() != dxN) throw std::invalid_argument("dx size mismatch");
+    if (q.size() != (size_t)nm * max_atoms) throw std::invalid_argument("q size mismatch");
+    if ((int)n.size() != nm) throw std::invalid_argument("n size mismatch");
+
+    std::vector<int> offs(nm);
+    int sum = 0;
+    for (int m = 0; m < nm; ++m) { offs[m] = sum; sum += 3 * std::max(0, std::min(n[m], max_atoms)); }
+    if (naq != sum) throw std::invalid_argument("naq != 3*sum(n)");
+
+    const int BIG = nm + naq;
+    const size_t nt = (size_t)BIG * (BIG + 1ull) / 2ull;
+    std::fill(arf, arf + nt, 0.0);
+
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma4  = -1.0 / (sigma * sigma * sigma * sigma);
+    const double sigma2_neg  = -(sigma * sigma);
+
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_idx(nm);
+    for (int a = 0; a < nm; ++a) {
+        const int na = std::max(0, std::min(n[a], max_atoms));
+        auto &M2 = lab_to_idx[a];
+        M2.reserve(64);
+        for (int i1 = 0; i1 < na; ++i1)
+            M2[q[(size_t)a * max_atoms + i1]].push_back(i1);
+    }
+
+    const int ncols_max = 3 * max_atoms;
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int b = 0; b < nm; ++b) {
+        const int nb = std::max(0, std::min(n[b], max_atoms));
+        if (nb == 0) continue;
+        const int ncols_b = 3 * nb;
+        const int lda_b   = 3 * max_atoms;
+        const int row_off = offs[b];
+
+        double *D_row = aligned_alloc_64((size_t)rep_size);
+        double *W_row = aligned_alloc_64((size_t)ncols_max);
+        double *V_row = aligned_alloc_64((size_t)ncols_max);
+        double *S_sum = aligned_alloc_64((size_t)rep_size * ncols_max);
+        double *xbv   = aligned_alloc_64((size_t)rep_size);
+
+        for (int a = 0; a <= b; ++a) {  // upper triangle: b >= a
+            const int na = std::max(0, std::min(n[a], max_atoms));
+            if (na == 0) continue;
+            const int ncols_a = 3 * na;
+            const int lda_a   = 3 * max_atoms;
+            const int col_off = offs[a];
+
+            const auto &lab_a = lab_to_idx[a];
+
+            // Hessian temp block: ncols_a rows (a-side) × ncols_b cols (b-side)
+            std::vector<double> Hblk((size_t)ncols_a * ncols_b, 0.0);
+
+            for (int j2 = 0; j2 < nb; ++j2) {
+                const int lbl = q[(size_t)b * max_atoms + j2];
+                auto it_a = lab_a.find(lbl);
+                if (it_a == lab_a.end() || it_a->second.empty()) continue;
+                const auto &i1_list = it_a->second;
+
+                const double *SD_b = &dx[base_dx(b, j2, nm, max_atoms, rep_size)];
+                for (int k = 0; k < rep_size; ++k)
+                    xbv[k] = x[idx_x(b, j2, k, nm, max_atoms, rep_size)];
+
+                std::fill(S_sum, S_sum + (size_t)rep_size * ncols_a, 0.0);
+
+                for (int i1 : i1_list) {
+                    const double *x_ai1 = &x[idx_x(a, i1, 0, nm, max_atoms, rep_size)];
+                    const double *SD_a  = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
+
+                    double l2 = 0.0;
+                    for (int k = 0; k < rep_size; ++k) {
+                        const double diff = x_ai1[k] - xbv[k];
+                        D_row[k] = diff;
+                        l2 += diff * diff;
+                    }
+                    const double eb      = std::exp(l2 * inv_2sigma2);
+                    const double e1      = inv_sigma4 * eb;
+                    const double expdiag = sigma2_neg * e1;
+                    const double s       = std::sqrt(-e1);
+                    const double kval    = eb;
+
+                    // --- Scalar block: rfp(a, b) with a <= b ---
+#ifdef _OPENMP
+                    #pragma omp atomic
+#endif
+                    arf[rfp_index_upper_N(BIG, a, b)] += kval;
+
+                    // --- Jac_t block K[:nm, nm:] ---
+                    // K_jact[a, nm+row_off+r] = dK_{a,b}/dR_{b,r} = +expdiag*(SD_b^T@D_row)[r]
+                    // rfp index: (a, nm+row_off+r) — a < nm <= nm+row_off+r, always upper-tri
+                    for (int r = 0; r < ncols_b; ++r) {
+                        double dot = 0.0;
+                        for (int k = 0; k < rep_size; ++k)
+                            dot += SD_b[(size_t)k * lda_b + r] * D_row[k];
+                        const size_t idx = rfp_index_upper_N(BIG, a, nm + row_off + r);
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        arf[idx] += expdiag * dot;
+                    }
+
+                    // Mirror jact: K_jact[b, nm+col_off+c] = -expdiag*(SD_a^T@D_row)[c]
+                    // Only for off-diagonal (a != b); diagonal would double-count same RFP slot.
+                    if (a != b) {
+                        for (int c = 0; c < ncols_a; ++c) {
+                            double dot = 0.0;
+                            for (int k = 0; k < rep_size; ++k)
+                                dot += SD_a[(size_t)k * lda_a + c] * D_row[k];
+                            const size_t idx = rfp_index_upper_N(BIG, b, nm + col_off + c);
+#ifdef _OPENMP
+                            #pragma omp atomic
+#endif
+                            arf[idx] += -expdiag * dot;
+                        }
+                    }
+
+                    // S_sum for hessian diagonal term
+                    for (int k = 0; k < rep_size; ++k) {
+                        double       *srow  = S_sum + (size_t)k * ncols_a;
+                        const double *sdrow = SD_a  + (size_t)k * lda_a;
+                        for (int j = 0; j < ncols_a; ++j)
+                            srow[j] += expdiag * sdrow[j];
+                    }
+
+                    // Scale D_row for hessian rank-1
+                    for (int k = 0; k < rep_size; ++k) D_row[k] *= s;
+
+                    // W = SD_b^T @ D_row_scaled  (ncols_b)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                1.0, SD_b, static_cast<blas_int>(lda_b),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, W_row, static_cast<blas_int>(1));
+
+                    // V = -SD_a^T @ D_row_scaled  (ncols_a)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -1.0, SD_a, static_cast<blas_int>(lda_a),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, V_row, static_cast<blas_int>(1));
+
+                    // rank-1 hessian into Hblk: V ⊗ W  (ncols_a rows × ncols_b cols)
+                    cblas_dger(CblasRowMajor,
+                               static_cast<blas_int>(ncols_a),
+                               static_cast<blas_int>(ncols_b),
+                               1.0,
+                               V_row, static_cast<blas_int>(1),
+                               W_row, static_cast<blas_int>(1),
+                               Hblk.data(), static_cast<blas_int>(ncols_b));
+                }  // i1
+
+                // Hessian static term into Hblk: S_sum^T @ SD_b  (ncols_a × ncols_b)
+                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            static_cast<blas_int>(ncols_a), static_cast<blas_int>(ncols_b),
+                            static_cast<blas_int>(rep_size), 1.0,
+                            S_sum, static_cast<blas_int>(ncols_a),
+                            SD_b, static_cast<blas_int>(lda_b),
+                            1.0, Hblk.data(), static_cast<blas_int>(ncols_b));
+            }  // j2
+
+            // Scatter Hblk into RFP.
+            // Hblk layout: ncols_a rows (a-side) × ncols_b cols (b-side)
+            // Hblk[c, r] = H[nm+col_off+c, nm+row_off+r]
+            // For a <= b: col_off <= row_off, so nm+col_off+c <= nm+row_off+r (upper-tri condition).
+            if (a == b) {
+                // Diagonal a==b: col_off==row_off. Upper-tri means c <= r.
+                for (int c = 0; c < ncols_a; ++c) {
+                    const double *hrow = Hblk.data() + (size_t)c * ncols_b;
+                    for (int r = c; r < ncols_b; ++r) {
+                        const size_t idx = rfp_index_upper_N(BIG, nm + col_off + c, nm + row_off + r);
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        arf[idx] += hrow[r];
+                    }
+                }
+            } else {
+                // Off-diagonal a < b: col_off < row_off, nm+col_off+c < nm+row_off+r always.
+                for (int c = 0; c < ncols_a; ++c) {
+                    const double *hrow = Hblk.data() + (size_t)c * ncols_b;
+                    for (int r = 0; r < ncols_b; ++r) {
+                        const size_t idx = rfp_index_upper_N(BIG, nm + col_off + c, nm + row_off + r);
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        arf[idx] += hrow[r];
                     }
                 }
             }

@@ -426,20 +426,20 @@ static py::array_t<double> fgdml_kernel_py(
 
     // If any side has zero derivatives, return an empty shaped array
     if (naq1 == 0 || naq2 == 0) {
-        py::array_t<double> K(py::array::ShapeContainer{(py::ssize_t)naq2, (py::ssize_t)naq1},
-                              py::array::StridesContainer{(py::ssize_t)(naq1 * sizeof(double)),
+        py::array_t<double> K(py::array::ShapeContainer{(py::ssize_t)naq1, (py::ssize_t)naq2},
+                              py::array::StridesContainer{(py::ssize_t)(naq2 * sizeof(double)),
                                                           (py::ssize_t)sizeof(double)});
         return K;  // NumPy owns a small empty buffer
     }
 
-    // ---- aligned output allocation (naq2 x naq1), row-major ----
-    double *Kptr = aligned_alloc_64((std::size_t)naq2 * naq1);
+    // ---- aligned output allocation (naq1 x naq2), row-major ----
+    double *Kptr = aligned_alloc_64((std::size_t)naq1 * naq2);
     auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
 
     py::array_t<double> K(
-        /*shape*/ py::array::ShapeContainer{(py::ssize_t)naq2, (py::ssize_t)naq1},
+        /*shape*/ py::array::ShapeContainer{(py::ssize_t)naq1, (py::ssize_t)naq2},
         /*strides*/
-        py::array::StridesContainer{(py::ssize_t)(naq1 * sizeof(double)),
+        py::array::StridesContainer{(py::ssize_t)(naq2 * sizeof(double)),
                                     (py::ssize_t)sizeof(double)},
         /*ptr*/ Kptr,
         /*base*/ capsule);
@@ -771,5 +771,176 @@ Returns:
   arf: 1-D array of length naq*(naq+1)/2, where naq = 3 * sum(n1).
        Packed as RFP TRANSR='N', UPLO='U'.
        Equivalent to: np.triu(kernel_gaussian_hessian_symm(...)) packed by dpftrs convention.
+)");
+
+    m.def("kernel_gaussian_full",
+          [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
+             py::array_t<double, py::array::c_style | py::array::forcecast> x2,
+             py::array_t<double, py::array::c_style | py::array::forcecast> dx1,
+             py::array_t<double, py::array::c_style | py::array::forcecast> dx2,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> q1,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> q2,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> n1,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> n2,
+             double sigma) -> py::array_t<double> {
+              if (x1.ndim() != 3 || x2.ndim() != 3 || dx1.ndim() != 4 || dx2.ndim() != 4 ||
+                  q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
+                  throw std::invalid_argument("shape error");
+              const int nm1 = x1.shape(0), max_atoms1 = x1.shape(1), rep = x1.shape(2);
+              const int nm2 = x2.shape(0), max_atoms2 = x2.shape(1);
+              if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep ||
+                  dx1.shape(3) != 3 * max_atoms1)
+                  throw std::invalid_argument("dx1 shape mismatch");
+              if (dx2.shape(0) != nm2 || dx2.shape(1) != max_atoms2 || dx2.shape(2) != rep ||
+                  dx2.shape(3) != 3 * max_atoms2)
+                  throw std::invalid_argument("dx2 shape mismatch");
+              if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
+                  throw std::invalid_argument("q1 shape mismatch");
+              if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
+                  throw std::invalid_argument("q2 shape mismatch");
+              if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
+                  throw std::invalid_argument("n1/n2 length mismatch");
+
+              std::vector<double> x1v(x1.data(), x1.data() + x1.size());
+              std::vector<double> x2v(x2.data(), x2.data() + x2.size());
+              std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
+              std::vector<double> dx2v(dx2.data(), dx2.data() + dx2.size());
+              std::vector<int>    q1v(q1.data(), q1.data() + q1.size());
+              std::vector<int>    q2v(q2.data(), q2.data() + q2.size());
+              std::vector<int>    n1v(n1.data(), n1.data() + n1.size());
+              std::vector<int>    n2v(n2.data(), n2.data() + n2.size());
+
+              long long naq1_ll = 0, naq2_ll = 0;
+              for (int a = 0; a < nm1; ++a) naq1_ll += 3LL * std::max(0, std::min(n1v[a], max_atoms1));
+              for (int b = 0; b < nm2; ++b) naq2_ll += 3LL * std::max(0, std::min(n2v[b], max_atoms2));
+              const int naq1 = (int)naq1_ll, naq2 = (int)naq2_ll;
+              const int rows = nm1 + naq1, cols = nm2 + naq2;
+
+              double *Kptr = aligned_alloc_64((std::size_t)rows * cols);
+              auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
+              {
+                  py::gil_scoped_release release;
+                  kf::fchl19::kernel_gaussian_full(x1v, x2v, dx1v, dx2v, q1v, q2v, n1v, n2v,
+                                                   nm1, nm2, max_atoms1, max_atoms2, rep,
+                                                   naq1, naq2, sigma, Kptr);
+              }
+              return py::array_t<double>(
+                  {(py::ssize_t)rows, (py::ssize_t)cols},
+                  {(py::ssize_t)(cols * sizeof(double)), (py::ssize_t)sizeof(double)},
+                  Kptr, capsule);
+          },
+          py::arg("x1"), py::arg("x2"), py::arg("dx1"), py::arg("dx2"),
+          py::arg("q1"), py::arg("q2"), py::arg("n1"), py::arg("n2"), py::arg("sigma"),
+          R"(Full combined energy+force kernel (asymmetric).
+
+Output shape: (nm1+naq1, nm2+naq2) where naq1=3*sum(n1), naq2=3*sum(n2).
+
+Block layout:
+  K[0:nm1,   0:nm2]   = scalar kernel
+  K[0:nm1,   nm2:]    = jacobian_t  (dX2-side derivatives, shape nm1 x naq2)
+  K[nm1:,    0:nm2]   = jacobian    (dX1-side derivatives, shape naq1 x nm2)
+  K[nm1:,    nm2:]    = hessian     (shape naq1 x naq2)
+)");
+
+    m.def("kernel_gaussian_full_symm",
+          [](py::array_t<double, py::array::c_style | py::array::forcecast> x,
+             py::array_t<double, py::array::c_style | py::array::forcecast> dx,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> q,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> n,
+             double sigma) -> py::array_t<double> {
+              if (x.ndim() != 3 || dx.ndim() != 4 || q.ndim() != 2 || n.ndim() != 1)
+                  throw std::invalid_argument("shape error");
+              const int nm        = x.shape(0);
+              const int max_atoms = x.shape(1);
+              const int rep       = x.shape(2);
+              if (dx.shape(0) != nm || dx.shape(1) != max_atoms || dx.shape(2) != rep ||
+                  dx.shape(3) != 3 * max_atoms)
+                  throw std::invalid_argument("dx shape mismatch");
+              if (q.shape(0) != nm || q.shape(1) != max_atoms)
+                  throw std::invalid_argument("q shape mismatch");
+              if (n.shape(0) != nm)
+                  throw std::invalid_argument("n length mismatch");
+
+              std::vector<double> xv(x.data(),  x.data()  + x.size());
+              std::vector<double> dxv(dx.data(), dx.data() + dx.size());
+              std::vector<int>    qv(q.data(),   q.data()  + q.size());
+              std::vector<int>    nv(n.data(),   n.data()  + n.size());
+
+              long long naq_ll = 0;
+              for (int m = 0; m < nm; ++m) naq_ll += 3LL * std::max(0, std::min(nv[m], max_atoms));
+              const int naq = (int)naq_ll;
+              const int BIG = nm + naq;
+
+              double *Kptr = aligned_alloc_64((std::size_t)BIG * BIG);
+              auto capsule = py::capsule(Kptr, [](void *p) { aligned_free_64(p); });
+              {
+                  py::gil_scoped_release release;
+                  kf::fchl19::kernel_gaussian_full_symm(xv, dxv, qv, nv,
+                                                        nm, max_atoms, rep, naq, sigma, Kptr);
+              }
+              return py::array_t<double>(
+                  {(py::ssize_t)BIG, (py::ssize_t)BIG},
+                  {(py::ssize_t)(BIG * sizeof(double)), (py::ssize_t)sizeof(double)},
+                  Kptr, capsule);
+          },
+          py::arg("x"), py::arg("dx"), py::arg("q"), py::arg("n"), py::arg("sigma"),
+          R"(Full combined energy+force kernel (symmetric).
+
+Output shape: (nm+naq, nm+naq) where naq=3*sum(n).
+
+Block layout:
+  K[0:nm,  0:nm]  = scalar kernel      (fully filled, symmetric)
+  K[0:nm,  nm:]   = jacobian_t         (nm x naq, fully filled)
+  K[nm:,   0:nm]  = jacobian           (naq x nm, fully filled)
+  K[nm:,   nm:]   = hessian block      (naq x naq, lower triangle + diagonal filled)
+)");
+
+    m.def("kernel_gaussian_full_symm_rfp",
+          [](py::array_t<double, py::array::c_style | py::array::forcecast> x,
+             py::array_t<double, py::array::c_style | py::array::forcecast> dx,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> q,
+             py::array_t<int,    py::array::c_style | py::array::forcecast> n,
+             double sigma) -> py::array_t<double> {
+              if (x.ndim() != 3 || dx.ndim() != 4 || q.ndim() != 2 || n.ndim() != 1)
+                  throw std::invalid_argument("shape error");
+              const int nm        = x.shape(0);
+              const int max_atoms = x.shape(1);
+              const int rep       = x.shape(2);
+              if (dx.shape(0) != nm || dx.shape(1) != max_atoms || dx.shape(2) != rep ||
+                  dx.shape(3) != 3 * max_atoms)
+                  throw std::invalid_argument("dx shape mismatch");
+              if (q.shape(0) != nm || q.shape(1) != max_atoms)
+                  throw std::invalid_argument("q shape mismatch");
+              if (n.shape(0) != nm)
+                  throw std::invalid_argument("n length mismatch");
+
+              std::vector<double> xv(x.data(),  x.data()  + x.size());
+              std::vector<double> dxv(dx.data(), dx.data() + dx.size());
+              std::vector<int>    qv(q.data(),   q.data()  + q.size());
+              std::vector<int>    nv(n.data(),   n.data()  + n.size());
+
+              long long naq_ll = 0;
+              for (int m = 0; m < nm; ++m) naq_ll += 3LL * std::max(0, std::min(nv[m], max_atoms));
+              const int naq = (int)naq_ll;
+              const int BIG = nm + naq;
+              const std::size_t nt = (std::size_t)BIG * (BIG + 1) / 2;
+
+              double *arf = aligned_alloc_64(nt);
+              auto capsule = py::capsule(arf, [](void *p) { aligned_free_64(p); });
+              {
+                  py::gil_scoped_release release;
+                  kf::fchl19::kernel_gaussian_full_symm_rfp(xv, dxv, qv, nv,
+                                                            nm, max_atoms, rep, naq, sigma, arf);
+              }
+              return py::array_t<double>(
+                  {(py::ssize_t)nt},
+                  {(py::ssize_t)sizeof(double)},
+                  arf, capsule);
+          },
+          py::arg("x"), py::arg("dx"), py::arg("q"), py::arg("n"), py::arg("sigma"),
+          R"(Full combined energy+force kernel (symmetric, RFP packed).
+
+Output: 1-D array of length BIG*(BIG+1)/2 where BIG=nm+naq, naq=3*sum(n).
+Packed as RFP TRANSR='N', UPLO='U'.
 )");
 }
