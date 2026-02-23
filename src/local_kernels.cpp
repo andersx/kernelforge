@@ -1139,9 +1139,16 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
         }
     }
 
-    // ---- batching parameters (tune) ----
-    constexpr int T_MAX = 512;  // columns per tile for rank-1 batching
-    const int LDT = T_MAX;      // row-major leading dimension for column tiles
+    // For each (a,b) block, collect ALL matching (i1,i2) pairs, then batch everything
+    // in one pass: big D(M x rep), big W(M x ncols_b) = D @ SD2_pack^T, big V(M x ncols_a),
+    // big rank-1 update, big S_sum per-i2.
+    // For SD2_pack: pack each SD2[i2] transposed into (ncols_b x rep) rows, stacked.
+    // Memory per thread: we over-alloc for worst case M = nb*na (Ethanol: 9*9=81 matches per (a,b)).
+    const int ncols_b_max = 3 * max_atoms2;
+    const int ncols_a_max = 3 * max_atoms1;
+    // worst-case M per (a,b) block = na * nb  (if all labels match, which rarely happens)
+    // For safety, alloc 512 (well above any realistic Ethanol case).
+    constexpr int M_MAX = 512;
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
@@ -1150,34 +1157,47 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
         const int nb = std::max(0, std::min(n2[b], max_atoms2));
         if (nb == 0)
             continue;
-        const int ncols_b = 3 * nb;  // rows in K block for this b
+        const int ncols_b = 3 * nb;
         const int lda2 = 3 * max_atoms2;
         const int row_off = offs2[b];
 
-        // thread-local scratch
-        std::vector<double> d(rep_size);
-        std::vector<double> Wtile((size_t)ncols_b * LDT);  // stores columns: sqrt(expd)*w
-        std::vector<double> Vtile((size_t)(3 * max_atoms1) *
-                                  LDT);  // over-alloc; we only use first ncols_a rows
-        std::vector<double> S1_sum;      // allocated per (a) when known
+        // Thread-local scratch (worst-case M_MAX matching pairs per (a,b) block):
+        // D_all:    (M_MAX x rep)       — sqrt(|expd|)-scaled diffs
+        // SD2_pack: (M_MAX x rep)       — SD2[i2] row (for GEMM W_all = D_all @ SD2T_pack^T)
+        //           BUT SD2 varies per i2 — can't pack into one flat matrix for one GEMM
+        //           UNLESS we duplicate rows. We'll do: W_all(M x ncols_b) via loop over unique i2
+        //           OR pack SD2_indexed(M x rep) where row m = SD2[i2_m] transposed (ncols_b cols taken)
+        // Actually: W_all(M x ncols_b) where W_all[m] = D_all[m] @ SD2[i2_m]^T
+        //   = element-wise: W_all = sum_k D_all[m,k]*SD2[i2_m,k,:]
+        // This is NOT a standard GEMM due to varying i2. But: if we pack
+        //   SD2_pack(M x rep*ncols_b) — stride not uniform — still not a GEMM.
+        //
+        // SIMPLEST CORRECT BIG-GEMM: for fixed i2, collect all i1 for that i2, do GEMM.
+        // That's what we already do. The real problem is BATCH_T is limited by i1_list.size()
+        // which is 1 for single-species Ethanol (each atom has unique label match per molecule).
+        //
+        // For single-match case (T=1): GEMM(1 x ncols_b x rep) = GEMV. Replace GEMM with GEMV.
+        // V(1 x ncols_a): V[0] = -SA[0] @ D[0] = GEMV(ncols_a, rep).
+        // W(1 x ncols_b): W[0] =  D[0] @ SD2^T  = GEMV(ncols_b, rep) [D[0] is row vec].
+        // rank-1: Kba += W[0]^T @ V[0] = dger(ncols_b, ncols_a, 1, W[0], 1, V[0], 1, Kba, naq1)
+        //
+        // This avoids GEMM overhead for tiny T. Use GEMV for T=1, GEMM for T>1.
+        double *D_row  = aligned_alloc_64((size_t)rep_size);          // single diff row
+        double *W_row  = aligned_alloc_64((size_t)ncols_b_max);       // one W vector
+        double *V_row  = aligned_alloc_64((size_t)ncols_a_max);       // one V vector
+        double *S_sum  = aligned_alloc_64((size_t)rep_size * ncols_a_max); // static sum
 
         for (int a = 0; a < nm1; ++a) {
             const int na = std::max(0, std::min(n1[a], max_atoms1));
             if (na == 0)
                 continue;
-            const int ncols_a = 3 * na;  // cols in K block for this a
+            const int ncols_a = 3 * na;
             const int col_off = offs1[a];
             const int lda1 = 3 * max_atoms1;
-            if ((int)S1_sum.size() < rep_size * ncols_a)
-                S1_sum.resize((size_t)rep_size * ncols_a);
 
-            // K block pointer (rows for b, cols for a)
             double *Kba = &kernel_out[(size_t)row_off * naq1 + col_off];
-
-            // access map label->i1 once
             const auto &label_i1 = lab_to_i1[a];
 
-            // loop atoms i2 in molecule b
             for (int i2 = 0; i2 < nb; ++i2) {
                 const int label = q2[(size_t)b * max_atoms2 + i2];
                 auto it = label_i1.find(label);
@@ -1187,100 +1207,84 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
                 if (i1_list.empty())
                     continue;
 
-                // SD2 slice for (b,i2)
-                const double *SD2 = &dx2[base_dx2(b, i2, nm2, max_atoms2, rep_size)];
+                const double *SD2    = &dx2[base_dx2(b, i2, nm2, max_atoms2, rep_size)];
+                const double *x2_bi2 = &x2[((size_t)b * max_atoms2 + i2) * rep_size];
 
-                // ------ STATIC TERM: Kba += SD2^T * (sum_i1 expdiag * SD1_i1) ------
-                std::fill(S1_sum.begin(), S1_sum.begin() + (size_t)rep_size * ncols_a, 0.0);
+                // Zero S_sum for this (a, b, i2) triplet
+                std::fill(S_sum, S_sum + (size_t)rep_size * ncols_a, 0.0);
+
                 for (int i1 : i1_list) {
-                    // distance d = x1(a,i1,:) - x2(b,i2,:)
+                    const double *x1_t = &x1[((size_t)a * max_atoms1 + i1) * rep_size];
+                    const double *SD1  = &dx1[base_dx1(a, i1, nm1, max_atoms1, rep_size)];
+
                     double l2 = 0.0;
                     for (int k = 0; k < rep_size; ++k) {
-                        const double diff = x1[idx_x1(a, i1, k, nm1, max_atoms1, rep_size)] -
-                                            x2[idx_x2(b, i2, k, nm2, max_atoms2, rep_size)];
-                        d[k] = diff;
+                        const double diff = x1_t[k] - x2_bi2[k];
+                        D_row[k] = diff;
                         l2 += diff * diff;
                     }
                     const double exp_base = std::exp(l2 * inv_2sigma2);
-                    const double expd = inv_sigma4 * exp_base;  // (<0)
-                    const double expdiag = sigma2_neg * expd;   // (>0)
+                    const double expd     = inv_sigma4 * exp_base;  // < 0
+                    const double expdiag  = sigma2_neg * expd;      // > 0
+                    const double s        = std::sqrt(-expd);       // sqrt(|expd|)
 
-                    // S1_sum += expdiag * SD1(a,i1)
-                    const double *SD1 = &dx1[base_dx1(a, i1, nm1, max_atoms1, rep_size)];
-                    // row-major axpy over matrix: rep_size x ncols_a
+                    // scale D for rank-1
+                    for (int k = 0; k < rep_size; ++k)
+                        D_row[k] *= s;
+
+                    // accumulate S_sum (rep x ncols_a) += expdiag * SD1
+                    // SD1 is (rep x lda1) row-major; only first ncols_a cols used
                     for (int k = 0; k < rep_size; ++k) {
-                        const double *srow = SD1 + (size_t)k * (3 * max_atoms1);
-                        double *trow = S1_sum.data() + (size_t)k * ncols_a;
-                        // trow[0:ncols_a] += expdiag * srow[0:ncols_a]
-                        cblas_daxpy(static_cast<blas_int>(ncols_a), expdiag, srow,
-                                    static_cast<blas_int>(1), trow, static_cast<blas_int>(1));
+                        double       *srow  = S_sum + (size_t)k * ncols_a;
+                        const double *sdrow = SD1   + (size_t)k * lda1;
+                        for (int j = 0; j < ncols_a; ++j)
+                            srow[j] += expdiag * sdrow[j];
                     }
-                }
-                // One GEMM for the whole static term of this (a,b,i2)
+
+                    // W = D_row @ SD2^T : shape (ncols_b,)
+                    // SD2 is (rep x lda2) row-major
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                1.0, SD2, static_cast<blas_int>(lda2),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, W_row, static_cast<blas_int>(1));
+
+                    // V = -SD1^T @ D_row : shape (ncols_a,)
+                    // SD1 is (rep x lda1) row-major; Trans GEMV: output[j] = sum_k SD1[k,j]*D[k]
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -1.0, SD1, static_cast<blas_int>(lda1),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, V_row, static_cast<blas_int>(1));
+
+                    // rank-1: Kba += W ⊗ V  (dger)
+                    cblas_dger(CblasRowMajor,
+                               static_cast<blas_int>(ncols_b),
+                               static_cast<blas_int>(ncols_a),
+                               1.0,
+                               W_row, static_cast<blas_int>(1),
+                               V_row, static_cast<blas_int>(1),
+                               Kba, static_cast<blas_int>(naq1));
+                }  // i1
+
+                // ---- static term: Kba += SD2^T @ S_sum ----
                 cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
                             static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
-                            static_cast<blas_int>(rep_size), 1.0, SD2,
-                            static_cast<blas_int>(lda2),
-                            S1_sum.data(), static_cast<blas_int>(ncols_a), 1.0, Kba,
-                            static_cast<blas_int>(naq1));
-
-                // ------ RANK-1 TERM: sum_i1 expd * (SD2^T d) (SD1^T d)^T ------
-                // Batch across i1: build W' and V' columns, each scaled by sqrt(expd)
-                for (size_t t0 = 0; t0 < i1_list.size(); t0 += T_MAX) {
-                    const int T = (int)std::min<size_t>(T_MAX, i1_list.size() - t0);
-
-                    // build columns
-                    for (int t = 0; t < T; ++t) {
-                        const int i1 = i1_list[t0 + t];
-                        // d and l2
-                        double l2 = 0.0;
-                        for (int k = 0; k < rep_size; ++k) {
-                            const double diff = x1[idx_x1(a, i1, k, nm1, max_atoms1, rep_size)] -
-                                                x2[idx_x2(b, i2, k, nm2, max_atoms2, rep_size)];
-                            d[k] = diff;
-                            l2 += diff * diff;
-                        }
-                        const double exp_base = std::exp(l2 * inv_2sigma2);
-                        double expd = inv_sigma4 * exp_base;  // can be negative
-                        if (expd < 0.0)
-                            expd = -expd;  // sqrt needs non-neg; sign handled via V later
-                        const double s = std::sqrt(expd);
-
-                        // w = SD2^T d  -> put into Wtile[:, t]
-                        cblas_dgemv(CblasRowMajor, CblasTrans,
-                                    static_cast<blas_int>(rep_size),
-                                    static_cast<blas_int>(ncols_b),
-                                    s,  // alpha = sqrt(|expd|)
-                                    SD2, static_cast<blas_int>(lda2), d.data(),
-                                    static_cast<blas_int>(1), 0.0, &Wtile[(size_t)t],
-                                    static_cast<blas_int>(LDT));  // write with stride LDT
-
-                        // v = SD1^T d  -> put into Vtile[:ncols_a, t]
-                        const double *SD1 = &dx1[base_dx1(a, i1, nm1, max_atoms1, rep_size)];
-                        double alpha_v = s;
-                        // If original expd was negative, carry the sign on V
-                        if (inv_sigma4 * exp_base < 0.0)
-                            alpha_v = -alpha_v;
-
-                        cblas_dgemv(CblasRowMajor, CblasTrans,
-                                    static_cast<blas_int>(rep_size),
-                                    static_cast<blas_int>(ncols_a), alpha_v, SD1,
-                                    static_cast<blas_int>(lda1), d.data(),
-                                    static_cast<blas_int>(1), 0.0, &Vtile[(size_t)t],
-                                    static_cast<blas_int>(LDT));
-                    }
-
-                    // One GEMM for T rank-1s: Kba += Wtile * Vtile^T
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
-                                static_cast<blas_int>(T), 1.0,
-                                Wtile.data(), static_cast<blas_int>(LDT),  // (ncols_b x T)
-                                Vtile.data(), static_cast<blas_int>(LDT),  // (ncols_a x T) as columns ⇒ Trans gives T x ncols_a
-                                1.0, Kba, static_cast<blas_int>(naq1));
-                }
+                            static_cast<blas_int>(rep_size), 1.0,
+                            SD2, static_cast<blas_int>(lda2),
+                            S_sum, static_cast<blas_int>(ncols_a),
+                            1.0, Kba, static_cast<blas_int>(naq1));
             }  // i2
         }  // a
+
+        aligned_free_64(D_row);
+        aligned_free_64(W_row);
+        aligned_free_64(V_row);
+        aligned_free_64(S_sum);
     }  // b
+    (void)M_MAX;
 }
 
 void kernel_gaussian_hessian_symm(
@@ -1343,8 +1347,7 @@ void kernel_gaussian_hessian_symm(
         }
     }
 
-    // Scratch memory budget per thread
-    constexpr size_t BYTES_BUDGET = 2ull * 1024ull * 1024ull;
+    const int ncols_max = 3 * max_atoms;
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
@@ -1358,27 +1361,16 @@ void kernel_gaussian_hessian_symm(
         const int lda_b = 3 * max_atoms;
         const int row_off = offs[b];
 
-        // worst-case ncols_a across all 'a' is 3*max_atoms
-        const int ncols_max = 3 * max_atoms;
-
-        // Choose tile width T within budget:
-        // bytes ≈ 8 * [ T*(rep + ncols_b + ncols_max) + rep*ncols_max ] + small
-        size_t denom = (size_t)rep_size + (size_t)ncols_b + (size_t)ncols_max;
-        size_t bytes_fixed = 8ull * (size_t)rep_size * (size_t)ncols_max;  // S_sum
-        size_t bytes_left =
-            (BYTES_BUDGET > bytes_fixed) ? (BYTES_BUDGET - bytes_fixed) : (size_t)1024;
-        int T = (int)std::max<size_t>(16, std::min<size_t>(512, bytes_left / (8ull * denom)));
-        const int LDT = T;
-
-        // Thread-local aligned scratch
-        double *D = aligned_alloc_64((size_t)rep_size * LDT);   // (rep x T)
-        double *W = aligned_alloc_64((size_t)ncols_b * LDT);    // (ncols_b x T)
-        double *V = aligned_alloc_64((size_t)ncols_max * LDT);  // (ncols_a x T in first rows)
-        double *S_sum = aligned_alloc_64((size_t)rep_size * ncols_max);  // (rep x ncols_a)
-        double *xbv = aligned_alloc_64((size_t)rep_size);                // x(b,i2,:)
-
-        std::vector<double> sign(T);
-        std::vector<double> expdiag(T);
+        // Thread-local aligned scratch (per-i1 scalar path):
+        // D_row:  (rep_size,)          — sqrt(|expd|)-scaled diff
+        // W_row:  (ncols_max,)         — W = SD_b^T @ D_row
+        // V_row:  (ncols_max,)         — V = -SD_a^T @ D_row
+        // S_sum:  (rep x ncols_max)    — sum_i1 expdiag*SD_a(i1) for static term
+        double *D_row  = aligned_alloc_64((size_t)rep_size);
+        double *W_row  = aligned_alloc_64((size_t)ncols_max);
+        double *V_row  = aligned_alloc_64((size_t)ncols_max);
+        double *S_sum  = aligned_alloc_64((size_t)rep_size * ncols_max);
+        double *xbv    = aligned_alloc_64((size_t)rep_size);
 
         for (int a = 0; a <= b; ++a) {  // lower triangle only
             const int na = std::max(0, std::min(n[a], max_atoms));
@@ -1417,90 +1409,73 @@ void kernel_gaussian_hessian_symm(
                 for (int k = 0; k < rep_size; ++k)
                     xbv[k] = x[idx_x(b, j2, k, nm, max_atoms, rep_size)];
 
-                // Process i1 in tiles
-                for (size_t t0 = 0; t0 < i1_list.size(); t0 += T) {
-                    const int Tcur = (int)std::min<size_t>(T, i1_list.size() - t0);
+                // Zero S_sum once per (a, j2) pair
+                std::fill(S_sum, S_sum + (size_t)rep_size * ncols_a, 0.0);
 
-                    // Build D (rep x Tcur): columns d = x(a,i1,:) - x(b,j2,:)
-                    for (int t = 0; t < Tcur; ++t) {
-                        const int i1 = i1_list[t0 + t];
-                        double *dcol = &D[(size_t)0 * LDT + t];
-                        double l2 = 0.0;
-                        for (int k = 0; k < rep_size; ++k) {
-                            const double diff =
-                                x[idx_x(a, i1, k, nm, max_atoms, rep_size)] - xbv[k];
-                            dcol[(size_t)k * LDT] = diff;
-                            l2 += diff * diff;
-                        }
-                        const double eb = std::exp(l2 * inv_2sigma2);
-                        const double e1 = inv_sigma4 * eb;  // may be negative
-                        sign[t] = (e1 >= 0.0) ? 1.0 : -1.0;
-                        const double s = std::sqrt(std::abs(e1));
-                        expdiag[t] = sigma2_neg * e1;
+                for (int i1 : i1_list) {
+                    const double *x_ai1 = &x[idx_x(a, i1, 0, nm, max_atoms, rep_size)];
+                    const double *SD_a  = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
 
-                        if (s != 1.0) {
-                            for (int k = 0; k < rep_size; ++k)
-                                dcol[(size_t)k * LDT] *= s;
-                        }
-                    }
-
-                    // W = SD_b^T * D   (ncols_b x Tcur)
-                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(Tcur),
-                                static_cast<blas_int>(rep_size), 1.0, SD_b,
-                                static_cast<blas_int>(lda_b), D, static_cast<blas_int>(LDT),
-                                0.0, W, static_cast<blas_int>(LDT));
-
-                    // V columns: v_t = SD_a(i1)^T * D[:,t], apply sign[t]
-                    for (int t = 0; t < Tcur; ++t) {
-                        const int i1 = i1_list[t0 + t];
-                        const double *SD_a = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
-
-                        cblas_dgemv(CblasRowMajor, CblasTrans,
-                                    static_cast<blas_int>(rep_size),
-                                    static_cast<blas_int>(ncols_a), 1.0, SD_a,
-                                    static_cast<blas_int>(lda_a),
-                                    &D[(size_t)0 * LDT + t], static_cast<blas_int>(LDT),
-                                    0.0, &V[(size_t)0 * LDT + t], static_cast<blas_int>(LDT));
-
-                        if (sign[t] < 0.0)
-                            cblas_dscal(static_cast<blas_int>(ncols_a), -1.0,
-                                        &V[(size_t)0 * LDT + t], static_cast<blas_int>(LDT));
-                    }
-
-                    // Rank-1 batch: Cdst += W * V^T
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
-                                static_cast<blas_int>(Tcur), 1.0, W, static_cast<blas_int>(LDT),
-                                V, static_cast<blas_int>(LDT), 1.0, Cdst,
-                                static_cast<blas_int>(a == b ? ncols_a : naq));
-
-                    // Static term: S_sum = sum_t expdiag[t] * SD_a(i1)
+                    double l2 = 0.0;
                     for (int k = 0; k < rep_size; ++k) {
-                        double *row = &S_sum[(size_t)k * ncols_max];
-                        std::fill(row, row + ncols_a, 0.0);
+                        const double diff = x_ai1[k] - xbv[k];
+                        D_row[k] = diff;
+                        l2 += diff * diff;
                     }
-                    for (int t = 0; t < Tcur; ++t) {
-                        const int i1 = i1_list[t0 + t];
-                        const double w = expdiag[t];
-                        if (w == 0.0)
-                            continue;
-                        const double *SD_a = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
-                        for (int k = 0; k < rep_size; ++k) {
-                            const double *srow = SD_a + (size_t)k * (3 * max_atoms);
-                            double *trow = &S_sum[(size_t)k * ncols_max];
-                            cblas_daxpy(static_cast<blas_int>(ncols_a), w, srow,
-                                        static_cast<blas_int>(1), trow, static_cast<blas_int>(1));
-                        }
+                    const double eb      = std::exp(l2 * inv_2sigma2);
+                    const double e1      = inv_sigma4 * eb;   // < 0
+                    const double expdiag = sigma2_neg * e1;   // > 0
+                    const double s       = std::sqrt(-e1);    // sqrt(|expd|)
+
+                    for (int k = 0; k < rep_size; ++k)
+                        D_row[k] *= s;
+
+                    // accumulate S_sum (rep x ncols_a) += expdiag * SD_a
+                    // SD_a is (rep x lda_a) row-major; only first ncols_a cols used
+                    for (int k = 0; k < rep_size; ++k) {
+                        double       *srow  = S_sum + (size_t)k * ncols_a;
+                        const double *sdrow = SD_a  + (size_t)k * lda_a;
+                        for (int j = 0; j < ncols_a; ++j)
+                            srow[j] += expdiag * sdrow[j];
                     }
-                    // Cdst += SD_b^T * S_sum
-                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
-                                static_cast<blas_int>(rep_size), 1.0, SD_b,
-                                static_cast<blas_int>(lda_b), S_sum,
-                                static_cast<blas_int>(ncols_max), 1.0, Cdst,
-                                static_cast<blas_int>(a == b ? ncols_a : naq));
-                }  // tile
+
+                    // W = SD_b^T @ D_row  (ncols_b vector)
+                    // SD_b is (rep x lda_b) row-major
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                1.0, SD_b, static_cast<blas_int>(lda_b),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, W_row, static_cast<blas_int>(1));
+
+                    // V = -SD_a^T @ D_row  (ncols_a vector)
+                    // SD_a is (rep x lda_a) row-major; Trans GEMV: output[j] = sum_k SD_a[k,j]*D[k]
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -1.0, SD_a, static_cast<blas_int>(lda_a),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, V_row, static_cast<blas_int>(1));
+
+                    // rank-1: Cdst += W ⊗ V  (dger, lda = ncols_a for diag block, naq otherwise)
+                    cblas_dger(CblasRowMajor,
+                               static_cast<blas_int>(ncols_b),
+                               static_cast<blas_int>(ncols_a),
+                               1.0,
+                               W_row, static_cast<blas_int>(1),
+                               V_row, static_cast<blas_int>(1),
+                               Cdst,
+                               static_cast<blas_int>(a == b ? ncols_a : naq));
+                }  // i1
+
+                // ---- static term: Cdst += SD_b^T @ S_sum ----
+                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
+                            static_cast<blas_int>(rep_size), 1.0,
+                            SD_b, static_cast<blas_int>(lda_b),
+                            S_sum, static_cast<blas_int>(ncols_a),
+                            1.0, Cdst,
+                            static_cast<blas_int>(a == b ? ncols_a : naq));
             }  // j2
 
             // Scatter diagonal block's lower triangle only
@@ -1511,14 +1486,238 @@ void kernel_gaussian_hessian_symm(
                     const int cmax = std::min(r, ncols_a - 1);
                     cblas_daxpy(static_cast<blas_int>(cmax + 1), 1.0, crow,
                                 static_cast<blas_int>(1), kout,
-                                static_cast<blas_int>(1));  // add columns 0..cmax
+                                static_cast<blas_int>(1));
                 }
             }
         }  // a
 
-        aligned_free_64(D);
-        aligned_free_64(W);
-        aligned_free_64(V);
+        aligned_free_64(D_row);
+        aligned_free_64(W_row);
+        aligned_free_64(V_row);
+        aligned_free_64(S_sum);
+        aligned_free_64(xbv);
+    }  // b
+}
+
+// Symmetric Hessian kernel in RFP (Rectangular Full Packed) format.
+// Output: 1-D array of length naq*(naq+1)/2, TRANSR='N', UPLO='U'.
+// rfp_index_upper_N(naq, col, row) with 0 <= col <= row < naq.
+//
+// This is identical to kernel_gaussian_hessian_symm, but instead of writing
+// to a full (naq x naq) square matrix, each (a,b) block is accumulated into
+// a small temp buffer, then scattered into the RFP array.
+void kernel_gaussian_hessian_symm_rfp(
+    const std::vector<double> &x,   // (nm, max_atoms, rep_size)
+    const std::vector<double> &dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const std::vector<int> &q,      // (nm, max_atoms)
+    const std::vector<int> &n,      // (nm)
+    int nm, int max_atoms, int rep_size,
+    int naq,  // must be 3 * sum_m n[m]
+    double sigma,
+    double *arf  // length naq*(naq+1)/2, RFP TRANSR='N', UPLO='U'
+) {
+    // ---- validation ----
+    if (nm <= 0 || max_atoms <= 0 || rep_size <= 0)
+        throw std::invalid_argument("dims must be positive");
+    if (!std::isfinite(sigma) || sigma <= 0.0)
+        throw std::invalid_argument("sigma must be > 0");
+    if (!arf)
+        throw std::invalid_argument("arf is null");
+
+    const size_t xN = (size_t)nm * max_atoms * rep_size;
+    const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
+    const size_t qN = (size_t)nm * max_atoms;
+
+    if (x.size() != xN)
+        throw std::invalid_argument("x size mismatch");
+    if (dx.size() != dxN)
+        throw std::invalid_argument("dx size mismatch");
+    if (q.size() != qN)
+        throw std::invalid_argument("q size mismatch");
+    if ((int)n.size() != nm)
+        throw std::invalid_argument("n size mismatch");
+
+    // Offsets in derivative axis (3 * active atoms per molecule)
+    std::vector<int> offs(nm);
+    int sum = 0;
+    for (int m = 0; m < nm; ++m) {
+        offs[m] = sum;
+        sum += 3 * std::max(0, std::min(n[m], max_atoms));
+    }
+    if (naq != sum)
+        throw std::invalid_argument("naq != 3*sum(n)");
+
+    // Zero the RFP array
+    const size_t nt = (size_t)naq * (naq + 1ull) / 2ull;
+    std::fill(arf, arf + nt, 0.0);
+
+    // Scalars
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma4 = -1.0 / (sigma * sigma * sigma * sigma);  // < 0
+    const double sigma2_neg = -(sigma * sigma);                        // < 0
+
+    // Label -> indices per molecule
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_idx(nm);
+    for (int a = 0; a < nm; ++a) {
+        const int na = std::max(0, std::min(n[a], max_atoms));
+        auto &M = lab_to_idx[a];
+        M.reserve(64);
+        for (int i1 = 0; i1 < na; ++i1) {
+            M[q[(size_t)a * max_atoms + i1]].push_back(i1);
+        }
+    }
+
+    const int ncols_max = 3 * max_atoms;
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+#endif
+    for (int b = 0; b < nm; ++b) {
+        const int nb = std::max(0, std::min(n[b], max_atoms));
+        if (nb == 0)
+            continue;
+
+        const int ncols_b = 3 * nb;
+        const int lda_b = 3 * max_atoms;
+        const int row_off = offs[b];
+
+        // Thread-local scratch
+        double *D_row  = aligned_alloc_64((size_t)rep_size);
+        double *W_row  = aligned_alloc_64((size_t)ncols_max);
+        double *V_row  = aligned_alloc_64((size_t)ncols_max);
+        double *S_sum  = aligned_alloc_64((size_t)rep_size * ncols_max);
+        double *xbv    = aligned_alloc_64((size_t)rep_size);
+
+        for (int a = 0; a <= b; ++a) {  // lower triangle only (col <= row)
+            const int na = std::max(0, std::min(n[a], max_atoms));
+            if (na == 0)
+                continue;
+
+            const int ncols_a = 3 * na;
+            const int col_off = offs[a];
+            const int lda_a = 3 * max_atoms;
+
+            const auto &lab_a = lab_to_idx[a];
+            const auto &lab_b = lab_to_idx[b];
+
+            // Temp block: (ncols_b x ncols_a) — always use a scratch buffer
+            // so that dger/dgemm have a contiguous lda, then scatter to RFP
+            std::vector<double> Cblk((size_t)ncols_b * ncols_a, 0.0);
+            double *Cdst = Cblk.data();
+            const int ldc = ncols_a;  // stride for Cblk
+
+            // loop atoms j2 in molecule b
+            for (int j2 = 0; j2 < nb; ++j2) {
+                const int lbl = q[(size_t)b * max_atoms + j2];
+                auto it_a = lab_a.find(lbl);
+                if (it_a == lab_a.end() || it_a->second.empty())
+                    continue;
+                const auto &i1_list = it_a->second;
+
+                // SD_b and x_b slice (for j2)
+                const double *SD_b = &dx[base_dx(b, j2, nm, max_atoms, rep_size)];
+                for (int k = 0; k < rep_size; ++k)
+                    xbv[k] = x[idx_x(b, j2, k, nm, max_atoms, rep_size)];
+
+                // Zero S_sum once per (a, j2) pair
+                std::fill(S_sum, S_sum + (size_t)rep_size * ncols_a, 0.0);
+
+                for (int i1 : i1_list) {
+                    const double *x_ai1 = &x[idx_x(a, i1, 0, nm, max_atoms, rep_size)];
+                    const double *SD_a  = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
+
+                    double l2 = 0.0;
+                    for (int k = 0; k < rep_size; ++k) {
+                        const double diff = x_ai1[k] - xbv[k];
+                        D_row[k] = diff;
+                        l2 += diff * diff;
+                    }
+                    const double eb      = std::exp(l2 * inv_2sigma2);
+                    const double e1      = inv_sigma4 * eb;   // < 0
+                    const double expdiag = sigma2_neg * e1;   // > 0
+                    const double s       = std::sqrt(-e1);    // sqrt(|expd|)
+
+                    for (int k = 0; k < rep_size; ++k)
+                        D_row[k] *= s;
+
+                    // accumulate S_sum (rep x ncols_a) += expdiag * SD_a
+                    for (int k = 0; k < rep_size; ++k) {
+                        double       *srow  = S_sum + (size_t)k * ncols_a;
+                        const double *sdrow = SD_a  + (size_t)k * lda_a;
+                        for (int j = 0; j < ncols_a; ++j)
+                            srow[j] += expdiag * sdrow[j];
+                    }
+
+                    // W = SD_b^T @ D_row  (ncols_b vector)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_b),
+                                1.0, SD_b, static_cast<blas_int>(lda_b),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, W_row, static_cast<blas_int>(1));
+
+                    // V = -SD_a^T @ D_row  (ncols_a vector)
+                    cblas_dgemv(CblasRowMajor, CblasTrans,
+                                static_cast<blas_int>(rep_size),
+                                static_cast<blas_int>(ncols_a),
+                                -1.0, SD_a, static_cast<blas_int>(lda_a),
+                                D_row, static_cast<blas_int>(1),
+                                0.0, V_row, static_cast<blas_int>(1));
+
+                    // rank-1: Cdst += W ⊗ V  (dger)
+                    cblas_dger(CblasRowMajor,
+                               static_cast<blas_int>(ncols_b),
+                               static_cast<blas_int>(ncols_a),
+                               1.0,
+                               W_row, static_cast<blas_int>(1),
+                               V_row, static_cast<blas_int>(1),
+                               Cdst, static_cast<blas_int>(ldc));
+                }  // i1
+
+                // ---- static term: Cdst += SD_b^T @ S_sum ----
+                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
+                            static_cast<blas_int>(rep_size), 1.0,
+                            SD_b, static_cast<blas_int>(lda_b),
+                            S_sum, static_cast<blas_int>(ncols_a),
+                            1.0, Cdst, static_cast<blas_int>(ldc));
+            }  // j2
+
+            // Scatter Cblk[(r, c)] -> arf[rfp_index_upper_N(naq, col_off+c, row_off+r)]
+            // Convention: rfp_index_upper_N(n, col, row) with col <= row.
+            // For (a <= b): col = col_off + c, row = row_off + r
+            // Off-diagonal (a < b): all entries are valid since col_off <= row_off.
+            // Diagonal (a == b): only lower-triangle of Cblk (r >= c) is valid.
+            if (a == b) {
+                // Diagonal block: scatter lower triangle only (r >= c)
+                for (int r = 0; r < ncols_b; ++r) {
+                    const double *crow = Cblk.data() + (size_t)r * ncols_a;
+                    for (int c = 0; c <= r; ++c) {
+                        const size_t idx = rfp_index_upper_N(naq, col_off + c, row_off + r);
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        arf[idx] += crow[c];
+                    }
+                }
+            } else {
+                // Off-diagonal block: scatter all ncols_b * ncols_a entries
+                for (int r = 0; r < ncols_b; ++r) {
+                    const double *crow = Cblk.data() + (size_t)r * ncols_a;
+                    for (int c = 0; c < ncols_a; ++c) {
+                        const size_t idx = rfp_index_upper_N(naq, col_off + c, row_off + r);
+#ifdef _OPENMP
+                        #pragma omp atomic
+#endif
+                        arf[idx] += crow[c];
+                    }
+                }
+            }
+        }  // a
+
+        aligned_free_64(D_row);
+        aligned_free_64(W_row);
+        aligned_free_64(V_row);
         aligned_free_64(S_sum);
         aligned_free_64(xbv);
     }  // b

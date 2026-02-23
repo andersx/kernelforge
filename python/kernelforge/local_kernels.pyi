@@ -23,6 +23,13 @@ def kernel_gaussian_hessian_symm(
     N: NDArray[np.int32],
     sigma: float,
 ) -> NDArray[np.float64]: ...
+def kernel_gaussian_hessian_symm_rfp(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    Q: NDArray[np.int32],
+    N: NDArray[np.int32],
+    sigma: float,
+) -> NDArray[np.float64]: ...
 def kernel_gaussian_hessian(
     X1: NDArray[np.float64],
     X2: NDArray[np.float64],
@@ -38,6 +45,16 @@ def kernel_gaussian_jacobian(
     x1: NDArray[np.float64],
     x2: NDArray[np.float64],
     dX2: NDArray[np.float64],
+    q1: NDArray[np.int32],
+    q2: NDArray[np.int32],
+    n1: NDArray[np.int32],
+    n2: NDArray[np.int32],
+    sigma: float,
+) -> NDArray[np.float64]: ...
+def kernel_gaussian_jacobian_t(
+    x1: NDArray[np.float64],
+    x2: NDArray[np.float64],
+    dX1: NDArray[np.float64],
     q1: NDArray[np.int32],
     q2: NDArray[np.int32],
     n1: NDArray[np.int32],

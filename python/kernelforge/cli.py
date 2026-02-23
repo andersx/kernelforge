@@ -22,6 +22,7 @@ from kernelforge.local_kernels import (
     kernel_gaussian,
     kernel_gaussian_hessian,
     kernel_gaussian_hessian_symm,
+    kernel_gaussian_hessian_symm_rfp,
     kernel_gaussian_jacobian,
     kernel_gaussian_jacobian_t,
     kernel_gaussian_symm,
@@ -746,6 +747,23 @@ def benchmark_local_kernel_gaussian_hessian() -> tuple[float, str]:
     return elapsed, f"local::kernel_gaussian_hessian (Ethanol, N={n})"
 
 
+def benchmark_local_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_hessian_symm_rfp (N=250, ~2s)."""
+    n = 250
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_hessian_symm_rfp(X, dX, Q, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_hessian_symm_rfp (Ethanol, N={n})"
+
+
 def benchmark_rff_features() -> tuple[float, str]:
     """Benchmark rff_features on synthetic data (N=1000, rep_size=200, D=4000)."""
     rng = np.random.default_rng(42)
@@ -886,6 +904,7 @@ BENCHMARKS = {
     "local_kernel_gaussian_jacobian_t": benchmark_local_kernel_gaussian_jacobian_t,
     "local_kernel_gaussian_hessian_symm": benchmark_local_kernel_gaussian_hessian_symm,
     "local_kernel_gaussian_hessian": benchmark_local_kernel_gaussian_hessian,
+    "local_kernel_gaussian_hessian_symm_rfp": benchmark_local_kernel_gaussian_hessian_symm_rfp,
     "rff_features": benchmark_rff_features,
     "rff_features_elemental": benchmark_rff_features_elemental,
     "rff_gradient_elemental": benchmark_rff_gradient_elemental,
@@ -925,6 +944,7 @@ SUITES = {
         "local_kernel_gaussian_jacobian_t",
         "local_kernel_gaussian_hessian_symm",
         "local_kernel_gaussian_hessian",
+        "local_kernel_gaussian_hessian_symm_rfp",
     ],
     "kitchen-sinks": [
         "rff_features",

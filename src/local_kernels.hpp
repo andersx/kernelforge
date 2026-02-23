@@ -78,5 +78,16 @@ void kernel_gaussian_hessian_symm(
     double *kernel_out  // (naq, naq) row-major
 );
 
+void kernel_gaussian_hessian_symm_rfp(
+    const std::vector<double> &x,   // (nm, max_atoms, rep_size)
+    const std::vector<double> &dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const std::vector<int> &q,      // (nm, max_atoms)
+    const std::vector<int> &n,      // (nm)
+    int nm, int max_atoms, int rep_size,
+    int naq,  // must be 3 * sum_m n[m]
+    double sigma,
+    double *arf  // length naq*(naq+1)/2, RFP TRANSR='N', UPLO='U'
+);
+
 }  // namespace fchl19
 }  // namespace kf

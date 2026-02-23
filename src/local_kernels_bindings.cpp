@@ -585,6 +585,86 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
     return py::array_t<double>({(py::ssize_t)nt}, {(py::ssize_t)sizeof(double)}, arf_ptr, capsule);
 }
 
+// RFP-output symmetric hessian kernel: returns 1-D array of length naq*(naq+1)/2
+static py::array_t<double> fgdml_kernel_symm_rfp_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> x1,  // (nm, max_atoms, rep)
+    py::array_t<double, py::array::c_style | py::array::forcecast>
+        dx1,  // (nm, max_atoms, rep, 3*max_atoms)
+    py::array_t<int, py::array::c_style | py::array::forcecast> q1,  // (nm, max_atoms)
+    py::array_t<int, py::array::c_style | py::array::forcecast> n1,  // (nm,)
+    double sigma) {
+    // ---- shape checks ----
+    if (x1.ndim() != 3 || dx1.ndim() != 4 || q1.ndim() != 2 || n1.ndim() != 1) {
+        throw std::invalid_argument("Expected: x1(nm,max_atoms,rep), "
+                                    "dx1(nm,max_atoms,rep,3*max_atoms), "
+                                    "q1(nm,max_atoms), n1(nm).");
+    }
+
+    const int nm = static_cast<int>(x1.shape(0));
+    const int max_atoms = static_cast<int>(x1.shape(1));
+    const int rep = static_cast<int>(x1.shape(2));
+
+    if (dx1.shape(0) != nm || dx1.shape(1) != max_atoms || dx1.shape(2) != rep ||
+        dx1.shape(3) != 3 * max_atoms)
+        throw std::invalid_argument("dx1 shape mismatch.");
+    if (q1.shape(0) != nm || q1.shape(1) != max_atoms)
+        throw std::invalid_argument("q1 shape mismatch.");
+    if (n1.shape(0) != nm)
+        throw std::invalid_argument("n1 length mismatch.");
+
+    // ---- flatten to std::vector ----
+    const std::size_t x1N = (std::size_t)nm * max_atoms * rep;
+    const std::size_t dx1N = (std::size_t)nm * max_atoms * rep * (3 * (std::size_t)max_atoms);
+    const std::size_t q1N = (std::size_t)nm * max_atoms;
+
+    std::vector<double> x1v(x1N), dx1v(dx1N);
+    std::vector<int> q1v(q1N), n1v(nm);
+
+    std::copy_n(x1.data(), x1N, x1v.begin());
+    std::copy_n(dx1.data(), dx1N, dx1v.begin());
+    std::copy_n(q1.data(), q1N, q1v.begin());
+    std::copy_n(n1.data(), (std::size_t)nm, n1v.begin());
+
+    // ---- compute naq = 3*sum_a min(max(n1[a],0), max_atoms) ----
+    long long naq_ll = 0;
+    for (int a = 0; a < nm; ++a) {
+        int na = n1v[a];
+        if (na < 0)
+            na = 0;
+        if (na > max_atoms)
+            na = max_atoms;
+        naq_ll += 3ll * na;
+    }
+    if (naq_ll < 0)
+        throw std::overflow_error("naq negative?");
+    if (naq_ll > std::numeric_limits<py::ssize_t>::max())
+        throw std::overflow_error("naq too large.");
+    const int naq = static_cast<int>(naq_ll);
+
+    // If nothing to compute return empty array
+    if (naq == 0) {
+        return py::array_t<double>({(py::ssize_t)0}, {(py::ssize_t)sizeof(double)});
+    }
+
+    // ---- allocate aligned RFP output: nt = naq*(naq+1)/2 ----
+    const size_t nt = (size_t)naq * (naq + 1ull) / 2ull;
+    double *arf_ptr = aligned_alloc_64(nt);
+    if (!arf_ptr)
+        throw std::bad_alloc();
+
+    auto capsule = py::capsule(arf_ptr, [](void *p) { aligned_free_64(p); });
+
+    // ---- call C++ (release GIL) ----
+    {
+        py::gil_scoped_release release;
+        kf::fchl19::kernel_gaussian_hessian_symm_rfp(x1v, dx1v, q1v, n1v, nm, max_atoms, rep, naq,
+                                                      sigma, arf_ptr);
+    }
+
+    // Return as 1-D C-contiguous array
+    return py::array_t<double>({(py::ssize_t)nt}, {(py::ssize_t)sizeof(double)}, arf_ptr, capsule);
+}
+
 PYBIND11_MODULE(local_kernels, m) {
     m.doc() = "Local (atom-pair-wise) kernels for FCHL19";
 
@@ -675,4 +755,21 @@ Property:
           "Symmetric Gaussian kernel with RFP (TRANSR='N', UPLO='U') output.\n"
           "Inputs: x1(nm,max_atoms,rep), q1(nm,max_atoms), n1(nm).\n"
           "Returns: 1-D RFP array of length nm*(nm+1)/2.");
+
+    m.def("kernel_gaussian_hessian_symm_rfp", &fgdml_kernel_symm_rfp_py,
+          py::arg("x1"), py::arg("dx1"), py::arg("q1"), py::arg("n1"), py::arg("sigma"),
+          R"(Symmetric Hessian kernel in RFP (TRANSR='N', UPLO='U') format.
+
+Args:
+  x1:  (nm, max_atoms, rep)
+  dx1: (nm, max_atoms, rep, 3*max_atoms)
+  q1:  (nm, max_atoms)
+  n1:  (nm,)
+  sigma: positive float
+
+Returns:
+  arf: 1-D array of length naq*(naq+1)/2, where naq = 3 * sum(n1).
+       Packed as RFP TRANSR='N', UPLO='U'.
+       Equivalent to: np.triu(kernel_gaussian_hessian_symm(...)) packed by dpftrs convention.
+)");
 }
