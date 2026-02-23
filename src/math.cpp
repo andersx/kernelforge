@@ -84,7 +84,7 @@ void solve_cholesky(double *K, const double *y, blas_int n, double *alpha, doubl
 static inline std::size_t rfp_diag_index_upper_N(blas_int n, blas_int j0) {
     const blas_int k = n / 2;
     const blas_int stride = (n % 2 == 0) ? (n + 1) : n;
-    if (j0 > k) {  // strict >
+    if (j0 >= k) {  // strict >
         return (std::size_t)(j0 - k) * (std::size_t)stride + (std::size_t)j0;
     } else {
         return (std::size_t)j0 * (std::size_t)stride + (std::size_t)(j0 + k + 1);
