@@ -798,22 +798,29 @@ void kernel_gaussian_jacobian(
         }
     }
 
-    // Heuristics for batching
-    constexpr int BATCH_T = 8192;  // try 256..1024; tune for your machine
+    // Tile width: D is (T x rep_size), H is (T x ncols_max).
+    // Working set per thread: T*(rep_size + ncols_max)*8 bytes.
+    // Target: fit in L2 (512 KB per core). ncols_max = 3*max_atoms2.
+    // T=128: 128*(384+27)*8 = 421 KB for ethanol -> L2.
+    // Use 128 as a reasonable default; larger datasets with more atoms/mol
+    // may benefit from smaller T, but 128 is a safe choice.
+    constexpr int BATCH_T = 256;
     constexpr int T_MIN_GEMM = 8;  // below this, GEMV often wins
-    const int LDB = BATCH_T;       // row-major leading dimension for D (rep x T)
-    const int LDC = BATCH_T;       // row-major leading dimension for H (ncols x T)
+
+    // D_scaled: (T x rep_size) row-major — build_D writes D[t*rep+k], sequential per t.
+    // H:        (T x ncols_max) row-major — scatter reads H[t*ncols:], sequential per t.
+    const int ncols_max = 3 * max_atoms2;
 
 // ------------------------------------------------------------
 // Parallelize over b: each thread owns a disjoint column block
 // ------------------------------------------------------------
 #pragma omp parallel default(none)                                                        \
     shared(x1, x2, dX2, q1, q2, n1, n2, nm1, nm2, max_atoms1, max_atoms2, rep_size, naq2, \
-               kernel_out, lj1, offs2, ncols_b, inv_2sigma2, inv_sigma2)
+               kernel_out, lj1, offs2, ncols_b, inv_2sigma2, inv_sigma2, ncols_max)
     {
-        // thread-local scratch (aligned, reused)
-        double *D_scaled = aligned_alloc_64((size_t)rep_size * LDB);   // (rep_size x LDB)
-        double *H = aligned_alloc_64((size_t)(3 * max_atoms2) * LDC);  // (max ncols x LDC)
+        // Thread-local scratch: D is (T x rep_size), H is (T x ncols_max).
+        double *D = aligned_alloc_64((size_t)BATCH_T * rep_size);    // (T x rep_size)
+        double *H = aligned_alloc_64((size_t)BATCH_T * ncols_max);   // (T x ncols_max)
 
 #pragma omp for schedule(dynamic)
         for (int b = 0; b < nm2; ++b) {
@@ -833,30 +840,27 @@ void kernel_gaussian_jacobian(
 
                 const auto &aj1_list = it->second;
 
-                // dX2 slice for (b,j2): A = dX2(b, j2, :, 0:ncols)
+                // A = dX2(b, j2, :, :): shape (rep_size, 3*max_atoms2) row-major
                 const double *A = &dX2[base_dx2(b, j2, nm2, max_atoms2, rep_size)];
+                // x2 row for (b,j2)
+                const double *x2_bj2 = &x2[((size_t)b * max_atoms2 + j2) * rep_size];
 
-                // Process (a,j1) in tiles
+                // Process (a,j1) pairs in tiles of width BATCH_T
                 for (size_t t0 = 0; t0 < aj1_list.size(); t0 += BATCH_T) {
                     const int T = (int)std::min<size_t>(BATCH_T, aj1_list.size() - t0);
 
                     if (T < T_MIN_GEMM) {
-                        // ---- fallback: original GEMV path for tiny batches ----
+                        // ---- GEMV fallback for tiny batches ----
+                        // Reuse D[0..rep) as a temporary diff vector.
                         for (int t = 0; t < T; ++t) {
-                            const int a = aj1_list[t0 + t].first;
+                            const int a  = aj1_list[t0 + t].first;
                             const int j1 = aj1_list[t0 + t].second;
+                            const double *x1_aj1 = &x1[((size_t)a * max_atoms1 + j1) * rep_size];
 
-                            // d, l2
                             double l2 = 0.0;
-                            // We reuse column t in D_scaled as a temporary buffer for d (no extra
-                            // alloc)
-                            double *dcol =
-                                &D_scaled[(size_t)0 * LDB + t];  // start; access [k*LDB + t]
                             for (int k = 0; k < rep_size; ++k) {
-                                const double diff =
-                                    x1[((size_t)a * max_atoms1 + j1) * rep_size + k] -
-                                    x2[((size_t)b * max_atoms2 + j2) * rep_size + k];
-                                dcol[(size_t)k * LDB] = diff;  // place at k*LDB + t
+                                const double diff = x1_aj1[k] - x2_bj2[k];
+                                D[k] = diff;
                                 l2 += diff * diff;
                             }
                             const double alpha = std::exp(l2 * inv_2sigma2) * inv_sigma2;
@@ -865,55 +869,57 @@ void kernel_gaussian_jacobian(
                                         static_cast<blas_int>(rep_size),
                                         static_cast<blas_int>(ncols), alpha, A,
                                         static_cast<blas_int>(lda_rowmaj),
-                                        /*x:*/ dcol, static_cast<blas_int>(LDB),
+                                        D, static_cast<blas_int>(1),
                                         1.0, &kernel_out[(size_t)a * naq2 + out_offset],
                                         static_cast<blas_int>(1));
                         }
                         continue;
                     }
 
-                    // ---- batched DGEMM path ----
-                    // 1) Build D_scaled (rep_size x T): column t is alpha_t * d_t
+                    // ---- Batched DGEMM path ----
+                    // 1) Build D (T x rep_size): row t = alpha_t * (x1[a,j1] - x2[b,j2]).
+                    //    Writing D[t*rep+k] is sequential for each t — no cache thrash.
                     for (int t = 0; t < T; ++t) {
-                        const int a = aj1_list[t0 + t].first;
+                        const int a  = aj1_list[t0 + t].first;
                         const int j1 = aj1_list[t0 + t].second;
+                        const double *x1_aj1 = &x1[((size_t)a * max_atoms1 + j1) * rep_size];
 
                         double l2 = 0.0;
+                        double *Drow = D + (size_t)t * rep_size;
                         for (int k = 0; k < rep_size; ++k) {
-                            const double diff = x1[((size_t)a * max_atoms1 + j1) * rep_size + k] -
-                                                x2[((size_t)b * max_atoms2 + j2) * rep_size + k];
-                            D_scaled[(size_t)k * LDB + t] = diff;  // D[k,t]
+                            const double diff = x1_aj1[k] - x2_bj2[k];
+                            Drow[k] = diff;
                             l2 += diff * diff;
                         }
                         const double alpha_t = std::exp(l2 * inv_2sigma2) * inv_sigma2;
-                        for (int k = 0; k < rep_size; ++k) {
-                            D_scaled[(size_t)k * LDB + t] *= alpha_t;
-                        }
+                        for (int k = 0; k < rep_size; ++k)
+                            Drow[k] *= alpha_t;
                     }
 
-                    // 2) GEMM: H = A^T (ncols x rep) * D_scaled (rep x T)  -> H (ncols x T)
-                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                                static_cast<blas_int>(ncols), static_cast<blas_int>(T),
-                                static_cast<blas_int>(rep_size), 1.0, A,
-                                static_cast<blas_int>(lda_rowmaj), D_scaled,
-                                static_cast<blas_int>(LDB), 0.0, H,
-                                static_cast<blas_int>(LDC));
+                    // 2) H(T x ncols) = D(T x rep) @ A(rep x ncols)
+                    //    A is stored as (rep x lda_rowmaj) row-major; we use ncols columns.
+                    //    cblas: RowMajor, NoTrans, NoTrans -> H = D * A
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                                static_cast<blas_int>(T), static_cast<blas_int>(ncols),
+                                static_cast<blas_int>(rep_size), 1.0,
+                                D, static_cast<blas_int>(rep_size),
+                                A, static_cast<blas_int>(lda_rowmaj),
+                                0.0, H, static_cast<blas_int>(ncols_max));
 
-                    // 3) Scatter-add columns of H into kernel_out[a, out_offset : out_offset+ncols]
+                    // 3) Scatter-add: H[t, 0:ncols] -> kernel_out[a, out_offset:out_offset+ncols].
+                    //    Both reads (H row) and writes (kout) are sequential.
                     for (int t = 0; t < T; ++t) {
                         const int a = aj1_list[t0 + t].first;
-                        double *kout = &kernel_out[(size_t)a * naq2 + out_offset];
-                        const double *hcol = &H[(size_t)t];  // H[r,t] at H[r*LDC + t]
-                        // contiguous add
-                        for (int r = 0; r < ncols; ++r) {
-                            kout[r] += hcol[(size_t)r * LDC];
-                        }
+                        double *kout       = &kernel_out[(size_t)a * naq2 + out_offset];
+                        const double *hrow = H + (size_t)t * ncols_max;
+                        for (int r = 0; r < ncols; ++r)
+                            kout[r] += hrow[r];
                     }
                 }  // tiles
             }  // j2
         }  // omp for
 
-        aligned_free_64(D_scaled);
+        aligned_free_64(D);
         aligned_free_64(H);
     }  // omp parallel
 }
