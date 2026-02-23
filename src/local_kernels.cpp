@@ -226,8 +226,12 @@ void kernel_gaussian(const std::vector<double> &x1,  // (nm1, max_atoms1, rep_si
 
                 // Cblk(ib×jb) = -2 * Ai0(ib×rep) * Bj0(jb×rep)^T
                 // RowMajor: M=ib, N=jb, K=rep_size, lda=rep_size, ldb=rep_size, ldc=jb
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, ib, jb, rep_size, -2.0, Ai0,
-                            rep_size, Bj0, rep_size, 0.0, Cblk, jb);
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            static_cast<blas_int>(ib), static_cast<blas_int>(jb),
+                            static_cast<blas_int>(rep_size), -2.0, Ai0,
+                            static_cast<blas_int>(rep_size), Bj0,
+                            static_cast<blas_int>(rep_size), 0.0, Cblk,
+                            static_cast<blas_int>(jb));
 
 // Accumulate this tile into K
 #pragma omp parallel for schedule(guided)
@@ -440,8 +444,10 @@ void kernel_gaussian_symm_rfp(
             const int bi = i0 / B;
 
             // ----- Diagonal tile: DSYRK → upper-tri in Cblk (LDC = ib) -----
-            cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans, ib, rep_size, -2.0, Ai0, rep_size,
-                        0.0, Cblk, ib);
+            cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
+                        static_cast<blas_int>(ib), static_cast<blas_int>(rep_size),
+                        -2.0, Ai0, static_cast<blas_int>(rep_size),
+                        0.0, Cblk, static_cast<blas_int>(ib));
 
 #pragma omp parallel for schedule(guided)
             for (int a = 0; a < nm; ++a) {
@@ -479,8 +485,12 @@ void kernel_gaussian_symm_rfp(
                 const double *Aj0 = &pk.A[(size_t)j0 * rep_size];
                 const int bj = j0 / B;
 
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, ib, jb, rep_size, -2.0, Ai0,
-                            rep_size, Aj0, rep_size, 0.0, Cblk, jb);
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            static_cast<blas_int>(ib), static_cast<blas_int>(jb),
+                            static_cast<blas_int>(rep_size), -2.0, Ai0,
+                            static_cast<blas_int>(rep_size), Aj0,
+                            static_cast<blas_int>(rep_size), 0.0, Cblk,
+                            static_cast<blas_int>(jb));
 
 #pragma omp parallel for schedule(guided)
                 for (int a = 0; a < nm; ++a) {
@@ -580,8 +590,10 @@ void kernel_gaussian_symm(const std::vector<double> &x,  // (nm, max_atoms, rep_
             const int bi = i0 / B;
 
             // Diagonal tile: DSYRK produces upper-tri in Cblk with LDC=ib
-            cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans, ib, rep_size, -2.0, Ai0, rep_size,
-                        0.0, Cblk, ib);
+            cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
+                        static_cast<blas_int>(ib), static_cast<blas_int>(rep_size),
+                        -2.0, Ai0, static_cast<blas_int>(rep_size),
+                        0.0, Cblk, static_cast<blas_int>(ib));
 
 #pragma omp parallel for schedule(guided)
             for (int a = 0; a < nm; ++a) {
@@ -620,8 +632,12 @@ void kernel_gaussian_symm(const std::vector<double> &x,  // (nm, max_atoms, rep_
                 const double *Aj0 = &pk.A[(size_t)j0 * rep_size];
                 const int bj = j0 / B;
 
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, ib, jb, rep_size, -2.0, Ai0,
-                            rep_size, Aj0, rep_size, 0.0, Cblk, jb);
+                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            static_cast<blas_int>(ib), static_cast<blas_int>(jb),
+                            static_cast<blas_int>(rep_size), -2.0, Ai0,
+                            static_cast<blas_int>(rep_size), Aj0,
+                            static_cast<blas_int>(rep_size), 0.0, Cblk,
+                            static_cast<blas_int>(jb));
 
 #pragma omp parallel for schedule(guided)
                 for (int a = 0; a < nm; ++a) {
@@ -821,10 +837,13 @@ void kernel_gaussian_jacobian(
                             }
                             const double alpha = std::exp(l2 * inv_2sigma2) * inv_sigma2;
 
-                            cblas_dgemv(CblasRowMajor, CblasTrans, rep_size, ncols, alpha, A,
-                                        lda_rowmaj,
-                                        /*x:*/ dcol, LDB,  // stride LDB steps the same column
-                                        1.0, &kernel_out[(size_t)a * naq2 + out_offset], 1);
+                            cblas_dgemv(CblasRowMajor, CblasTrans,
+                                        static_cast<blas_int>(rep_size),
+                                        static_cast<blas_int>(ncols), alpha, A,
+                                        static_cast<blas_int>(lda_rowmaj),
+                                        /*x:*/ dcol, static_cast<blas_int>(LDB),
+                                        1.0, &kernel_out[(size_t)a * naq2 + out_offset],
+                                        static_cast<blas_int>(1));
                         }
                         continue;
                     }
@@ -849,8 +868,12 @@ void kernel_gaussian_jacobian(
                     }
 
                     // 2) GEMM: H = A^T (ncols x rep) * D_scaled (rep x T)  -> H (ncols x T)
-                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, ncols, T, rep_size, 1.0, A,
-                                lda_rowmaj, D_scaled, LDB, 0.0, H, LDC);
+                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                static_cast<blas_int>(ncols), static_cast<blas_int>(T),
+                                static_cast<blas_int>(rep_size), 1.0, A,
+                                static_cast<blas_int>(lda_rowmaj), D_scaled,
+                                static_cast<blas_int>(LDB), 0.0, H,
+                                static_cast<blas_int>(LDC));
 
                     // 3) Scatter-add columns of H into kernel_out[a, out_offset : out_offset+ncols]
                     for (int t = 0; t < T; ++t) {
@@ -1023,13 +1046,17 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
                         const double *srow = SD1 + (size_t)k * (3 * max_atoms1);
                         double *trow = S1_sum.data() + (size_t)k * ncols_a;
                         // trow[0:ncols_a] += expdiag * srow[0:ncols_a]
-                        cblas_daxpy(ncols_a, expdiag, srow, 1, trow, 1);
+                        cblas_daxpy(static_cast<blas_int>(ncols_a), expdiag, srow,
+                                    static_cast<blas_int>(1), trow, static_cast<blas_int>(1));
                     }
                 }
                 // One GEMM for the whole static term of this (a,b,i2)
-                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, ncols_b, ncols_a, rep_size,
-                            1.0, SD2, lda2,  // SD2^T  via Trans
-                            S1_sum.data(), ncols_a, 1.0, Kba, naq1);
+                cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
+                            static_cast<blas_int>(rep_size), 1.0, SD2,
+                            static_cast<blas_int>(lda2),
+                            S1_sum.data(), static_cast<blas_int>(ncols_a), 1.0, Kba,
+                            static_cast<blas_int>(naq1));
 
                 // ------ RANK-1 TERM: sum_i1 expd * (SD2^T d) (SD1^T d)^T ------
                 // Batch across i1: build W' and V' columns, each scaled by sqrt(expd)
@@ -1054,10 +1081,13 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
                         const double s = std::sqrt(expd);
 
                         // w = SD2^T d  -> put into Wtile[:, t]
-                        cblas_dgemv(CblasRowMajor, CblasTrans, rep_size, ncols_b,
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    static_cast<blas_int>(rep_size),
+                                    static_cast<blas_int>(ncols_b),
                                     s,  // alpha = sqrt(|expd|)
-                                    SD2, lda2, d.data(), 1, 0.0, &Wtile[(size_t)t],
-                                    LDT);  // write with stride LDT
+                                    SD2, static_cast<blas_int>(lda2), d.data(),
+                                    static_cast<blas_int>(1), 0.0, &Wtile[(size_t)t],
+                                    static_cast<blas_int>(LDT));  // write with stride LDT
 
                         // v = SD1^T d  -> put into Vtile[:ncols_a, t]
                         const double *SD1 = &dx1[base_dx1(a, i1, nm1, max_atoms1, rep_size)];
@@ -1066,16 +1096,21 @@ void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms
                         if (inv_sigma4 * exp_base < 0.0)
                             alpha_v = -alpha_v;
 
-                        cblas_dgemv(CblasRowMajor, CblasTrans, rep_size, ncols_a, alpha_v, SD1,
-                                    lda1, d.data(), 1, 0.0, &Vtile[(size_t)t], LDT);
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    static_cast<blas_int>(rep_size),
+                                    static_cast<blas_int>(ncols_a), alpha_v, SD1,
+                                    static_cast<blas_int>(lda1), d.data(),
+                                    static_cast<blas_int>(1), 0.0, &Vtile[(size_t)t],
+                                    static_cast<blas_int>(LDT));
                     }
 
                     // One GEMM for T rank-1s: Kba += Wtile * Vtile^T
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, ncols_b, ncols_a, T, 1.0,
-                                Wtile.data(), LDT,  // (ncols_b x T)
-                                Vtile.data(),
-                                LDT,  // (ncols_a x T) as columns ⇒ Trans gives T x ncols_a
-                                1.0, Kba, naq1);
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
+                                static_cast<blas_int>(T), 1.0,
+                                Wtile.data(), static_cast<blas_int>(LDT),  // (ncols_b x T)
+                                Vtile.data(), static_cast<blas_int>(LDT),  // (ncols_a x T) as columns ⇒ Trans gives T x ncols_a
+                                1.0, Kba, static_cast<blas_int>(naq1));
                 }
             }  // i2
         }  // a
@@ -1244,25 +1279,35 @@ void kernel_gaussian_hessian_symm(
                     }
 
                     // W = SD_b^T * D   (ncols_b x Tcur)
-                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, ncols_b, Tcur, rep_size,
-                                1.0, SD_b, lda_b, D, LDT, 0.0, W, LDT);
+                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(Tcur),
+                                static_cast<blas_int>(rep_size), 1.0, SD_b,
+                                static_cast<blas_int>(lda_b), D, static_cast<blas_int>(LDT),
+                                0.0, W, static_cast<blas_int>(LDT));
 
                     // V columns: v_t = SD_a(i1)^T * D[:,t], apply sign[t]
                     for (int t = 0; t < Tcur; ++t) {
                         const int i1 = i1_list[t0 + t];
                         const double *SD_a = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
 
-                        cblas_dgemv(CblasRowMajor, CblasTrans, rep_size, ncols_a, 1.0, SD_a, lda_a,
-                                    &D[(size_t)0 * LDT + t], LDT, 0.0, &V[(size_t)0 * LDT + t],
-                                    LDT);
+                        cblas_dgemv(CblasRowMajor, CblasTrans,
+                                    static_cast<blas_int>(rep_size),
+                                    static_cast<blas_int>(ncols_a), 1.0, SD_a,
+                                    static_cast<blas_int>(lda_a),
+                                    &D[(size_t)0 * LDT + t], static_cast<blas_int>(LDT),
+                                    0.0, &V[(size_t)0 * LDT + t], static_cast<blas_int>(LDT));
 
                         if (sign[t] < 0.0)
-                            cblas_dscal(ncols_a, -1.0, &V[(size_t)0 * LDT + t], LDT);
+                            cblas_dscal(static_cast<blas_int>(ncols_a), -1.0,
+                                        &V[(size_t)0 * LDT + t], static_cast<blas_int>(LDT));
                     }
 
                     // Rank-1 batch: Cdst += W * V^T
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, ncols_b, ncols_a, Tcur,
-                                1.0, W, LDT, V, LDT, 1.0, Cdst, (a == b ? ncols_a : naq));
+                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
+                                static_cast<blas_int>(Tcur), 1.0, W, static_cast<blas_int>(LDT),
+                                V, static_cast<blas_int>(LDT), 1.0, Cdst,
+                                static_cast<blas_int>(a == b ? ncols_a : naq));
 
                     // Static term: S_sum = sum_t expdiag[t] * SD_a(i1)
                     for (int k = 0; k < rep_size; ++k) {
@@ -1278,13 +1323,17 @@ void kernel_gaussian_hessian_symm(
                         for (int k = 0; k < rep_size; ++k) {
                             const double *srow = SD_a + (size_t)k * (3 * max_atoms);
                             double *trow = &S_sum[(size_t)k * ncols_max];
-                            cblas_daxpy(ncols_a, w, srow, 1, trow, 1);
+                            cblas_daxpy(static_cast<blas_int>(ncols_a), w, srow,
+                                        static_cast<blas_int>(1), trow, static_cast<blas_int>(1));
                         }
                     }
                     // Cdst += SD_b^T * S_sum
-                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, ncols_b, ncols_a, rep_size,
-                                1.0, SD_b, lda_b, S_sum, ncols_max, 1.0, Cdst,
-                                (a == b ? ncols_a : naq));
+                    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                static_cast<blas_int>(ncols_b), static_cast<blas_int>(ncols_a),
+                                static_cast<blas_int>(rep_size), 1.0, SD_b,
+                                static_cast<blas_int>(lda_b), S_sum,
+                                static_cast<blas_int>(ncols_max), 1.0, Cdst,
+                                static_cast<blas_int>(a == b ? ncols_a : naq));
                 }  // tile
             }  // j2
 
@@ -1294,7 +1343,9 @@ void kernel_gaussian_hessian_symm(
                     double *kout = Kba + (size_t)r * naq;
                     const double *crow = Cdiag.data() + (size_t)r * ncols_a;
                     const int cmax = std::min(r, ncols_a - 1);
-                    cblas_daxpy(cmax + 1, 1.0, crow, 1, kout, 1);  // add columns 0..cmax
+                    cblas_daxpy(static_cast<blas_int>(cmax + 1), 1.0, crow,
+                                static_cast<blas_int>(1), kout,
+                                static_cast<blas_int>(1));  // add columns 0..cmax
                 }
             }
         }  // a
