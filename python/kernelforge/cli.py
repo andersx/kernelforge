@@ -661,8 +661,8 @@ def benchmark_local_kernel_gaussian_qm7b() -> tuple[float, str]:
 
 
 def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
-    """Benchmark local kernel_gaussian_jacobian (N=600, ~2s)."""
-    n = 600
+    """Benchmark local kernel_gaussian_jacobian (N=500, ~2s)."""
+    n = 500
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -684,8 +684,8 @@ def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
 
 
 def benchmark_local_kernel_gaussian_jacobian_t() -> tuple[float, str]:
-    """Benchmark local kernel_gaussian_jacobian_t (N=600, ~2s)."""
-    n = 600
+    """Benchmark local kernel_gaussian_jacobian_t (N=500, ~2s)."""
+    n = 500
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -709,7 +709,7 @@ def benchmark_local_kernel_gaussian_jacobian_t() -> tuple[float, str]:
 
 
 def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
-    """Benchmark local kernel_gaussian_hessian_symm (N=270, ~2s)."""
+    """Benchmark local kernel_gaussian_hessian_symm (N=250, ~2s)."""
     n = 250
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
@@ -726,8 +726,8 @@ def benchmark_local_kernel_gaussian_hessian_symm() -> tuple[float, str]:
 
 
 def benchmark_local_kernel_gaussian_hessian() -> tuple[float, str]:
-    """Benchmark local kernel_gaussian_hessian asymmetric (N=300, ~2s)."""
-    n = 300
+    """Benchmark local kernel_gaussian_hessian asymmetric (N=250, ~2s)."""
+    n = 250
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -768,8 +768,8 @@ def benchmark_local_kernel_gaussian_hessian_symm_rfp() -> tuple[float, str]:
 
 
 def benchmark_local_kernel_gaussian_full() -> tuple[float, str]:
-    """Benchmark local kernel_gaussian_full (asymmetric, N=200, ~2s)."""
-    n = 200
+    """Benchmark local kernel_gaussian_full (asymmetric, N=250, ~2s)."""
+    n = 250
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -785,8 +785,8 @@ def benchmark_local_kernel_gaussian_full() -> tuple[float, str]:
 
 
 def benchmark_local_kernel_gaussian_full_symm() -> tuple[float, str]:
-    """Benchmark local kernel_gaussian_full_symm (symmetric, N=200, ~2s)."""
-    n = 200
+    """Benchmark local kernel_gaussian_full_symm (symmetric, N=250, ~2s)."""
+    n = 250
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -802,8 +802,8 @@ def benchmark_local_kernel_gaussian_full_symm() -> tuple[float, str]:
 
 
 def benchmark_local_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
-    """Benchmark local kernel_gaussian_full_symm_rfp (symmetric RFP, N=200, ~2s)."""
-    n = 200
+    """Benchmark local kernel_gaussian_full_symm_rfp (symmetric RFP, N=250, ~2s)."""
+    n = 250
     data = prepare_ethanol_fchl19(n)
     X = data["X"][:n]
     dX = data["dX"][:n]
@@ -1080,7 +1080,7 @@ def run(suite: str) -> None:
 def main() -> None:
     """Main entry point for the kernel-bench command."""
     parser = argparse.ArgumentParser(
-        prog="kernel-bench",
+        prog="kernelbench",
         description=f"{PROGRAM_NAME} - Single-run benchmark suite for KernelForge",
     )
     parser.add_argument(
