@@ -11,7 +11,6 @@ from numpy.typing import NDArray
 
 import kernelforge.local_kernels as lk
 
-
 # ---------------------------------------------------------------------------
 # Reference (naive) implementations
 # ---------------------------------------------------------------------------
@@ -115,8 +114,8 @@ def _make_dataset(
     x1 = rng.standard_normal((nm1, max_atoms, rep_size))
     x2 = rng.standard_normal((nm2, max_atoms, rep_size))
 
-    n1 = rng.integers(n_min, max_atoms + 1, size=nm1, dtype=np.int32)
-    n2 = rng.integers(n_min, max_atoms + 1, size=nm2, dtype=np.int32)
+    n1 = rng.integers(n_min, max_atoms + 1, size=nm1).astype(np.int32)
+    n2 = rng.integers(n_min, max_atoms + 1, size=nm2).astype(np.int32)
 
     q1 = np.zeros((nm1, max_atoms), dtype=np.int32)
     q2 = np.zeros((nm2, max_atoms), dtype=np.int32)
