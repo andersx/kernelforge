@@ -4,10 +4,8 @@
 
 import numpy as np
 import pytest
-from numpy.typing import NDArray
 
 import kernelforge.local_kernels as fchl
-
 
 # ---------------------------------------------------------------------------
 # Helpers

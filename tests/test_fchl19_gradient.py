@@ -193,7 +193,7 @@ def slow_ref_grad_t(
             l2 = dot(d, d)
             alpha = exp(l2 * inv_2sigma2) * inv_sigma2
     """
-    nm1, max_atoms1, rep = x1.shape
+    nm1, max_atoms1, _rep = x1.shape
     nm2, max_atoms2, _ = x2.shape
     offs1 = np.zeros(nm1, dtype=int)
     acc = 0

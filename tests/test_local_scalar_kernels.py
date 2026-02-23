@@ -27,7 +27,7 @@ def _ref_kernel_gaussian(
 ) -> NDArray[np.float64]:
     """Pure-Python reference: K[a,b] = sum_{j1,j2: q1[a,j1]==q2[b,j2]}
     exp(-||x1[a,j1]-x2[b,j2]||^2 / (2*sigma^2))"""
-    nm1, max_atoms1, rep = x1.shape
+    nm1, max_atoms1, _rep = x1.shape
     nm2, max_atoms2, _ = x2.shape
     inv_2sigma2 = -1.0 / (2.0 * sigma * sigma)
 
@@ -214,7 +214,7 @@ def test_kernel_gaussian_sigma_scaling() -> None:
     assert np.all(K_large >= K_small - 1e-12)
 
 
-@pytest.mark.parametrize("nm1,nm2", [(1, 1), (1, 5), (10, 1)])
+@pytest.mark.parametrize(("nm1", "nm2"), [(1, 1), (1, 5), (10, 1)])
 def test_kernel_gaussian_edge_sizes(nm1: int, nm2: int) -> None:
     """Test with small/edge case molecule counts."""
     max_atoms, rep_size = 3, 5
