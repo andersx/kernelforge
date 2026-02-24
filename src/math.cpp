@@ -1,5 +1,6 @@
 // C++ standard library
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -12,6 +13,23 @@ namespace math {
 // Declare Fortran LAPACK symbols (all vendors provide these)
 extern "C" {
 void dpotrf_(const char *uplo, const blas_int *n, double *a, const blas_int *lda, blas_int *info);
+
+void dgels_(const char *trans, const blas_int *m, const blas_int *n, const blas_int *nrhs,
+            double *a, const blas_int *lda, double *b, const blas_int *ldb, double *work,
+            const blas_int *lwork, blas_int *info);
+
+void dgelsd_(const blas_int *m, const blas_int *n, const blas_int *nrhs, double *a,
+             const blas_int *lda, double *b, const blas_int *ldb, double *s, const double *rcond,
+             blas_int *rank, double *work, const blas_int *lwork, blas_int *iwork, blas_int *info);
+
+double dlange_(const char *norm, const blas_int *m, const blas_int *n, const double *a,
+               const blas_int *lda, double *work);
+
+void dgetrf_(const blas_int *m, const blas_int *n, double *a, const blas_int *lda,
+             blas_int *ipiv, blas_int *info);
+
+void dgecon_(const char *norm, const blas_int *n, const double *a, const blas_int *lda,
+             const double *anorm, double *rcond, double *work, blas_int *iwork, blas_int *info);
 
 void dpotrs_(const char *uplo, const blas_int *n, const blas_int *nrhs, const double *a,
              const blas_int *lda, double *b, const blas_int *ldb, blas_int *info);
@@ -175,6 +193,145 @@ blas_int rfp_to_full(char transr, char uplo, blas_int n, const double *ARF, doub
         }
     }
     return 0;
+}
+
+// Solve min||A x - y||_2 using QR/LQ decomposition (DGELS, 'N' transpose).
+// A is C-order (row-major) m×n; a temporary column-major copy is made internally.
+void solve_qr(const double *A, const double *y, blas_int m, blas_int n, double *x) {
+    if (m <= 0 || n <= 0)
+        throw std::runtime_error("m and n must be > 0");
+    if (!A || !y || !x)
+        throw std::runtime_error("null pointer");
+
+    const std::size_t m_sz = static_cast<std::size_t>(m);
+    const std::size_t n_sz = static_cast<std::size_t>(n);
+    const blas_int ldb = std::max(m, n);
+    const std::size_t ldb_sz = static_cast<std::size_t>(ldb);
+
+    // Transpose A from C-order (row-major) to column-major for LAPACK
+    std::vector<double> A_f(m_sz * n_sz);
+    for (std::size_t i = 0; i < m_sz; ++i)
+        for (std::size_t j = 0; j < n_sz; ++j)
+            A_f[j * m_sz + i] = A[i * n_sz + j];
+
+    // RHS buffer: size max(m,n), zero-padded; first m elements = y
+    std::vector<double> B(ldb_sz, 0.0);
+    std::memcpy(B.data(), y, m_sz * sizeof(double));
+
+    const char trans = 'N';
+    const blas_int nrhs = 1;
+    blas_int info = 0;
+
+    // Workspace query
+    blas_int lwork = -1;
+    double work_query = 0.0;
+    dgels_(&trans, &m, &n, &nrhs, A_f.data(), &m, B.data(), &ldb, &work_query, &lwork, &info);
+    lwork = static_cast<blas_int>(work_query);
+
+    std::vector<double> work(static_cast<std::size_t>(lwork));
+    dgels_(&trans, &m, &n, &nrhs, A_f.data(), &m, B.data(), &ldb, work.data(), &lwork, &info);
+
+    if (info != 0)
+        throw std::runtime_error("DGELS failed, info=" + std::to_string(info));
+
+    // Solution is in B[0:n]
+    std::memcpy(x, B.data(), n_sz * sizeof(double));
+}
+
+// Solve min||A x - y||_2 using divide-and-conquer SVD (DGELSD).
+// A is C-order (row-major) m×n; a temporary column-major copy is made internally.
+void solve_svd(const double *A, const double *y, blas_int m, blas_int n, double *x,
+               double rcond) {
+    if (m <= 0 || n <= 0)
+        throw std::runtime_error("m and n must be > 0");
+    if (!A || !y || !x)
+        throw std::runtime_error("null pointer");
+
+    const std::size_t m_sz = static_cast<std::size_t>(m);
+    const std::size_t n_sz = static_cast<std::size_t>(n);
+    const blas_int ldb = std::max(m, n);
+    const std::size_t ldb_sz = static_cast<std::size_t>(ldb);
+    const std::size_t s_sz = static_cast<std::size_t>(std::min(m, n));
+
+    // Transpose A from C-order (row-major) to column-major for LAPACK
+    std::vector<double> A_f(m_sz * n_sz);
+    for (std::size_t i = 0; i < m_sz; ++i)
+        for (std::size_t j = 0; j < n_sz; ++j)
+            A_f[j * m_sz + i] = A[i * n_sz + j];
+
+    // RHS buffer: size max(m,n), zero-padded; first m elements = y
+    std::vector<double> B(ldb_sz, 0.0);
+    std::memcpy(B.data(), y, m_sz * sizeof(double));
+
+    std::vector<double> S(s_sz);
+    blas_int rank = 0;
+    blas_int info = 0;
+    const blas_int nrhs = 1;
+
+    // Workspace query
+    blas_int lwork_q = -1;
+    double work_q = 0.0;
+    blas_int iwork_q = 0;
+    dgelsd_(&m, &n, &nrhs, A_f.data(), &m, B.data(), &ldb, S.data(), &rcond, &rank, &work_q,
+            &lwork_q, &iwork_q, &info);
+
+    const blas_int lwork = static_cast<blas_int>(work_q);
+    const blas_int liwork = iwork_q;
+
+    std::vector<double> work(static_cast<std::size_t>(lwork));
+    std::vector<blas_int> iwork(static_cast<std::size_t>(liwork));
+
+    dgelsd_(&m, &n, &nrhs, A_f.data(), &m, B.data(), &ldb, S.data(), &rcond, &rank, work.data(),
+            &lwork, iwork.data(), &info);
+
+    if (info != 0)
+        throw std::runtime_error("DGELSD failed, info=" + std::to_string(info));
+
+    // Solution is in B[0:n]
+    std::memcpy(x, B.data(), n_sz * sizeof(double));
+}
+
+// 1-norm condition number of square n×n matrix via LU factorization.
+// A is C-order; no transposition needed since cond(A) = cond(A^T).
+double condition_number_ge(const double *A, blas_int n) {
+    if (n <= 0)
+        throw std::runtime_error("n must be > 0");
+    if (!A)
+        throw std::runtime_error("null pointer");
+
+    const std::size_t n_sz = static_cast<std::size_t>(n);
+
+    // Copy A (DGETRF overwrites the matrix)
+    std::vector<double> A_copy(n_sz * n_sz);
+    std::memcpy(A_copy.data(), A, n_sz * n_sz * sizeof(double));
+
+    const char norm = '1';
+
+    // Compute 1-norm of A (Fortran sees A^T, but DLANGE('1') on A^T = DLANGE('I') on A)
+    // For condition number: cond(A) = cond(A^T), so this is fine.
+    std::vector<double> work_norm(n_sz);
+    const double anorm = dlange_(&norm, &n, &n, A_copy.data(), &n, work_norm.data());
+
+    // LU factorization
+    std::vector<blas_int> ipiv(n_sz);
+    blas_int info = 0;
+    dgetrf_(&n, &n, A_copy.data(), &n, ipiv.data(), &info);
+    if (info != 0)
+        throw std::runtime_error("DGETRF failed, info=" + std::to_string(info));
+
+    // Estimate reciprocal condition number
+    double rcond = 0.0;
+    std::vector<double> work_con(static_cast<std::size_t>(4 * n));
+    std::vector<blas_int> iwork_con(n_sz);
+    dgecon_(&norm, &n, A_copy.data(), &n, &anorm, &rcond, work_con.data(), iwork_con.data(),
+            &info);
+    if (info != 0)
+        throw std::runtime_error("DGECON failed, info=" + std::to_string(info));
+
+    if (rcond == 0.0)
+        return std::numeric_limits<double>::infinity();
+
+    return 1.0 / rcond;
 }
 
 }  // namespace math

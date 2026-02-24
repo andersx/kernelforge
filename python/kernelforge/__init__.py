@@ -9,21 +9,55 @@ except PackageNotFoundError:
 
 from .kitchen_sinks import (
     rff_features as rff_features,
-    rff_gradient as rff_gradient,
-    rff_full as rff_full,
-    rff_gramian_symm as rff_gramian_symm,
-    rff_gradient_gramian_symm as rff_gradient_gramian_symm,
-    rff_full_gramian_symm as rff_full_gramian_symm,
-    rff_gramian_symm_rfp as rff_gramian_symm_rfp,
-    rff_gradient_gramian_symm_rfp as rff_gradient_gramian_symm_rfp,
-    rff_full_gramian_symm_rfp as rff_full_gramian_symm_rfp,
+)
+from .kitchen_sinks import (
     rff_features_elemental as rff_features_elemental,
-    rff_gradient_elemental as rff_gradient_elemental,
+)
+from .kitchen_sinks import (
+    rff_full as rff_full,
+)
+from .kitchen_sinks import (
     rff_full_elemental as rff_full_elemental,
-    rff_gramian_elemental as rff_gramian_elemental,
-    rff_gradient_gramian_elemental as rff_gradient_gramian_elemental,
+)
+from .kitchen_sinks import (
     rff_full_gramian_elemental as rff_full_gramian_elemental,
-    rff_gramian_elemental_rfp as rff_gramian_elemental_rfp,
-    rff_gradient_gramian_elemental_rfp as rff_gradient_gramian_elemental_rfp,
+)
+from .kitchen_sinks import (
     rff_full_gramian_elemental_rfp as rff_full_gramian_elemental_rfp,
+)
+from .kitchen_sinks import (
+    rff_full_gramian_symm as rff_full_gramian_symm,
+)
+from .kitchen_sinks import (
+    rff_full_gramian_symm_rfp as rff_full_gramian_symm_rfp,
+)
+from .kitchen_sinks import (
+    rff_gradient as rff_gradient,
+)
+from .kitchen_sinks import (
+    rff_gradient_elemental as rff_gradient_elemental,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_elemental as rff_gradient_gramian_elemental,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_elemental_rfp as rff_gradient_gramian_elemental_rfp,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_symm as rff_gradient_gramian_symm,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_symm_rfp as rff_gradient_gramian_symm_rfp,
+)
+from .kitchen_sinks import (
+    rff_gramian_elemental as rff_gramian_elemental,
+)
+from .kitchen_sinks import (
+    rff_gramian_elemental_rfp as rff_gramian_elemental_rfp,
+)
+from .kitchen_sinks import (
+    rff_gramian_symm as rff_gramian_symm,
+)
+from .kitchen_sinks import (
+    rff_gramian_symm_rfp as rff_gramian_symm_rfp,
 )

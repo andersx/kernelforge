@@ -5,23 +5,23 @@ import pytest
 
 from kernelforge.kitchen_sinks import (
     rff_features,
-    rff_gradient,
-    rff_full,
-    rff_gramian_symm,
-    rff_gradient_gramian_symm,
-    rff_full_gramian_symm,
-    rff_gramian_symm_rfp,
-    rff_gradient_gramian_symm_rfp,
-    rff_full_gramian_symm_rfp,
     rff_features_elemental,
-    rff_gradient_elemental,
+    rff_full,
     rff_full_elemental,
-    rff_gramian_elemental,
-    rff_gradient_gramian_elemental,
     rff_full_gramian_elemental,
-    rff_gramian_elemental_rfp,
-    rff_gradient_gramian_elemental_rfp,
     rff_full_gramian_elemental_rfp,
+    rff_full_gramian_symm,
+    rff_full_gramian_symm_rfp,
+    rff_gradient,
+    rff_gradient_elemental,
+    rff_gradient_gramian_elemental,
+    rff_gradient_gramian_elemental_rfp,
+    rff_gradient_gramian_symm,
+    rff_gradient_gramian_symm_rfp,
+    rff_gramian_elemental,
+    rff_gramian_elemental_rfp,
+    rff_gramian_symm,
+    rff_gramian_symm_rfp,
 )
 
 
@@ -722,9 +722,7 @@ class TestRffFullGramianElemental:
         D = 20
         X, dX, Q, W, b, Y, F = self._make_test_data(rng, 5, 3, 10, D, 2)
 
-        ZtZ, ZtY = rff_full_gramian_elemental(
-            X, dX, Q, W, b, Y, F, energy_chunk=3, force_chunk=2
-        )
+        ZtZ, ZtY = rff_full_gramian_elemental(X, dX, Q, W, b, Y, F, energy_chunk=3, force_chunk=2)
 
         assert ZtZ.shape == (D, D)
         assert ZtY.shape == (D,)
@@ -736,9 +734,7 @@ class TestRffFullGramianElemental:
         rng = np.random.default_rng(42)
         X, dX, Q, W, b, Y, F = self._make_test_data(rng, 8, 4, 10, 25, 2)
 
-        ZtZ, _ = rff_full_gramian_elemental(
-            X, dX, Q, W, b, Y, F, energy_chunk=3, force_chunk=2
-        )
+        ZtZ, _ = rff_full_gramian_elemental(X, dX, Q, W, b, Y, F, energy_chunk=3, force_chunk=2)
 
         np.testing.assert_allclose(ZtZ, ZtZ.T, rtol=1e-14, atol=1e-14)
 
@@ -773,9 +769,7 @@ class TestRffFullGramianElemental:
             X, dX, Q, W, b, Y, F, energy_chunk=1, force_chunk=1
         )
         g2, p2 = rff_full_gramian_elemental(X, dX, Q, W, b, Y, F, energy_chunk=5, force_chunk=3)
-        g3, p3 = rff_full_gramian_elemental(
-            X, dX, Q, W, b, Y, F, energy_chunk=100, force_chunk=100
-        )
+        g3, p3 = rff_full_gramian_elemental(X, dX, Q, W, b, Y, F, energy_chunk=100, force_chunk=100)
 
         np.testing.assert_allclose(g2, ref_gram, rtol=1e-12, atol=1e-12)
         np.testing.assert_allclose(p2, ref_proj, rtol=1e-12, atol=1e-12)
@@ -823,9 +817,9 @@ def rff_gradient_numpy(
 
     G = np.zeros((D, N * ncoords))
     for i in range(N):
-        z_i = X[i] @ W + b               # (D,)
+        z_i = X[i] @ W + b  # (D,)
         # dg[d, r] = sin(z_i[d]) * norm * W[r, d]
-        dg = norm * np.sin(z_i)[:, None] * W.T   # (D, rep_size)
+        dg = norm * np.sin(z_i)[:, None] * W.T  # (D, rep_size)
         # G[:, i*ncoords:(i+1)*ncoords] = dg @ dX[i]
         G[:, i * ncoords : (i + 1) * ncoords] = dg @ dX[i]
     return G
@@ -934,9 +928,7 @@ class TestRffGradient:
                 Z_minus = rff_features(X_minus, W, b)
 
                 fd_col = (Z_plus[i] - Z_minus[i]) / (2 * eps)  # (D,)
-                np.testing.assert_allclose(
-                    G_cpp[:, i * ncoords + g], fd_col, rtol=1e-5, atol=1e-5
-                )
+                np.testing.assert_allclose(G_cpp[:, i * ncoords + g], fd_col, rtol=1e-5, atol=1e-5)
 
     def test_single_molecule(self) -> None:
         """Works with N=1."""
@@ -1084,9 +1076,7 @@ class TestRffFullGramianSymm:
         Y = rng.normal(size=(N,))
         F = rng.normal(size=(N * ncoords,))
 
-        ZtZ, ZtY = rff_full_gramian_symm(
-            X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2
-        )
+        ZtZ, ZtY = rff_full_gramian_symm(X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2)
 
         assert ZtZ.shape == (D, D)
         assert ZtY.shape == (D,)
@@ -1104,9 +1094,7 @@ class TestRffFullGramianSymm:
         Y = rng.normal(size=(N,))
         F = rng.normal(size=(N * ncoords,))
 
-        ZtZ, _ = rff_full_gramian_symm(
-            X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2
-        )
+        ZtZ, _ = rff_full_gramian_symm(X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2)
 
         np.testing.assert_allclose(ZtZ, ZtZ.T, rtol=1e-14, atol=1e-14)
 
@@ -1121,9 +1109,7 @@ class TestRffFullGramianSymm:
         Y = rng.normal(size=(N,))
         F = rng.normal(size=(N * ncoords,))
 
-        ZtZ_comb, ZtY_comb = rff_full_gramian_symm(
-            X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2
-        )
+        ZtZ_comb, ZtY_comb = rff_full_gramian_symm(X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2)
 
         # Energy-only via rff_gramian_symm
         ZtZ_e, ZtY_e = rff_gramian_symm(X, W, b, Y, chunk_size=3)
@@ -1147,13 +1133,9 @@ class TestRffFullGramianSymm:
         Y = rng.normal(size=(N,))
         F = rng.normal(size=(N * ncoords,))
 
-        ref_gram, ref_proj = rff_full_gramian_symm(
-            X, dX, W, b, Y, F, energy_chunk=1, force_chunk=1
-        )
+        ref_gram, ref_proj = rff_full_gramian_symm(X, dX, W, b, Y, F, energy_chunk=1, force_chunk=1)
         g2, p2 = rff_full_gramian_symm(X, dX, W, b, Y, F, energy_chunk=5, force_chunk=3)
-        g3, p3 = rff_full_gramian_symm(
-            X, dX, W, b, Y, F, energy_chunk=100, force_chunk=100
-        )
+        g3, p3 = rff_full_gramian_symm(X, dX, W, b, Y, F, energy_chunk=100, force_chunk=100)
 
         np.testing.assert_allclose(g2, ref_gram, rtol=1e-12, atol=1e-12)
         np.testing.assert_allclose(p2, ref_proj, rtol=1e-12, atol=1e-12)
@@ -1171,9 +1153,7 @@ class TestRffFullGramianSymm:
         Y = rng.normal(size=(N,))
         F_zero = np.zeros(N * ncoords)
 
-        _, ZtY_comb = rff_full_gramian_symm(
-            X, dX, W, b, Y, F_zero, energy_chunk=4, force_chunk=3
-        )
+        _, ZtY_comb = rff_full_gramian_symm(X, dX, W, b, Y, F_zero, energy_chunk=4, force_chunk=3)
         _, ZtY_e = rff_gramian_symm(X, W, b, Y, chunk_size=4)
 
         # ZtZ includes G@G^T even with F=0; only ZtY should match
@@ -1489,9 +1469,7 @@ class TestRffFullGramianSymmRfp:
         Y = rng.normal(size=(N,))
         F = rng.normal(size=(N * ncoords,))
 
-        ZtZ_rfp, ZtY = rff_full_gramian_symm_rfp(
-            X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2
-        )
+        ZtZ_rfp, ZtY = rff_full_gramian_symm_rfp(X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2)
 
         assert ZtZ_rfp.shape == (D * (D + 1) // 2,)
         assert ZtY.shape == (D,)
@@ -1512,9 +1490,7 @@ class TestRffFullGramianSymmRfp:
         ZtZ_rfp, ZtY_rfp = rff_full_gramian_symm_rfp(
             X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2
         )
-        ZtZ_full, ZtY_full = rff_full_gramian_symm(
-            X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2
-        )
+        ZtZ_full, ZtY_full = rff_full_gramian_symm(X, dX, W, b, Y, F, energy_chunk=3, force_chunk=2)
 
         ZtZ_unpacked = rfp_to_full_np(ZtZ_rfp, D)
         np.testing.assert_allclose(ZtZ_unpacked, ZtZ_full, rtol=1e-12, atol=1e-12)
@@ -1534,12 +1510,8 @@ class TestRffFullGramianSymmRfp:
         ref_rfp, ref_proj = rff_full_gramian_symm_rfp(
             X, dX, W, b, Y, F, energy_chunk=1, force_chunk=1
         )
-        r2, p2 = rff_full_gramian_symm_rfp(
-            X, dX, W, b, Y, F, energy_chunk=5, force_chunk=3
-        )
-        r3, p3 = rff_full_gramian_symm_rfp(
-            X, dX, W, b, Y, F, energy_chunk=100, force_chunk=100
-        )
+        r2, p2 = rff_full_gramian_symm_rfp(X, dX, W, b, Y, F, energy_chunk=5, force_chunk=3)
+        r3, p3 = rff_full_gramian_symm_rfp(X, dX, W, b, Y, F, energy_chunk=100, force_chunk=100)
 
         np.testing.assert_allclose(r2, ref_rfp, rtol=1e-12, atol=1e-12)
         np.testing.assert_allclose(p2, ref_proj, rtol=1e-12, atol=1e-12)
@@ -1667,9 +1639,7 @@ class TestRffGradientGramianElemental:
         nmol, natoms, rep_size, D, nel = 6, 3, 8, 15, 2
         X, dX, Q, W, b, F = self._make_data(rng, nmol, natoms, rep_size, D, nel)
 
-        GtG_cpp, GtF_cpp = rff_gradient_gramian_elemental(
-            X, dX, Q, W, b, F, chunk_size=3
-        )
+        GtG_cpp, GtF_cpp = rff_gradient_gramian_elemental(X, dX, Q, W, b, F, chunk_size=3)
         G = rff_gradient_elemental(X, dX, Q, W, b)
         GtG_ref = G @ G.T
         GtF_ref = G @ F
@@ -1683,9 +1653,7 @@ class TestRffGradientGramianElemental:
         nmol, natoms, rep_size, D, nel = 10, 3, 8, 15, 2
         X, dX, Q, W, b, F = self._make_data(rng, nmol, natoms, rep_size, D, nel)
 
-        ref_g, ref_f = rff_gradient_gramian_elemental(
-            X, dX, Q, W, b, F, chunk_size=1
-        )
+        ref_g, ref_f = rff_gradient_gramian_elemental(X, dX, Q, W, b, F, chunk_size=1)
         g2, f2 = rff_gradient_gramian_elemental(X, dX, Q, W, b, F, chunk_size=5)
         g3, f3 = rff_gradient_gramian_elemental(X, dX, Q, W, b, F, chunk_size=1000)
 
@@ -1779,9 +1747,7 @@ class TestRffGradientGramianElementalRfp:
         nmol, natoms, rep_size, D, nel = 5, 3, 10, 12, 2
         X, dX, Q, W, b, F = self._make_data(rng, nmol, natoms, rep_size, D, nel)
 
-        GtG_rfp, GtF = rff_gradient_gramian_elemental_rfp(
-            X, dX, Q, W, b, F, chunk_size=3
-        )
+        GtG_rfp, GtF = rff_gradient_gramian_elemental_rfp(X, dX, Q, W, b, F, chunk_size=3)
 
         assert GtG_rfp.shape == (D * (D + 1) // 2,)
         assert GtF.shape == (D,)
@@ -1794,12 +1760,8 @@ class TestRffGradientGramianElementalRfp:
         nmol, natoms, rep_size, D, nel = 6, 3, 8, 10, 2
         X, dX, Q, W, b, F = self._make_data(rng, nmol, natoms, rep_size, D, nel)
 
-        GtG_rfp, GtF_rfp = rff_gradient_gramian_elemental_rfp(
-            X, dX, Q, W, b, F, chunk_size=3
-        )
-        GtG_full, GtF_full = rff_gradient_gramian_elemental(
-            X, dX, Q, W, b, F, chunk_size=3
-        )
+        GtG_rfp, GtF_rfp = rff_gradient_gramian_elemental_rfp(X, dX, Q, W, b, F, chunk_size=3)
+        GtG_full, GtF_full = rff_gradient_gramian_elemental(X, dX, Q, W, b, F, chunk_size=3)
 
         GtG_unpacked = rfp_to_full_np(GtG_rfp, D)
         np.testing.assert_allclose(GtG_unpacked, GtG_full, rtol=1e-12, atol=1e-12)
@@ -1811,13 +1773,9 @@ class TestRffGradientGramianElementalRfp:
         nmol, natoms, rep_size, D, nel = 10, 3, 8, 10, 2
         X, dX, Q, W, b, F = self._make_data(rng, nmol, natoms, rep_size, D, nel)
 
-        ref_rfp, ref_f = rff_gradient_gramian_elemental_rfp(
-            X, dX, Q, W, b, F, chunk_size=1
-        )
+        ref_rfp, ref_f = rff_gradient_gramian_elemental_rfp(X, dX, Q, W, b, F, chunk_size=1)
         r2, f2 = rff_gradient_gramian_elemental_rfp(X, dX, Q, W, b, F, chunk_size=5)
-        r3, f3 = rff_gradient_gramian_elemental_rfp(
-            X, dX, Q, W, b, F, chunk_size=1000
-        )
+        r3, f3 = rff_gradient_gramian_elemental_rfp(X, dX, Q, W, b, F, chunk_size=1000)
 
         np.testing.assert_allclose(r2, ref_rfp, rtol=1e-12, atol=1e-12)
         np.testing.assert_allclose(f2, ref_f, rtol=1e-12, atol=1e-12)
@@ -1886,9 +1844,7 @@ class TestRffFullGramianElementalRfp:
         ref_rfp, ref_proj = rff_full_gramian_elemental_rfp(
             X, dX, Q, W, b, Y, F, energy_chunk=1, force_chunk=1
         )
-        r2, p2 = rff_full_gramian_elemental_rfp(
-            X, dX, Q, W, b, Y, F, energy_chunk=5, force_chunk=3
-        )
+        r2, p2 = rff_full_gramian_elemental_rfp(X, dX, Q, W, b, Y, F, energy_chunk=5, force_chunk=3)
         r3, p3 = rff_full_gramian_elemental_rfp(
             X, dX, Q, W, b, Y, F, energy_chunk=100, force_chunk=100
         )
