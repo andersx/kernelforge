@@ -39,10 +39,20 @@
     #endif
     #include <cblas.h>
 
+    // Forward-declare OpenBLAS threading helpers.  These are declared in
+    // OpenBLAS's own cblas.h, but CMake's BLAS::BLAS imported target does
+    // not propagate include directories, so the wrong (or missing) cblas.h
+    // may be found.  Declaring them here is harmless if cblas.h already
+    // provided them.
+    extern "C" {
+    int  openblas_get_num_threads(void);
+    void openblas_set_num_threads(int num_threads);
+    }
+
     // OpenBLAS does not export LAPACKE_dsfrk; declare the Fortran symbol directly.
     // (MKL and Accelerate already declare dsfrk_ in their own headers.)
     // blas_int.h has not been included yet, so use the concrete type directly:
-    //   LP64 → int,  ILP64 → long (int64_t on Linux x86_64)
+    //   LP64 -> int,  ILP64 -> long (int64_t on Linux x86_64)
     extern "C" {
     #ifdef KF_BLAS_ILP64
     void dsfrk_(const char *transr, const char *uplo, const char *trans,

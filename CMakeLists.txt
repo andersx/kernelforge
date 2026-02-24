@@ -128,7 +128,21 @@ elseif(KF_BLAS_BACKEND STREQUAL "MKL")
   # MKL::MKL provides both include directories and libraries
   target_link_libraries(kf_blas INTERFACE MKL::MKL)
 else()
-  # BLAS::BLAS provides libraries (include paths may vary by system)
+  # BLAS::BLAS provides libraries but NOT include directories.
+  # For ILP64 OpenBLAS the headers live in a non-default location
+  # (e.g. /usr/include/<arch>/openblas64-pthread/).  Find and add them.
+  if(KF_BLAS_ILP64)
+    find_path(KF_OPENBLAS64_INCLUDE cblas.h
+      PATHS
+        /usr/include/${CMAKE_LIBRARY_ARCHITECTURE}/openblas64-pthread
+        /usr/include/${CMAKE_LIBRARY_ARCHITECTURE}/openblas64
+        /usr/include/openblas64
+      NO_DEFAULT_PATH)
+    if(KF_OPENBLAS64_INCLUDE)
+      target_include_directories(kf_blas SYSTEM INTERFACE ${KF_OPENBLAS64_INCLUDE})
+      message(STATUS "ILP64 OpenBLAS include dir: ${KF_OPENBLAS64_INCLUDE}")
+    endif()
+  endif()
   target_link_libraries(kf_blas INTERFACE BLAS::BLAS)
 endif()
 
