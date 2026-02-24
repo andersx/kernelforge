@@ -62,6 +62,26 @@
 // Include our integer type definition (must precede the kf_dsfrk wrapper below)
 #include "blas_int.h"
 
+// kf_blas_get_num_threads / kf_blas_set_num_threads:
+// Save and restore the BLAS internal thread count around #pragma omp parallel
+// regions to prevent oversubscription.  MKL auto-serializes when called from
+// an OMP region so no action is needed there; OpenBLAS does not.
+inline int kf_blas_get_num_threads() {
+#if defined(__APPLE__) || defined(KF_USE_MKL)
+    return 1; // Accelerate uses GCD; MKL auto-serializes inside OMP
+#else
+    return openblas_get_num_threads();
+#endif
+}
+
+inline void kf_blas_set_num_threads(int n) {
+#if defined(__APPLE__) || defined(KF_USE_MKL)
+    (void)n; // no-op: Accelerate/MKL handled automatically
+#else
+    openblas_set_num_threads(n);
+#endif
+}
+
 // kf_dsfrk: portable wrapper for LAPACK's DSFRK (RFP symmetric rank-k update).
 // Replaces LAPACKE_dsfrk which is not exported by all OpenBLAS builds.
 inline void kf_dsfrk(char transr, char uplo, char trans,

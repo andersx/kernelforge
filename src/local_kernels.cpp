@@ -810,7 +810,10 @@ void kernel_gaussian_jacobian(
 
 // ------------------------------------------------------------
 // Parallelize over b: each thread owns a disjoint column block
+// Serialise BLAS inside OMP to prevent oversubscription.
 // ------------------------------------------------------------
+    const int blas_nt = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
 #pragma omp parallel default(none)                                                        \
     shared(x1, x2, dX2, q1, q2, n1, n2, nm1, nm2, max_atoms1, max_atoms2, rep_size, naq2, \
                kernel_out, lj1, offs2, ncols_b, inv_2sigma2, inv_sigma2, ncols_max)
@@ -891,6 +894,7 @@ void kernel_gaussian_jacobian(
         aligned_free_64(D);
         aligned_free_64(H);
     }  // omp parallel
+    kf_blas_set_num_threads(blas_nt);
 }
 
 // ###################################
@@ -978,6 +982,9 @@ void kernel_gaussian_jacobian_t(
     const int nrows_max = 3 * max_atoms1;
 
 // Parallelize over a: each thread owns a disjoint row block of kernel_out.
+// Serialise BLAS inside OMP to prevent oversubscription.
+    const int blas_nt = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
 #pragma omp parallel default(none)                                                          \
     shared(x1, x2, dX1, q1, q2, n1, n2, nm1, nm2, max_atoms1, max_atoms2, rep_size, naq1, \
                kernel_out, lj2, offs1, nrows_a, inv_2sigma2, inv_sigma2, nrows_max)
@@ -1058,6 +1065,7 @@ void kernel_gaussian_jacobian_t(
         aligned_free_64(D);
         aligned_free_64(H);
     }  // omp parallel
+    kf_blas_set_num_threads(blas_nt);
 }
 
 // #########################

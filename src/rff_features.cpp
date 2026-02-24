@@ -79,6 +79,11 @@ void rff_gradient(const double *X, const double *dX,
     //
     // No initial memset needed: every element of G is initialised by the
     // per-molecule DGEMM with beta=0.
+    //
+    // Serialise BLAS inside the OMP region to prevent thread oversubscription.
+    // MKL does this automatically; OpenBLAS requires an explicit API call.
+    const int blas_nt = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
     #pragma omp parallel
     {
         std::vector<double> z_i(D);
@@ -121,6 +126,7 @@ void rff_gradient(const double *X, const double *dX,
             }
         }
     }  // end omp parallel
+    kf_blas_set_num_threads(blas_nt);
 }
 
 void rff_gramian_symm(const double *X, const double *W, const double *b,
@@ -141,8 +147,10 @@ void rff_gramian_symm(const double *X, const double *W, const double *b,
     const std::size_t nchunks = (N + chunk_size - 1) / chunk_size;
 
     // Parallelize over chunks using thread-local accumulators, then reduce.
-    // rff_features calls BLAS (not OpenMP), so there is no nested parallelism.
-    // Set MKL_NUM_THREADS=1 / OPENBLAS_NUM_THREADS=1 to avoid BLAS thread contention.
+    // rff_features calls BLAS inside each OMP thread; serialise BLAS to prevent
+    // oversubscription (MKL auto-serializes; OpenBLAS requires an explicit call).
+    const int blas_nt = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
     #pragma omp parallel
     {
         std::vector<double> loc_ZtZ(D * D, 0.0);
@@ -181,6 +189,7 @@ void rff_gramian_symm(const double *X, const double *W, const double *b,
             for (std::size_t k = 0; k < D;     ++k) ZtY[k] += loc_ZtY[k];
         }
     }
+    kf_blas_set_num_threads(blas_nt);
 
     // Symmetrize: copy upper triangle to lower
     #pragma omp parallel for schedule(static)
@@ -396,7 +405,9 @@ void rff_gramian_symm_rfp(const double *X, const double *W, const double *b,
     // Accumulate directly into RFP using DSFRK (no D×D temp buffer).
     // Thread-local RFP arrays let us parallelize; each costs D*(D+1)/2 doubles
     // (~half of a full D×D buffer).
-    // rff_features calls BLAS (not OpenMP) so OMP here is safe.
+    // Serialise BLAS inside OMP to prevent oversubscription.
+    const int blas_nt = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
     #pragma omp parallel
     {
         std::vector<double> loc_rfp(nt, 0.0);
@@ -435,6 +446,7 @@ void rff_gramian_symm_rfp(const double *X, const double *W, const double *b,
             for (std::size_t k = 0; k < D;  ++k) ZtY[k]     += loc_ZtY[k];
         }
     }
+    kf_blas_set_num_threads(blas_nt);
 }
 
 void rff_gradient_gramian_symm_rfp(const double *X, const double *dX,

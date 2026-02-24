@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 
 from kernelforge import global_kernels, invdist_repr
 from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
+from kernelforge.kernelmath import get_blas_info
 from kernelforge.kitchen_sinks import (
     rff_features,
     rff_features_elemental,
@@ -1425,6 +1426,7 @@ def print_header(suite_name: str) -> None:
     print()
     print("-" * 80)
     print(title)
+    print(f"BLAS: {get_blas_info()}")
     print("-" * 80)
     print()
 

@@ -40,3 +40,7 @@ def condition_number_ge(A: NDArray[np.float64]) -> float:
     """1-norm condition number of a square matrix A via LU factorization (DGETRF+DGECON).
     Works for any square matrix (not just symmetric/positive-definite)."""
     ...
+
+def get_blas_info() -> str:
+    """Return a string identifying the BLAS backend and integer width, e.g. 'OpenBLAS ILP64'."""
+    ...

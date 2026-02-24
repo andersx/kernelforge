@@ -337,6 +337,11 @@ void rff_gradient_elemental(
     //
     // dX_atom and G_tmp are allocated once per thread (with max_ncols columns)
     // rather than once per molecule, eliminating inner-loop malloc overhead.
+    //
+    // Serialise BLAS inside the OMP region to prevent thread oversubscription.
+    // MKL does this automatically; OpenBLAS requires an explicit API call.
+    const int blas_nt = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
     #pragma omp parallel
     {
         std::vector<double> dZ(D);
@@ -403,6 +408,7 @@ void rff_gradient_elemental(
         aligned_free_64(dX_atom);
         aligned_free_64(G_tmp);
     } // end omp parallel
+    kf_blas_set_num_threads(blas_nt);
 }
 
 void rff_full_elemental(

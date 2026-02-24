@@ -1,5 +1,6 @@
 // C++ standard library
 #include <stdexcept>
+#include <string>
 
 // Third-party libraries
 #include <pybind11/numpy.h>
@@ -7,6 +8,7 @@
 
 // Project headers
 #include "aligned_alloc64.hpp"
+#include "blas_config.h"
 #include "blas_int.h"
 #include "math.hpp"
 
@@ -228,6 +230,21 @@ static double condition_number_ge_py(
     return kf::math::condition_number_ge(A, n);
 }
 
+std::string get_blas_info() {
+#if defined(__APPLE__)
+    const std::string backend = "Apple Accelerate";
+#elif defined(KF_USE_MKL)
+    const std::string backend = "Intel MKL";
+#else
+    const std::string backend = "OpenBLAS";
+#endif
+#ifdef KF_BLAS_ILP64
+    return backend + " ILP64";
+#else
+    return backend + " LP64";
+#endif
+}
+
 PYBIND11_MODULE(kernelmath, m) {
     m.doc() = "Mathematical utilities (Cholesky solvers, etc.)";
     m.def("solve_cholesky", &solve_cholesky_py, py::arg("K"), py::arg("y"),
@@ -261,4 +278,6 @@ PYBIND11_MODULE(kernelmath, m) {
     m.def("condition_number_ge", &condition_number_ge_py, py::arg("A"),
           "1-norm condition number of a square matrix A via LU factorization (DGETRF+DGECON).\n"
           "Works for any square matrix (not just symmetric/positive-definite).");
+    m.def("get_blas_info", &get_blas_info,
+          "Return a string identifying the BLAS backend and integer width, e.g. 'OpenBLAS ILP64'.");
 }
