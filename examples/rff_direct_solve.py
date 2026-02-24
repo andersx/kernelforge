@@ -27,9 +27,9 @@ from kernelforge.kitchen_sinks import rff_features, rff_gramian_symm_rfp
 # ---------------------------------------------------------------------------
 N_TRAIN = 1000
 N_TEST = 200
-D_RFF = 2048
-SIGMA = 3.0
-L2 = 1e-6       # used only for the normal-equations reference solve
+D_RFF = 500
+SIGMA = 20.0
+L2 = 1e-10       # used only for the normal-equations reference solve
 SEED = 42
 
 
@@ -98,7 +98,7 @@ def main():
     #    For N_train < D_rff this is underdetermined → minimum-norm solution
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    w_svd = kernelmath.solve_svd(Z_tr, E_tr, rcond=0.0)
+    w_svd = kernelmath.solve_svd(Z_tr, E_tr, rcond=1e-8)
     print(f"\n[4] solve_svd in {time.perf_counter() - t0:.3f}s  ||w||={np.linalg.norm(w_svd):.4f}")
 
     # ------------------------------------------------------------------
