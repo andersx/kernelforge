@@ -34,6 +34,7 @@
 #include "aligned_alloc64.hpp"
 #include "blas_config.h"
 #include "constants.hpp"
+#include "rfp_utils.hpp"
 
 namespace kf {
 
@@ -71,20 +72,6 @@ void kernel_gaussian_symm(const double *Xptr, blas_int n, blas_int rep_size, dou
     }
 }
 
-// RFP index map: (i, j) 0-based, i <= j -> linear RFP position (0-based)
-// Valid for Fortran TRANSR='N', UPLO='U', any n.
-// Used to scatter kernel values directly into RFP layout.
-static inline std::size_t rfp_index_upper_N(blas_int n, blas_int i, blas_int j) {
-    const blas_int k      = n / 2;
-    const blas_int stride = (n % 2 == 0) ? (n + 1) : n;
-    if (j >= k) {
-        return static_cast<std::size_t>(j - k) * static_cast<std::size_t>(stride) +
-               static_cast<std::size_t>(i);
-    } else {
-        return static_cast<std::size_t>(i) * static_cast<std::size_t>(stride) +
-               static_cast<std::size_t>(j + k + 1);
-    }
-}
 
 // =============================================================================
 // LEGACY: DSFRK-based implementation of kernel_gaussian_symm_rfp.
@@ -995,21 +982,6 @@ void kernel_gaussian_hessian_symm(
 // RFP (Row-First Packed) version - saves ~50% memory for symmetric matrices
 // ============================================================================
 
-// RFP indexing for upper triangle (TRANSR='N', UPLO='U')
-// Maps (i,j) with i<=j to packed index in range [0, N*(N+1)/2)
-static inline std::size_t rfp_index_upper_N(std::size_t n, std::size_t i, std::size_t j) {
-    // Precondition: i <= j < n
-    const std::size_t k = n / 2;
-    const std::size_t stride = (n % 2 == 0) ? (n + 1) : n;
-    
-    if (j >= k) {
-        // Top zone
-        return (j - k) * stride + i;
-    } else {
-        // Bottom zone
-        return i * stride + j + k + 1;
-    }
-}
 
 // Symmetric Hessian kernel with RFP output (memory-efficient)
 // Output H_rfp: packed lower triangle, length BIG*(BIG+1)/2 where BIG=N*D

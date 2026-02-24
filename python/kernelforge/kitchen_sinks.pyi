@@ -6,6 +6,68 @@ def rff_features(
     W: NDArray[np.float64],
     b: NDArray[np.float64],
 ) -> NDArray[np.float64]: ...
+def rff_gradient(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+) -> NDArray[np.float64]: ...
+def rff_full(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+) -> NDArray[np.float64]: ...
+def rff_gramian_symm(
+    X: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    chunk_size: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_gradient_gramian_symm(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    F: NDArray[np.float64],
+    chunk_size: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_full_gramian_symm(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    F: NDArray[np.float64],
+    energy_chunk: int = ...,
+    force_chunk: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_gramian_symm_rfp(
+    X: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    chunk_size: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_gradient_gramian_symm_rfp(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    F: NDArray[np.float64],
+    chunk_size: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_full_gramian_symm_rfp(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    F: NDArray[np.float64],
+    energy_chunk: int = ...,
+    force_chunk: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
 def rff_features_elemental(
     X: NDArray[np.float64],
     Q: list[NDArray[np.int32]],
@@ -13,6 +75,13 @@ def rff_features_elemental(
     b: NDArray[np.float64],
 ) -> NDArray[np.float64]: ...
 def rff_gradient_elemental(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    Q: list[NDArray[np.int32]],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+) -> NDArray[np.float64]: ...
+def rff_full_elemental(
     X: NDArray[np.float64],
     dX: NDArray[np.float64],
     Q: list[NDArray[np.int32]],
@@ -27,7 +96,44 @@ def rff_gramian_elemental(
     Y: NDArray[np.float64],
     chunk_size: int = ...,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
-def rff_gramian_elemental_gradient(
+def rff_gradient_gramian_elemental(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    Q: list[NDArray[np.int32]],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    F: NDArray[np.float64],
+    chunk_size: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_full_gramian_elemental(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    Q: list[NDArray[np.int32]],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    F: NDArray[np.float64],
+    energy_chunk: int = ...,
+    force_chunk: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_gramian_elemental_rfp(
+    X: NDArray[np.float64],
+    Q: list[NDArray[np.int32]],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    Y: NDArray[np.float64],
+    chunk_size: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_gradient_gramian_elemental_rfp(
+    X: NDArray[np.float64],
+    dX: NDArray[np.float64],
+    Q: list[NDArray[np.int32]],
+    W: NDArray[np.float64],
+    b: NDArray[np.float64],
+    F: NDArray[np.float64],
+    chunk_size: int = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
+def rff_full_gramian_elemental_rfp(
     X: NDArray[np.float64],
     dX: NDArray[np.float64],
     Q: list[NDArray[np.int32]],

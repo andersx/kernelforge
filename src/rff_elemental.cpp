@@ -13,6 +13,7 @@
 #include "aligned_alloc64.hpp"
 #include "blas_config.h"
 #include "rff_elemental.hpp"
+#include "rfp_utils.hpp"
 
 namespace kf::rff {
 
@@ -131,17 +132,17 @@ void rff_gramian_elemental(
     std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
     std::size_t nelements, std::size_t D,
     std::size_t chunk_size,
-    double *LZtLZ, double *LZtY) {
+    double *ZtZ, double *ZtY) {
 
-    if (!X || !Q || !sizes || !W || !b || !Y || !LZtLZ || !LZtY)
+    if (!X || !Q || !sizes || !W || !b || !Y || !ZtZ || !ZtY)
         throw std::invalid_argument("rff_gramian_elemental: null pointer");
     if (nmol == 0 || D == 0)
         throw std::invalid_argument("rff_gramian_elemental: zero dimension");
     if (chunk_size == 0)
         throw std::invalid_argument("rff_gramian_elemental: zero chunk_size");
 
-    std::memset(LZtLZ, 0, D * D * sizeof(double));
-    std::memset(LZtY, 0, D * sizeof(double));
+    std::memset(ZtZ, 0, D * D * sizeof(double));
+    std::memset(ZtY, 0, D * sizeof(double));
 
     for (std::size_t chunk_start = 0; chunk_start < nmol; chunk_start += chunk_size) {
         const std::size_t chunk_end = std::min(chunk_start + chunk_size, nmol);
@@ -157,20 +158,20 @@ void rff_gramian_elemental(
             this_chunk, max_atoms, rep_size, nelements, D,
             LZ);
 
-        // LZtLZ += LZ^T @ LZ  (upper triangle via DSYRK, main thread)
+        // ZtZ += LZ^T @ LZ  (upper triangle via DSYRK, main thread)
         cblas_dsyrk(CblasRowMajor, CblasUpper, CblasTrans,
                     static_cast<int>(D),
                     static_cast<int>(this_chunk),
                     1.0, LZ, static_cast<int>(D),
-                    1.0, LZtLZ, static_cast<int>(D));
+                    1.0, ZtZ, static_cast<int>(D));
 
-        // LZtY += LZ^T @ Y_chunk
+        // ZtY += LZ^T @ Y_chunk
         cblas_dgemv(CblasRowMajor, CblasTrans,
                     static_cast<int>(this_chunk),
                     static_cast<int>(D),
                     1.0, LZ, static_cast<int>(D),
                     Y + chunk_start, 1,
-                    1.0, LZtY, 1);
+                    1.0, ZtY, 1);
 
         aligned_free_64(LZ);
     }
@@ -179,12 +180,12 @@ void rff_gramian_elemental(
     #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
-            LZtLZ[j * D + i] = LZtLZ[i * D + j];
+            ZtZ[j * D + i] = ZtZ[i * D + j];
         }
     }
 }
 
-void rff_gramian_elemental_gradient(
+void rff_full_gramian_elemental(
     const double *X, const double *dX,
     const int *Q, const int *sizes,
     const double *W, const double *b,
@@ -192,15 +193,15 @@ void rff_gramian_elemental_gradient(
     std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
     std::size_t nelements, std::size_t D,
     std::size_t energy_chunk, std::size_t force_chunk,
-    double *LZtLZ, double *LZtY) {
+    double *ZtZ, double *ZtY) {
 
-    if (!X || !dX || !Q || !sizes || !W || !b || !Y || !F || !LZtLZ || !LZtY)
-        throw std::invalid_argument("rff_gramian_elemental_gradient: null pointer");
+    if (!X || !dX || !Q || !sizes || !W || !b || !Y || !F || !ZtZ || !ZtY)
+        throw std::invalid_argument("rff_full_gramian_elemental: null pointer");
     if (nmol == 0 || D == 0)
-        throw std::invalid_argument("rff_gramian_elemental_gradient: zero dimension");
+        throw std::invalid_argument("rff_full_gramian_elemental: zero dimension");
 
-    std::memset(LZtLZ, 0, D * D * sizeof(double));
-    std::memset(LZtY, 0, D * sizeof(double));
+    std::memset(ZtZ, 0, D * D * sizeof(double));
+    std::memset(ZtY, 0, D * sizeof(double));
 
     // ---- Energy loop (chunked) ----
     for (std::size_t cs = 0; cs < nmol; cs += energy_chunk) {
@@ -220,13 +221,13 @@ void rff_gramian_elemental_gradient(
         cblas_dsyrk(CblasRowMajor, CblasUpper, CblasTrans,
                     static_cast<int>(D), static_cast<int>(nc),
                     1.0, LZ, static_cast<int>(D),
-                    1.0, LZtLZ, static_cast<int>(D));
+                    1.0, ZtZ, static_cast<int>(D));
 
         cblas_dgemv(CblasRowMajor, CblasTrans,
                     static_cast<int>(nc), static_cast<int>(D),
                     1.0, LZ, static_cast<int>(D),
                     Y + cs, 1,
-                    1.0, LZtY, 1);
+                    1.0, ZtY, 1);
 
         aligned_free_64(LZ);
     }
@@ -259,18 +260,18 @@ void rff_gramian_elemental_gradient(
             ngrads_chunk,
             G);
 
-        // LZtLZ += G @ G^T  (upper triangle, main thread)
+        // ZtZ += G @ G^T  (upper triangle, main thread)
         cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),
                     1.0, G, static_cast<int>(ngrads_chunk),
-                    1.0, LZtLZ, static_cast<int>(D));
+                    1.0, ZtZ, static_cast<int>(D));
 
-        // LZtY += G @ F_chunk
+        // ZtY += G @ F_chunk
         cblas_dgemv(CblasRowMajor, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),
                     1.0, G, static_cast<int>(ngrads_chunk),
                     F + 3 * cum_atoms[cs], 1,
-                    1.0, LZtY, 1);
+                    1.0, ZtY, 1);
 
         aligned_free_64(G);
     }
@@ -279,7 +280,7 @@ void rff_gramian_elemental_gradient(
     #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
-            LZtLZ[j * D + i] = LZtLZ[i * D + j];
+            ZtZ[j * D + i] = ZtZ[i * D + j];
         }
     }
 }
@@ -396,6 +397,208 @@ void rff_gradient_elemental(
 
         aligned_free_64(dg);
     } // end omp parallel
+}
+
+void rff_full_elemental(
+    const double *X, const double *dX,
+    const int *Q, const int *sizes,
+    const double *W, const double *b,
+    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D,
+    std::size_t ngrads,
+    double *Z_full) {
+
+    if (!X || !dX || !Q || !sizes || !W || !b || !Z_full)
+        throw std::invalid_argument("rff_full_elemental: null pointer");
+    if (nmol == 0 || max_atoms == 0 || rep_size == 0 || nelements == 0 || D == 0)
+        throw std::invalid_argument("rff_full_elemental: zero dimension");
+
+    // Top half: energy features LZ[0:nmol, :]
+    rff_features_elemental(X, Q, sizes, W, b, nmol, max_atoms, rep_size, nelements, D, Z_full);
+
+    // Bottom half: G^T where G is (D, ngrads)
+    double *G = aligned_alloc_64(D * ngrads);
+    rff_gradient_elemental(X, dX, Q, sizes, W, b, nmol, max_atoms, rep_size, nelements, D,
+                           ngrads, G);
+
+    // Transpose G (D, ngrads) -> Z_full[nmol:] (ngrads, D)
+    // Z_full[(nmol + g) * D + d] = G[d * ngrads + g]
+    #pragma omp parallel for schedule(static)
+    for (std::size_t g = 0; g < ngrads; ++g) {
+        double *row = Z_full + (nmol + g) * D;
+        for (std::size_t d = 0; d < D; ++d) {
+            row[d] = G[d * ngrads + g];
+        }
+    }
+
+    aligned_free_64(G);
+}
+
+void rff_gradient_gramian_elemental(
+    const double *X, const double *dX,
+    const int *Q, const int *sizes,
+    const double *W, const double *b,
+    const double *F,
+    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D,
+    std::size_t chunk_size,
+    double *GtG, double *GtF) {
+
+    if (!X || !dX || !Q || !sizes || !W || !b || !F || !GtG || !GtF)
+        throw std::invalid_argument("rff_gradient_gramian_elemental: null pointer");
+    if (nmol == 0 || D == 0)
+        throw std::invalid_argument("rff_gradient_gramian_elemental: zero dimension");
+    if (chunk_size == 0)
+        throw std::invalid_argument("rff_gradient_gramian_elemental: zero chunk_size");
+
+    std::memset(GtG, 0, D * D * sizeof(double));
+    std::memset(GtF, 0, D * sizeof(double));
+
+    // Precompute cumulative atom offsets for F indexing
+    std::vector<std::size_t> cum_atoms(nmol + 1);
+    cum_atoms[0] = 0;
+    for (std::size_t i = 0; i < nmol; ++i)
+        cum_atoms[i + 1] = cum_atoms[i] + static_cast<std::size_t>(sizes[i]);
+
+    for (std::size_t cs = 0; cs < nmol; cs += chunk_size) {
+        const std::size_t ce = std::min(cs + chunk_size, nmol);
+        const std::size_t nc = ce - cs;
+
+        std::size_t ngrads_chunk = 0;
+        for (std::size_t i = cs; i < ce; ++i)
+            ngrads_chunk += 3 * static_cast<std::size_t>(sizes[i]);
+        if (ngrads_chunk == 0) continue;
+
+        double *G = aligned_alloc_64(D * ngrads_chunk);
+
+        rff_gradient_elemental(
+            X  + cs * max_atoms * rep_size,
+            dX + cs * max_atoms * rep_size * max_atoms * 3,
+            Q  + cs * max_atoms,
+            sizes + cs,
+            W, b,
+            nc, max_atoms, rep_size, nelements, D,
+            ngrads_chunk,
+            G);
+
+        // GtG += G @ G^T (upper triangle)
+        cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
+                    static_cast<int>(D), static_cast<int>(ngrads_chunk),
+                    1.0, G, static_cast<int>(ngrads_chunk),
+                    1.0, GtG, static_cast<int>(D));
+
+        // GtF += G @ F_chunk
+        cblas_dgemv(CblasRowMajor, CblasNoTrans,
+                    static_cast<int>(D), static_cast<int>(ngrads_chunk),
+                    1.0, G, static_cast<int>(ngrads_chunk),
+                    F + 3 * cum_atoms[cs], 1,
+                    1.0, GtF, 1);
+
+        aligned_free_64(G);
+    }
+
+    // Symmetrize
+    #pragma omp parallel for schedule(static)
+    for (std::size_t i = 0; i < D; ++i) {
+        for (std::size_t j = i + 1; j < D; ++j) {
+            GtG[j * D + i] = GtG[i * D + j];
+        }
+    }
+}
+
+void rff_gramian_elemental_rfp(
+    const double *X, const int *Q, const int *sizes,
+    const double *W, const double *b,
+    const double *Y,
+    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D,
+    std::size_t chunk_size,
+    double *ZtZ_rfp, double *ZtY) {
+
+    if (!X || !Q || !sizes || !W || !b || !Y || !ZtZ_rfp || !ZtY)
+        throw std::invalid_argument("rff_gramian_elemental_rfp: null pointer");
+    if (nmol == 0 || D == 0)
+        throw std::invalid_argument("rff_gramian_elemental_rfp: zero dimension");
+    if (chunk_size == 0)
+        throw std::invalid_argument("rff_gramian_elemental_rfp: zero chunk_size");
+
+    double *ZtZ_full = aligned_alloc_64(D * D);
+    rff_gramian_elemental(X, Q, sizes, W, b, Y, nmol, max_atoms, rep_size, nelements, D,
+                          chunk_size, ZtZ_full, ZtY);
+
+    const std::size_t nt = D * (D + 1) / 2;
+    std::memset(ZtZ_rfp, 0, nt * sizeof(double));
+    for (std::size_t i = 0; i < D; ++i) {
+        for (std::size_t j = i; j < D; ++j) {
+            ZtZ_rfp[kf::rfp_index_upper_N(D, i, j)] = ZtZ_full[i * D + j];
+        }
+    }
+
+    aligned_free_64(ZtZ_full);
+}
+
+void rff_gradient_gramian_elemental_rfp(
+    const double *X, const double *dX,
+    const int *Q, const int *sizes,
+    const double *W, const double *b,
+    const double *F,
+    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D,
+    std::size_t chunk_size,
+    double *GtG_rfp, double *GtF) {
+
+    if (!X || !dX || !Q || !sizes || !W || !b || !F || !GtG_rfp || !GtF)
+        throw std::invalid_argument("rff_gradient_gramian_elemental_rfp: null pointer");
+    if (nmol == 0 || D == 0)
+        throw std::invalid_argument("rff_gradient_gramian_elemental_rfp: zero dimension");
+    if (chunk_size == 0)
+        throw std::invalid_argument("rff_gradient_gramian_elemental_rfp: zero chunk_size");
+
+    double *GtG_full = aligned_alloc_64(D * D);
+    rff_gradient_gramian_elemental(X, dX, Q, sizes, W, b, F, nmol, max_atoms, rep_size,
+                                   nelements, D, chunk_size, GtG_full, GtF);
+
+    const std::size_t nt = D * (D + 1) / 2;
+    std::memset(GtG_rfp, 0, nt * sizeof(double));
+    for (std::size_t i = 0; i < D; ++i) {
+        for (std::size_t j = i; j < D; ++j) {
+            GtG_rfp[kf::rfp_index_upper_N(D, i, j)] = GtG_full[i * D + j];
+        }
+    }
+
+    aligned_free_64(GtG_full);
+}
+
+void rff_full_gramian_elemental_rfp(
+    const double *X, const double *dX,
+    const int *Q, const int *sizes,
+    const double *W, const double *b,
+    const double *Y, const double *F,
+    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D,
+    std::size_t energy_chunk, std::size_t force_chunk,
+    double *ZtZ_rfp, double *ZtY) {
+
+    if (!X || !dX || !Q || !sizes || !W || !b || !Y || !F || !ZtZ_rfp || !ZtY)
+        throw std::invalid_argument("rff_full_gramian_elemental_rfp: null pointer");
+    if (nmol == 0 || D == 0)
+        throw std::invalid_argument("rff_full_gramian_elemental_rfp: zero dimension");
+    if (energy_chunk == 0 || force_chunk == 0)
+        throw std::invalid_argument("rff_full_gramian_elemental_rfp: zero chunk size");
+
+    double *ZtZ_full = aligned_alloc_64(D * D);
+    rff_full_gramian_elemental(X, dX, Q, sizes, W, b, Y, F, nmol, max_atoms, rep_size,
+                               nelements, D, energy_chunk, force_chunk, ZtZ_full, ZtY);
+
+    const std::size_t nt = D * (D + 1) / 2;
+    std::memset(ZtZ_rfp, 0, nt * sizeof(double));
+    for (std::size_t i = 0; i < D; ++i) {
+        for (std::size_t j = i; j < D; ++j) {
+            ZtZ_rfp[kf::rfp_index_upper_N(D, i, j)] = ZtZ_full[i * D + j];
+        }
+    }
+
+    aligned_free_64(ZtZ_full);
 }
 
 }  // namespace kf::rff
