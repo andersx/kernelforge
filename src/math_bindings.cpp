@@ -1,5 +1,6 @@
 // C++ standard library
 #include <stdexcept>
+#include <string>
 
 // Third-party libraries
 #include <pybind11/numpy.h>
@@ -7,6 +8,7 @@
 
 // Project headers
 #include "aligned_alloc64.hpp"
+#include "blas_config.h"
 #include "blas_int.h"
 #include "math.hpp"
 
@@ -162,6 +164,87 @@ py::array_t<double> rfp_to_full_py(
         /* base    */ cap);
 }
 
+static py::array_t<double> solve_qr_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> A_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_in) {
+    py::buffer_info Abuf = A_in.request();
+    py::buffer_info ybuf = y_in.request();
+
+    if (Abuf.ndim != 2)
+        throw std::runtime_error("A must be 2D (m x n).");
+    if (ybuf.ndim != 1 || ybuf.shape[0] != Abuf.shape[0])
+        throw std::runtime_error("y must be 1D with length m (rows of A).");
+
+    const blas_int m = static_cast<blas_int>(Abuf.shape[0]);
+    const blas_int n = static_cast<blas_int>(Abuf.shape[1]);
+    const auto *A = static_cast<const double *>(Abuf.ptr);
+    const auto *y = static_cast<const double *>(ybuf.ptr);
+
+    const std::size_t n_sz = static_cast<std::size_t>(n);
+    double *x_ptr = aligned_alloc_64(n_sz);
+    if (!x_ptr) throw std::bad_alloc();
+
+    kf::math::solve_qr(A, y, m, n, x_ptr);
+
+    auto cap = py::capsule(x_ptr, [](void *p) { aligned_free_64(static_cast<double *>(p)); });
+    return py::array_t<double>({(py::ssize_t)n}, {(py::ssize_t)sizeof(double)}, x_ptr, cap);
+}
+
+static py::array_t<double> solve_svd_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> A_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_in,
+    double rcond = 0.0) {
+    py::buffer_info Abuf = A_in.request();
+    py::buffer_info ybuf = y_in.request();
+
+    if (Abuf.ndim != 2)
+        throw std::runtime_error("A must be 2D (m x n).");
+    if (ybuf.ndim != 1 || ybuf.shape[0] != Abuf.shape[0])
+        throw std::runtime_error("y must be 1D with length m (rows of A).");
+
+    const blas_int m = static_cast<blas_int>(Abuf.shape[0]);
+    const blas_int n = static_cast<blas_int>(Abuf.shape[1]);
+    const auto *A = static_cast<const double *>(Abuf.ptr);
+    const auto *y = static_cast<const double *>(ybuf.ptr);
+
+    const std::size_t n_sz = static_cast<std::size_t>(n);
+    double *x_ptr = aligned_alloc_64(n_sz);
+    if (!x_ptr) throw std::bad_alloc();
+
+    kf::math::solve_svd(A, y, m, n, x_ptr, rcond);
+
+    auto cap = py::capsule(x_ptr, [](void *p) { aligned_free_64(static_cast<double *>(p)); });
+    return py::array_t<double>({(py::ssize_t)n}, {(py::ssize_t)sizeof(double)}, x_ptr, cap);
+}
+
+static double condition_number_ge_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> A_in) {
+    py::buffer_info Abuf = A_in.request();
+
+    if (Abuf.ndim != 2 || Abuf.shape[0] != Abuf.shape[1])
+        throw std::runtime_error("A must be square (n x n).");
+
+    const blas_int n = static_cast<blas_int>(Abuf.shape[0]);
+    const auto *A = static_cast<const double *>(Abuf.ptr);
+
+    return kf::math::condition_number_ge(A, n);
+}
+
+std::string get_blas_info() {
+#if defined(__APPLE__)
+    const std::string backend = "Apple Accelerate";
+#elif defined(KF_USE_MKL)
+    const std::string backend = "Intel MKL";
+#else
+    const std::string backend = "OpenBLAS";
+#endif
+#ifdef KF_BLAS_ILP64
+    return backend + " ILP64";
+#else
+    return backend + " LP64";
+#endif
+}
+
 PYBIND11_MODULE(kernelmath, m) {
     m.doc() = "Mathematical utilities (Cholesky solvers, etc.)";
     m.def("solve_cholesky", &solve_cholesky_py, py::arg("K"), py::arg("y"),
@@ -184,4 +267,17 @@ PYBIND11_MODULE(kernelmath, m) {
     m.def("rfp_to_full", &rfp_to_full_py, py::arg("ARF"), py::arg("n"), py::arg("uplo") = 'U',
           py::arg("transr") = 'N',
           "RFP (1-D) -> Full (n×n, Fortran-order). No extra copies; returns F-contiguous.");
+    m.def("solve_qr", &solve_qr_py, py::arg("A"), py::arg("y"),
+          "Solve min||A@x - y||_2 (overdetermined) or min||x||_2 s.t. A@x=y (underdetermined).\n"
+          "A is m×n, y is length m; returns x of length n.\n"
+          "Uses DGELS (QR/LQ decomposition). A must have full rank.");
+    m.def("solve_svd", &solve_svd_py, py::arg("A"), py::arg("y"), py::arg("rcond") = 0.0,
+          "Same as solve_qr but uses DGELSD (divide-and-conquer SVD).\n"
+          "Handles rank-deficient A: singular values < rcond*sigma_max are treated as zero.\n"
+          "rcond=0.0 uses machine epsilon as threshold.");
+    m.def("condition_number_ge", &condition_number_ge_py, py::arg("A"),
+          "1-norm condition number of a square matrix A via LU factorization (DGETRF+DGECON).\n"
+          "Works for any square matrix (not just symmetric/positive-definite).");
+    m.def("get_blas_info", &get_blas_info,
+          "Return a string identifying the BLAS backend and integer width, e.g. 'OpenBLAS ILP64'.");
 }

@@ -20,5 +20,19 @@ blas_int full_to_rfp(char transr, char uplo, blas_int n, const double *A_colmaj,
 blas_int rfp_to_full(char transr, char uplo, blas_int n, const double *ARF, double *A_colmaj,
                      blas_int lda);
 
+// Least-squares solve via QR/LQ decomposition (DGELS).
+// A is C-order m×n; y is length m; x is length n on output.
+// A must have full rank.
+void solve_qr(const double *A, const double *y, blas_int m, blas_int n, double *x);
+
+// Least-squares solve via divide-and-conquer SVD (DGELSD).
+// A is C-order m×n; y is length m; x is length n on output.
+// Singular values < rcond*sigma_max are treated as zero (rcond=0 uses machine epsilon).
+void solve_svd(const double *A, const double *y, blas_int m, blas_int n, double *x, double rcond);
+
+// 1-norm condition number of a square n×n matrix via LU factorization (DLANGE+DGETRF+DGECON).
+// A is C-order n×n; it is not modified (an internal copy is used).
+double condition_number_ge(const double *A, blas_int n);
+
 }  // namespace math
 }  // namespace kf

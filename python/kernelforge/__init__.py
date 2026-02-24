@@ -14,11 +14,50 @@ from .kitchen_sinks import (
     rff_features_elemental as rff_features_elemental,
 )
 from .kitchen_sinks import (
+    rff_full as rff_full,
+)
+from .kitchen_sinks import (
+    rff_full_elemental as rff_full_elemental,
+)
+from .kitchen_sinks import (
+    rff_full_gramian_elemental as rff_full_gramian_elemental,
+)
+from .kitchen_sinks import (
+    rff_full_gramian_elemental_rfp as rff_full_gramian_elemental_rfp,
+)
+from .kitchen_sinks import (
+    rff_full_gramian_symm as rff_full_gramian_symm,
+)
+from .kitchen_sinks import (
+    rff_full_gramian_symm_rfp as rff_full_gramian_symm_rfp,
+)
+from .kitchen_sinks import (
+    rff_gradient as rff_gradient,
+)
+from .kitchen_sinks import (
     rff_gradient_elemental as rff_gradient_elemental,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_elemental as rff_gradient_gramian_elemental,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_elemental_rfp as rff_gradient_gramian_elemental_rfp,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_symm as rff_gradient_gramian_symm,
+)
+from .kitchen_sinks import (
+    rff_gradient_gramian_symm_rfp as rff_gradient_gramian_symm_rfp,
 )
 from .kitchen_sinks import (
     rff_gramian_elemental as rff_gramian_elemental,
 )
 from .kitchen_sinks import (
-    rff_gramian_elemental_gradient as rff_gramian_elemental_gradient,
+    rff_gramian_elemental_rfp as rff_gramian_elemental_rfp,
+)
+from .kitchen_sinks import (
+    rff_gramian_symm as rff_gramian_symm,
+)
+from .kitchen_sinks import (
+    rff_gramian_symm_rfp as rff_gramian_symm_rfp,
 )
