@@ -810,7 +810,7 @@ def rff_gradient_numpy(
     b:  (D,)
     Returns G: (D, N*ncoords)
     """
-    N, rep_size = X.shape
+    N, _rep_size = X.shape
     D = b.shape[0]
     ncoords = dX.shape[2]
     norm = -np.sqrt(2.0 / D)
@@ -1055,7 +1055,7 @@ class TestRffGramianSymm:
         b = rng.uniform(size=(D,))
         Y = rng.normal(size=(N + 1,))  # wrong
 
-        with pytest.raises(ValueError, match="Y.shape"):
+        with pytest.raises(ValueError, match=r"Y\.shape"):
             rff_gramian_symm(X, W, b, Y)
 
 
@@ -1170,12 +1170,12 @@ class TestRffFullGramianSymm:
         Y = rng.normal(size=(N,))
         F = rng.normal(size=(N * ncoords + 1,))  # wrong
 
-        with pytest.raises(ValueError, match="F.shape"):
+        with pytest.raises(ValueError, match=r"F\.shape"):
             rff_full_gramian_symm(X, dX, W, b, Y, F)
 
 
 # ---------------------------------------------------------------------------
-# Helper: unpack RFP 1D array to full D×D symmetric matrix
+# Helper: unpack RFP 1D array to full D x D symmetric matrix
 # ---------------------------------------------------------------------------
 def rfp_to_full_np(rfp: np.ndarray, D: int) -> np.ndarray:
     """Simpler unpacking: iterate over (i,j) with i<=j."""
@@ -1568,7 +1568,7 @@ class TestRffFullElemental:
         """Bottom ngrads rows equal G.T where G = rff_gradient_elemental."""
         rng = np.random.default_rng(456)
         nmol, natoms, rep_size, D, nel = 4, 3, 8, 12, 2
-        X, dX, Q, W, b, ngrads = self._make_data(rng, nmol, natoms, rep_size, D, nel)
+        X, dX, Q, W, b, _ngrads = self._make_data(rng, nmol, natoms, rep_size, D, nel)
 
         Z_full = rff_full_elemental(X, dX, Q, W, b)
         G = rff_gradient_elemental(X, dX, Q, W, b)  # (D, ngrads)

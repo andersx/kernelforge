@@ -549,10 +549,10 @@ void rff_gramian_elemental_rfp(
 
         // LZ is (nc, D) row-major ≡ (D, nc) col-major with LDA=D.
         // DSFRK TRANS='N': C += A*A^T where A is (D, nc) → D×D ✓
-        LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'N',
-                      static_cast<int>(D), static_cast<int>(nc),
-                      1.0, LZ, static_cast<int>(D),
-                      1.0, ZtZ_rfp);
+        kf_dsfrk('N', 'U', 'N',
+                 static_cast<blas_int>(D), static_cast<blas_int>(nc),
+                 1.0, LZ, static_cast<blas_int>(D),
+                 1.0, ZtZ_rfp);
 
         cblas_dgemv(CblasRowMajor, CblasTrans,
                     static_cast<int>(nc), static_cast<int>(D),
@@ -614,10 +614,10 @@ void rff_gradient_gramian_elemental_rfp(
 
         // G is (D, ngrads_chunk) row-major ≡ (ngrads_chunk, D) col-major with LDA=ngrads_chunk.
         // DSFRK TRANS='T': C += A^T*A where A is (ngrads_chunk, D) → D×D ✓
-        LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'T',
-                      static_cast<int>(D), static_cast<int>(ngrads_chunk),
-                      1.0, G, static_cast<int>(ngrads_chunk),
-                      1.0, GtG_rfp);
+        kf_dsfrk('N', 'U', 'T',
+                 static_cast<blas_int>(D), static_cast<blas_int>(ngrads_chunk),
+                 1.0, G, static_cast<blas_int>(ngrads_chunk),
+                 1.0, GtG_rfp);
 
         cblas_dgemv(CblasRowMajor, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),
@@ -665,10 +665,10 @@ void rff_full_gramian_elemental_rfp(
             nc, max_atoms, rep_size, nelements, D,
             LZ);
 
-        LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'N',
-                      static_cast<int>(D), static_cast<int>(nc),
-                      1.0, LZ, static_cast<int>(D),
-                      1.0, ZtZ_rfp);
+        kf_dsfrk('N', 'U', 'N',
+                 static_cast<blas_int>(D), static_cast<blas_int>(nc),
+                 1.0, LZ, static_cast<blas_int>(D),
+                 1.0, ZtZ_rfp);
 
         cblas_dgemv(CblasRowMajor, CblasTrans,
                     static_cast<int>(nc), static_cast<int>(D),
@@ -705,10 +705,10 @@ void rff_full_gramian_elemental_rfp(
             nc, max_atoms, rep_size, nelements, D,
             ngrads_chunk, G);
 
-        LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'T',
-                      static_cast<int>(D), static_cast<int>(ngrads_chunk),
-                      1.0, G, static_cast<int>(ngrads_chunk),
-                      1.0, ZtZ_rfp);
+        kf_dsfrk('N', 'U', 'T',
+                 static_cast<blas_int>(D), static_cast<blas_int>(ngrads_chunk),
+                 1.0, G, static_cast<blas_int>(ngrads_chunk),
+                 1.0, ZtZ_rfp);
 
         cblas_dgemv(CblasRowMajor, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),

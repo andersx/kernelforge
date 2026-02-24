@@ -414,10 +414,10 @@ void rff_gramian_symm_rfp(const double *X, const double *W, const double *b,
             // loc_rfp += Z^T @ Z
             // Z is (nc, D) row-major ≡ (D, nc) col-major with LDA=D.
             // DSFRK TRANS='N': C += A*A^T where A is (D, nc) → D×D ✓
-            LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'N',
-                          static_cast<int>(D), static_cast<int>(nc),
-                          1.0, Z, static_cast<int>(D),
-                          1.0, loc_rfp.data());
+            kf_dsfrk('N', 'U', 'N',
+                     static_cast<blas_int>(D), static_cast<blas_int>(nc),
+                     1.0, Z, static_cast<blas_int>(D),
+                     1.0, loc_rfp.data());
 
             // loc_ZtY += Z^T @ Y_chunk
             cblas_dgemv(CblasRowMajor, CblasTrans,
@@ -469,10 +469,10 @@ void rff_gradient_gramian_symm_rfp(const double *X, const double *dX,
         // GtG_rfp += G @ G^T
         // G is (D, ngrads_chunk) row-major ≡ (ngrads_chunk, D) col-major with LDA=ngrads_chunk.
         // DSFRK TRANS='T': C += A^T*A where A is (ngrads_chunk, D) → D×D ✓
-        LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'T',
-                      static_cast<int>(D), static_cast<int>(ngrads_chunk),
-                      1.0, G, static_cast<int>(ngrads_chunk),
-                      1.0, GtG_rfp);
+        kf_dsfrk('N', 'U', 'T',
+                 static_cast<blas_int>(D), static_cast<blas_int>(ngrads_chunk),
+                 1.0, G, static_cast<blas_int>(ngrads_chunk),
+                 1.0, GtG_rfp);
 
         // GtF += G @ F_chunk
         cblas_dgemv(CblasRowMajor, CblasNoTrans,
@@ -521,10 +521,10 @@ void rff_full_gramian_symm_rfp(const double *X, const double *dX,
                 double *Z = aligned_alloc_64(nc * D);
                 rff_features(X + cs * rep_size, W, b, nc, rep_size, D, Z);
 
-                LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'N',
-                              static_cast<int>(D), static_cast<int>(nc),
-                              1.0, Z, static_cast<int>(D),
-                              1.0, loc_rfp.data());
+                kf_dsfrk('N', 'U', 'N',
+                         static_cast<blas_int>(D), static_cast<blas_int>(nc),
+                         1.0, Z, static_cast<blas_int>(D),
+                         1.0, loc_rfp.data());
 
                 cblas_dgemv(CblasRowMajor, CblasTrans,
                             static_cast<int>(nc), static_cast<int>(D),
@@ -554,10 +554,10 @@ void rff_full_gramian_symm_rfp(const double *X, const double *dX,
                      dX + cs * rep_size * ncoords,
                      W, b, nc, rep_size, D, ncoords, G);
 
-        LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'T',
-                      static_cast<int>(D), static_cast<int>(ngrads_chunk),
-                      1.0, G, static_cast<int>(ngrads_chunk),
-                      1.0, ZtZ_rfp);
+        kf_dsfrk('N', 'U', 'T',
+                 static_cast<blas_int>(D), static_cast<blas_int>(ngrads_chunk),
+                 1.0, G, static_cast<blas_int>(ngrads_chunk),
+                 1.0, ZtZ_rfp);
 
         cblas_dgemv(CblasRowMajor, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),

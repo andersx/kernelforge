@@ -120,8 +120,7 @@ void kernel_gaussian_symm_rfp_dsfrk(const double *Xptr, blas_int n, blas_int rep
 
     std::memset(arf, 0, nt * sizeof(double));  // beta=0 may skip writes on uninit buffer
 
-    LAPACKE_dsfrk(LAPACK_COL_MAJOR, 'N', 'U', 'T',
-                  n, rep_size, -2.0 * alpha, Xptr, rep_size, 0.0, arf);
+    kf_dsfrk('N', 'U', 'T', n, rep_size, -2.0 * alpha, Xptr, rep_size, 0.0, arf);
 
     std::vector<double> sq(n_size);
 #pragma omp parallel for schedule(static)

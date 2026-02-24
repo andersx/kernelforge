@@ -24,7 +24,7 @@ def rfp_to_full(
 ) -> NDArray[np.float64]: ...
 def solve_qr(A: NDArray[np.float64], y: NDArray[np.float64]) -> NDArray[np.float64]:
     """Solve min||A@x - y||₂ (overdetermined) or min||x||₂ s.t. A@x=y (underdetermined).
-    A is m×n, y is length m; returns x of length n. Uses DGELS (QR/LQ decomposition).
+    A is m x n, y is length m; returns x of length n. Uses DGELS (QR/LQ decomposition).
     A must have full rank."""
     ...
 
