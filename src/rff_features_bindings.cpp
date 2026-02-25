@@ -622,7 +622,7 @@ b : ndarray, shape (D,)
 Y : ndarray, shape (N,)
     Target energies.
 chunk_size : int
-    Number of molecules per chunk (default: 1000).
+    Number of molecules per chunk (default: 8192).
 
 Returns
 -------
@@ -632,7 +632,7 @@ ZtY : ndarray, shape (D,)
     Projection vector Z^T @ Y.
 )doc",
           py::arg("X"), py::arg("W"), py::arg("b"),
-          py::arg("Y"), py::arg("chunk_size") = 1000);
+          py::arg("Y"), py::arg("chunk_size") = 8192);
 
     m.def("rff_gradient_gramian_symm", &py_rff_gradient_gramian_symm,
           R"doc(
@@ -654,7 +654,7 @@ b : ndarray, shape (D,)
 F : ndarray, shape (N*ncoords,)
     Target forces (flattened).
 chunk_size : int
-    Number of molecules per chunk (default: 100).
+    Number of molecules per chunk (default: 256).
 
 Returns
 -------
@@ -664,7 +664,7 @@ GtF : ndarray, shape (D,)
     Projection vector G @ F.
 )doc",
           py::arg("X"), py::arg("dX"), py::arg("W"), py::arg("b"),
-          py::arg("F"), py::arg("chunk_size") = 100);
+          py::arg("F"), py::arg("chunk_size") = 256);
 
     m.def("rff_full_gramian_symm", &py_rff_full_gramian_symm,
           R"doc(
@@ -691,9 +691,9 @@ Y : ndarray, shape (N,)
 F : ndarray, shape (N*ncoords,)
     Target forces (flattened).
 energy_chunk : int
-    Chunk size for energy loop (default: 1000).
+    Chunk size for energy loop (default: 8192).
 force_chunk : int
-    Chunk size for force loop (default: 100).
+    Chunk size for force loop (default: 256).
 
 Returns
 -------
@@ -704,8 +704,8 @@ ZtY : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("dX"), py::arg("W"), py::arg("b"),
           py::arg("Y"), py::arg("F"),
-          py::arg("energy_chunk") = 1000,
-          py::arg("force_chunk") = 100);
+          py::arg("energy_chunk") = 8192,
+          py::arg("force_chunk") = 256);
 
     m.def("rff_gramian_symm_rfp", &py_rff_gramian_symm_rfp,
           R"doc(
@@ -729,7 +729,7 @@ ZtZ_rfp : ndarray, shape (D*(D+1)//2,)
 ZtY : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("W"), py::arg("b"),
-          py::arg("Y"), py::arg("chunk_size") = 1000);
+          py::arg("Y"), py::arg("chunk_size") = 8192);
 
     m.def("rff_gradient_gramian_symm_rfp", &py_rff_gradient_gramian_symm_rfp,
           R"doc(
@@ -752,7 +752,7 @@ GtG_rfp : ndarray, shape (D*(D+1)//2,)
 GtF : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("dX"), py::arg("W"), py::arg("b"),
-          py::arg("F"), py::arg("chunk_size") = 100);
+          py::arg("F"), py::arg("chunk_size") = 256);
 
     m.def("rff_full_gramian_symm_rfp", &py_rff_full_gramian_symm_rfp,
           R"doc(
@@ -778,8 +778,8 @@ ZtY : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("dX"), py::arg("W"), py::arg("b"),
           py::arg("Y"), py::arg("F"),
-          py::arg("energy_chunk") = 1000,
-          py::arg("force_chunk") = 100);
+          py::arg("energy_chunk") = 8192,
+          py::arg("force_chunk") = 256);
 
     // Elemental functions registered from rff_elemental_bindings.cpp
     register_rff_elemental(m);

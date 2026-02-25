@@ -699,7 +699,7 @@ ZtZ : ndarray, shape (D, D)
 ZtY : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("Q"), py::arg("W"), py::arg("b"),
-          py::arg("Y"), py::arg("chunk_size") = 1000);
+          py::arg("Y"), py::arg("chunk_size") = 8192);
 
     m.def("rff_gradient_gramian_elemental", &py_rff_gradient_gramian_elemental,
           R"doc(
@@ -722,7 +722,7 @@ GtF : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("dX"), py::arg("Q"),
           py::arg("W"), py::arg("b"),
-          py::arg("F"), py::arg("chunk_size") = 100);
+          py::arg("F"), py::arg("chunk_size") = 256);
 
     m.def("rff_full_gramian_elemental", &py_rff_full_gramian_elemental,
           R"doc(
@@ -748,8 +748,8 @@ ZtY : ndarray, shape (D,)
           py::arg("X"), py::arg("dX"), py::arg("Q"),
           py::arg("W"), py::arg("b"),
           py::arg("Y"), py::arg("F"),
-          py::arg("energy_chunk") = 1000,
-          py::arg("force_chunk") = 100);
+          py::arg("energy_chunk") = 8192,
+          py::arg("force_chunk") = 256);
 
     m.def("rff_gramian_elemental_rfp", &py_rff_gramian_elemental_rfp,
           R"doc(
@@ -770,7 +770,7 @@ ZtZ_rfp : ndarray, shape (D*(D+1)//2,)
 ZtY : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("Q"), py::arg("W"), py::arg("b"),
-          py::arg("Y"), py::arg("chunk_size") = 1000);
+          py::arg("Y"), py::arg("chunk_size") = 8192);
 
     m.def("rff_gradient_gramian_elemental_rfp", &py_rff_gradient_gramian_elemental_rfp,
           R"doc(
@@ -793,7 +793,7 @@ GtF : ndarray, shape (D,)
 )doc",
           py::arg("X"), py::arg("dX"), py::arg("Q"),
           py::arg("W"), py::arg("b"),
-          py::arg("F"), py::arg("chunk_size") = 100);
+          py::arg("F"), py::arg("chunk_size") = 256);
 
     m.def("rff_full_gramian_elemental_rfp", &py_rff_full_gramian_elemental_rfp,
           R"doc(
@@ -819,6 +819,6 @@ ZtY : ndarray, shape (D,)
           py::arg("X"), py::arg("dX"), py::arg("Q"),
           py::arg("W"), py::arg("b"),
           py::arg("Y"), py::arg("F"),
-          py::arg("energy_chunk") = 1000,
-          py::arg("force_chunk") = 100);
+          py::arg("energy_chunk") = 8192,
+          py::arg("force_chunk") = 256);
 }
