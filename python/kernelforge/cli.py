@@ -987,7 +987,7 @@ def benchmark_rff_gramian_symm_rfp() -> tuple[float, str]:
 
 
 def benchmark_rff_gradient_gramian_symm_rfp() -> tuple[float, str]:
-    """Benchmark rff_gradient_gramian_symm_rfp on ethanol inverse-distance data (N=3000, D=N/2=1500)."""
+    """Benchmark rff_gradient_gramian_symm_rfp on ethanol inverse-distance data (N=3000, D=1500)."""
     n = 3000
     D = n // 2
     inputs = _make_ethanol_inputs(n, D, include_dX=True)
