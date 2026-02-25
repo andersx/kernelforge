@@ -399,54 +399,35 @@ void rff_gramian_symm_rfp(const double *X, const double *W, const double *b,
     const std::size_t nt      = D * (D + 1) / 2;
     const std::size_t nchunks = (N + chunk_size - 1) / chunk_size;
 
-    std::memset(ZtZ_rfp, 0, nt * sizeof(double));
-    std::memset(ZtY,     0, D  * sizeof(double));
+    // // Accumulate directly into RFP using DSFRK
+    for (std::size_t ci = 0; ci < nchunks; ++ci) {
+        const std::size_t cs = ci * chunk_size;
+        const std::size_t ce = std::min(cs + chunk_size, N);
+        const std::size_t nc = ce - cs;
 
-    // Accumulate directly into RFP using DSFRK (no D×D temp buffer).
-    // Thread-local RFP arrays let us parallelize; each costs D*(D+1)/2 doubles
-    // (~half of a full D×D buffer).
-    // Serialise BLAS inside OMP to prevent oversubscription.
-    const int blas_nt = kf_blas_get_num_threads();
-    kf_blas_set_num_threads(1);
-    #pragma omp parallel
-    {
-        std::vector<double> loc_rfp(nt, 0.0);
-        std::vector<double> loc_ZtY(D,  0.0);
+        double *Z = aligned_alloc_64(nc * D);
 
-        #pragma omp for schedule(dynamic)
-        for (std::size_t ci = 0; ci < nchunks; ++ci) {
-            const std::size_t cs = ci * chunk_size;
-            const std::size_t ce = std::min(cs + chunk_size, N);
-            const std::size_t nc = ce - cs;
+        // zero accum on first chunk, then sum
+        double clear_or_sum = (ci == 0) ? 0.0 : 1.0;
 
-            double *Z = aligned_alloc_64(nc * D);
-            rff_features(X + cs * rep_size, W, b, nc, rep_size, D, Z);
+        rff_features(X + cs * rep_size, W, b, nc, rep_size, D, Z);
 
-            // loc_rfp += Z^T @ Z
-            // Z is (nc, D) row-major ≡ (D, nc) col-major with LDA=D.
-            // DSFRK TRANS='N': C += A*A^T where A is (D, nc) → D×D ✓
-            kf_dsfrk('N', 'U', 'N',
-                     static_cast<blas_int>(D), static_cast<blas_int>(nc),
-                     1.0, Z, static_cast<blas_int>(D),
-                     1.0, loc_rfp.data());
+        // ZtZ_rfp += Z_chunk^T @ Z_chunk
+        kf_dsfrk('N', 'U', 'N',
+                 static_cast<blas_int>(D), static_cast<blas_int>(nc),
+                 1.0, Z, static_cast<blas_int>(D),
+                 clear_or_sum, ZtZ_rfp);
 
-            // loc_ZtY += Z^T @ Y_chunk
-            cblas_dgemv(CblasRowMajor, CblasTrans,
-                        static_cast<int>(nc), static_cast<int>(D),
-                        1.0, Z, static_cast<int>(D),
-                        Y + cs, 1,
-                        1.0, loc_ZtY.data(), 1);
+        // ZtY += Z_chunk^T @ Y_chunk
+        cblas_dgemv(CblasRowMajor, CblasTrans,
+                    static_cast<int>(nc), static_cast<int>(D),
+                    1.0, Z, static_cast<int>(D),
+                    Y + cs, 1,
+                    clear_or_sum, ZtY, 1);
 
-            aligned_free_64(Z);
-        }
-
-        #pragma omp critical
-        {
-            for (std::size_t k = 0; k < nt; ++k) ZtZ_rfp[k] += loc_rfp[k];
-            for (std::size_t k = 0; k < D;  ++k) ZtY[k]     += loc_ZtY[k];
-        }
+        aligned_free_64(Z);
     }
-    kf_blas_set_num_threads(blas_nt);
+
 }
 
 void rff_gradient_gramian_symm_rfp(const double *X, const double *dX,
