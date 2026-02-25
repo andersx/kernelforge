@@ -2,7 +2,7 @@ import argparse
 import sys
 import time
 import urllib.request
-from functools import lru_cache
+from functools import cache
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -54,7 +54,7 @@ CACHE_DIR = Path.home() / ".kernelforge" / "datasets"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-@lru_cache(maxsize=None)
+@cache
 def load_ethanol_raw_data() -> dict[str, Any]:
     """Load raw ethanol MD17 data from sgdml.org (555K structures). Auto-downloads if needed.
 
@@ -88,7 +88,7 @@ def load_ethanol_raw_data() -> dict[str, Any]:
     }
 
 
-@lru_cache(maxsize=None)
+@cache
 def load_qm7b_raw_data() -> NDArray[Any]:
     """Load raw QM7b data from GitHub release. Auto-downloads if needed."""
     npz_path = CACHE_DIR / "qm7b_complete.npz"
@@ -826,7 +826,7 @@ def benchmark_local_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
     return elapsed, f"local::kernel_gaussian_full_symm_rfp (Ethanol, N={n})"
 
 
-@lru_cache(maxsize=None)
+@cache
 def _make_ethanol_inputs(
     n: int, D: int, seed: int = 42, include_dX: bool = False
 ) -> dict[str, Any]:
@@ -1028,7 +1028,7 @@ def benchmark_rff_full_gramian_symm_rfp() -> tuple[float, str]:
     )
 
 
-@lru_cache(maxsize=None)
+@cache
 def _make_qm7b_elemental_inputs(
     n_mols: int, D: int, seed: int = 42, include_dX: bool = False
 ) -> dict[str, Any]:
