@@ -2,6 +2,7 @@ import argparse
 import sys
 import time
 import urllib.request
+from functools import lru_cache
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
@@ -52,10 +53,8 @@ PROGRAM_NAME = "Kernelforge Benchmarks"
 CACHE_DIR = Path.home() / ".kernelforge" / "datasets"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Cache for loaded dataset (to avoid reloading npz between benchmarks)
-_ethanol_data_cache = None
 
-
+@lru_cache(maxsize=None)
 def load_ethanol_raw_data() -> dict[str, Any]:
     """Load raw ethanol MD17 data from sgdml.org (555K structures). Auto-downloads if needed.
 
@@ -63,11 +62,6 @@ def load_ethanol_raw_data() -> dict[str, Any]:
     Data is eagerly loaded and cached in memory on first call to avoid slow disk I/O on
     subsequent calls.
     """
-    global _ethanol_data_cache
-
-    if _ethanol_data_cache is not None:
-        return _ethanol_data_cache
-
     npz_path = CACHE_DIR / "md17_ethanol.npz"
 
     if not npz_path.exists():
@@ -86,15 +80,15 @@ def load_ethanol_raw_data() -> dict[str, Any]:
 
     # Eagerly load R and z into memory (not lazy — makes slicing fast)
     npz = np.load(npz_path, allow_pickle=True)
-    _ethanol_data_cache = {
+    return {
         "R": npz["R"],
         "z": npz["z"],
         "E": npz["E"],
         "F": npz["F"],
     }
-    return _ethanol_data_cache
 
 
+@lru_cache(maxsize=None)
 def load_qm7b_raw_data() -> NDArray[Any]:
     """Load raw QM7b data from GitHub release. Auto-downloads if needed."""
     npz_path = CACHE_DIR / "qm7b_complete.npz"
@@ -832,20 +826,50 @@ def benchmark_local_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
     return elapsed, f"local::kernel_gaussian_full_symm_rfp (Ethanol, N={n})"
 
 
-def benchmark_rff_features() -> tuple[float, str]:
-    """Benchmark rff_features on ethanol inverse-distance data (N=5000, D=N/2=2500)."""
+@lru_cache(maxsize=None)
+def _make_ethanol_inputs(
+    n: int, D: int, seed: int = 42, include_dX: bool = False
+) -> dict[str, Any]:
+    """Prepare ethanol inverse-distance inputs for RFF benchmarks (cached by all args).
+
+    Pass include_dX=True to also compute and cache the Jacobian dX array.
+    """
     data = load_ethanol_raw_data()
-    n = 5000
-    D = n // 2
     R = data["R"][:n]
+    z = data["z"]
+    n_atoms = len(z)
 
-    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
-    X = np.array(X_list)
+    if include_dX:
+        X_list, dX_list = [], []
+        for r in R:
+            x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+            X_list.append(x)
+            dX_list.append(dx)
+        X = np.array(X_list)
+        dX = np.array(dX_list)
+    else:
+        X = np.array([invdist_repr.inverse_distance_upper(r) for r in R])
+        dX = None
+
     rep_size = X.shape[1]
-
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(seed)
     W = rng.standard_normal((rep_size, D))
     b = rng.uniform(0.0, 2.0 * np.pi, D)
+
+    result: dict[str, Any] = {"X": X, "W": W, "b": b, "rep_size": rep_size, "n_atoms": n_atoms}
+    if include_dX and dX is not None:
+        result["dX"] = dX
+        result["ncoords"] = dX.shape[2]
+
+    return result
+
+
+def benchmark_rff_features() -> tuple[float, str]:
+    """Benchmark rff_features on ethanol inverse-distance data (N=10000, D=N/2=5000)."""
+    n = 10000
+    D = n // 2
+    inputs = _make_ethanol_inputs(n, D)
+    X, W, b, rep_size = inputs["X"], inputs["W"], inputs["b"], inputs["rep_size"]
 
     start = time.perf_counter()
     _ = rff_features(X, W, b)
@@ -855,27 +879,12 @@ def benchmark_rff_features() -> tuple[float, str]:
 
 
 def benchmark_rff_gradient() -> tuple[float, str]:
-    """Benchmark rff_gradient on ethanol inverse-distance data (N=2000, D=N/2=1000)."""
-    data = load_ethanol_raw_data()
-    n = 2000
+    """Benchmark rff_gradient on ethanol inverse-distance data (N=3000, D=N/2=1500)."""
+    n = 3000
     D = n // 2
-    R = data["R"][:n]
-    z = data["z"]
-    n_atoms = len(z)
-
-    X_list, dX_list = [], []
-    for r in R:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
-        X_list.append(x)
-        dX_list.append(dx)
-
-    X = np.array(X_list)
-    dX = np.array(dX_list)
-    rep_size = X.shape[1]
-
-    rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
+    inputs = _make_ethanol_inputs(n, D, include_dX=True)
+    X, dX, W, b = inputs["X"], inputs["dX"], inputs["W"], inputs["b"]
+    rep_size, n_atoms = inputs["rep_size"], inputs["n_atoms"]
 
     start = time.perf_counter()
     _ = rff_gradient(X, dX, W, b)
@@ -888,20 +897,12 @@ def benchmark_rff_gradient() -> tuple[float, str]:
 
 
 def benchmark_rff_gramian_symm() -> tuple[float, str]:
-    """Benchmark rff_gramian_symm on ethanol inverse-distance data (N=5000, D=N/2=2500)."""
-    data = load_ethanol_raw_data()
-    n = 5000
+    """Benchmark rff_gramian_symm on ethanol inverse-distance data (N=10000, D=N/2=5000)."""
+    n = 10000
     D = n // 2
-    R = data["R"][:n]
-
-    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
-    X = np.array(X_list)
-    rep_size = X.shape[1]
-
-    rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
-    Y = rng.standard_normal(n)
+    inputs = _make_ethanol_inputs(n, D)
+    X, W, b, rep_size = inputs["X"], inputs["W"], inputs["b"], inputs["rep_size"]
+    Y = np.random.default_rng(42).standard_normal(n)
 
     start = time.perf_counter()
     _ = rff_gramian_symm(X, W, b, Y)
@@ -911,28 +912,13 @@ def benchmark_rff_gramian_symm() -> tuple[float, str]:
 
 
 def benchmark_rff_full_gramian_symm() -> tuple[float, str]:
-    """Benchmark rff_full_gramian_symm on ethanol inverse-distance data (N=2000, D=N/2=1000)."""
-    data = load_ethanol_raw_data()
-    n = 2000
+    """Benchmark rff_full_gramian_symm on ethanol inverse-distance data (N=3000, D=N/2=1500)."""
+    n = 3000
     D = n // 2
-    R = data["R"][:n]
-    z = data["z"]
-    n_atoms = len(z)
-
-    X_list, dX_list = [], []
-    for r in R:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
-        X_list.append(x)
-        dX_list.append(dx)
-
-    X = np.array(X_list)
-    dX = np.array(dX_list)
-    rep_size = X.shape[1]
-    ncoords = dX.shape[2]
-
+    inputs = _make_ethanol_inputs(n, D, include_dX=True)
+    X, dX, W, b = inputs["X"], inputs["dX"], inputs["W"], inputs["b"]
+    rep_size, n_atoms, ncoords = inputs["rep_size"], inputs["n_atoms"], inputs["ncoords"]
     rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
     Y = rng.standard_normal(n)
     F = rng.standard_normal(n * ncoords)
 
@@ -948,27 +934,12 @@ def benchmark_rff_full_gramian_symm() -> tuple[float, str]:
 
 
 def benchmark_rff_full() -> tuple[float, str]:
-    """Benchmark rff_full on ethanol inverse-distance data (N=2000, D=1000)."""
-    data = load_ethanol_raw_data()
-    n = 2000
+    """Benchmark rff_full on ethanol inverse-distance data (N=3000, D=N/2=1500)."""
+    n = 3000
     D = n // 2
-    R = data["R"][:n]
-    z = data["z"]
-    n_atoms = len(z)
-
-    X_list, dX_list = [], []
-    for r in R:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
-        X_list.append(x)
-        dX_list.append(dx)
-
-    X = np.array(X_list)
-    dX = np.array(dX_list)
-    rep_size = X.shape[1]
-
-    rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
+    inputs = _make_ethanol_inputs(n, D, include_dX=True)
+    X, dX, W, b = inputs["X"], inputs["dX"], inputs["W"], inputs["b"]
+    rep_size, n_atoms = inputs["rep_size"], inputs["n_atoms"]
 
     start = time.perf_counter()
     _ = rff_full(X, dX, W, b)
@@ -981,29 +952,13 @@ def benchmark_rff_full() -> tuple[float, str]:
 
 
 def benchmark_rff_gradient_gramian_symm() -> tuple[float, str]:
-    """Benchmark rff_gradient_gramian_symm on ethanol inverse-distance data (N=2000, D=1000)."""
-    data = load_ethanol_raw_data()
-    n = 2000
+    """Benchmark rff_gradient_gramian_symm on ethanol inverse-distance data (N=3000, D=N/2=1500)."""
+    n = 3000
     D = n // 2
-    R = data["R"][:n]
-    z = data["z"]
-    n_atoms = len(z)
-
-    X_list, dX_list = [], []
-    for r in R:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
-        X_list.append(x)
-        dX_list.append(dx)
-
-    X = np.array(X_list)
-    dX = np.array(dX_list)
-    rep_size = X.shape[1]
-    ncoords = dX.shape[2]
-
-    rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
-    F = rng.standard_normal(n * ncoords)
+    inputs = _make_ethanol_inputs(n, D, include_dX=True)
+    X, dX, W, b = inputs["X"], inputs["dX"], inputs["W"], inputs["b"]
+    rep_size, n_atoms, ncoords = inputs["rep_size"], inputs["n_atoms"], inputs["ncoords"]
+    F = np.random.default_rng(42).standard_normal(n * ncoords)
 
     start = time.perf_counter()
     _ = rff_gradient_gramian_symm(X, dX, W, b, F)
@@ -1017,20 +972,12 @@ def benchmark_rff_gradient_gramian_symm() -> tuple[float, str]:
 
 
 def benchmark_rff_gramian_symm_rfp() -> tuple[float, str]:
-    """Benchmark rff_gramian_symm_rfp on ethanol inverse-distance data (N=5000, D=2500)."""
-    data = load_ethanol_raw_data()
-    n = 5000
+    """Benchmark rff_gramian_symm_rfp on ethanol inverse-distance data (N=10000, D=N/2=5000)."""
+    n = 10000
     D = n // 2
-    R = data["R"][:n]
-
-    X_list = [invdist_repr.inverse_distance_upper(r) for r in R]
-    X = np.array(X_list)
-    rep_size = X.shape[1]
-
-    rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
-    Y = rng.standard_normal(n)
+    inputs = _make_ethanol_inputs(n, D)
+    X, W, b, rep_size = inputs["X"], inputs["W"], inputs["b"], inputs["rep_size"]
+    Y = np.random.default_rng(42).standard_normal(n)
 
     start = time.perf_counter()
     _ = rff_gramian_symm_rfp(X, W, b, Y)
@@ -1040,29 +987,13 @@ def benchmark_rff_gramian_symm_rfp() -> tuple[float, str]:
 
 
 def benchmark_rff_gradient_gramian_symm_rfp() -> tuple[float, str]:
-    """Benchmark rff_gradient_gramian_symm_rfp on ethanol inverse-distance data (N=2000, D=1000)."""
-    data = load_ethanol_raw_data()
-    n = 2000
+    """Benchmark rff_gradient_gramian_symm_rfp on ethanol inverse-distance data (N=3000, D=N/2=1500)."""
+    n = 3000
     D = n // 2
-    R = data["R"][:n]
-    z = data["z"]
-    n_atoms = len(z)
-
-    X_list, dX_list = [], []
-    for r in R:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
-        X_list.append(x)
-        dX_list.append(dx)
-
-    X = np.array(X_list)
-    dX = np.array(dX_list)
-    rep_size = X.shape[1]
-    ncoords = dX.shape[2]
-
-    rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
-    F = rng.standard_normal(n * ncoords)
+    inputs = _make_ethanol_inputs(n, D, include_dX=True)
+    X, dX, W, b = inputs["X"], inputs["dX"], inputs["W"], inputs["b"]
+    rep_size, n_atoms, ncoords = inputs["rep_size"], inputs["n_atoms"], inputs["ncoords"]
+    F = np.random.default_rng(42).standard_normal(n * ncoords)
 
     start = time.perf_counter()
     _ = rff_gradient_gramian_symm_rfp(X, dX, W, b, F)
@@ -1076,28 +1007,13 @@ def benchmark_rff_gradient_gramian_symm_rfp() -> tuple[float, str]:
 
 
 def benchmark_rff_full_gramian_symm_rfp() -> tuple[float, str]:
-    """Benchmark rff_full_gramian_symm_rfp on ethanol inverse-distance data (N=2000, D=1000)."""
-    data = load_ethanol_raw_data()
-    n = 2000
+    """Benchmark rff_full_gramian_symm_rfp on ethanol inverse-distance data (N=3000, D=N/2=1500)."""
+    n = 3000
     D = n // 2
-    R = data["R"][:n]
-    z = data["z"]
-    n_atoms = len(z)
-
-    X_list, dX_list = [], []
-    for r in R:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
-        X_list.append(x)
-        dX_list.append(dx)
-
-    X = np.array(X_list)
-    dX = np.array(dX_list)
-    rep_size = X.shape[1]
-    ncoords = dX.shape[2]
-
+    inputs = _make_ethanol_inputs(n, D, include_dX=True)
+    X, dX, W, b = inputs["X"], inputs["dX"], inputs["W"], inputs["b"]
+    rep_size, n_atoms, ncoords = inputs["rep_size"], inputs["n_atoms"], inputs["ncoords"]
     rng = np.random.default_rng(42)
-    W = rng.standard_normal((rep_size, D))
-    b = rng.uniform(0.0, 2.0 * np.pi, D)
     Y = rng.standard_normal(n)
     F = rng.standard_normal(n * ncoords)
 
@@ -1112,11 +1028,15 @@ def benchmark_rff_full_gramian_symm_rfp() -> tuple[float, str]:
     )
 
 
-def _make_qm7b_elemental_inputs(n_mols: int, D: int, rng: np.random.Generator) -> dict[str, Any]:
-    """Prepare inputs for elemental RFF benchmarks from QM7b-like data.
+@lru_cache(maxsize=None)
+def _make_qm7b_elemental_inputs(
+    n_mols: int, D: int, seed: int = 42, include_dX: bool = False
+) -> dict[str, Any]:
+    """Prepare inputs for elemental RFF benchmarks from QM7b-like data (cached by all args).
 
-    Atomic numbers in the QM7b data are remapped to 0-based element indices
-    matching the W/b stack order (elements = [1, 6, 7, 8, 16, 17]).
+    Atomic numbers are remapped to 0-based element indices matching the W/b
+    stack order (elements = [1, 6, 7, 8, 16, 17]). Pass include_dX=True to
+    also generate and cache the dX gradient array.
     """
     elements = [1, 6, 7, 8, 16, 17]
     anum_to_idx = {anum: idx for idx, anum in enumerate(elements)}
@@ -1134,36 +1054,38 @@ def _make_qm7b_elemental_inputs(n_mols: int, D: int, rng: np.random.Generator) -
         for i in range(n_mols_actual)
     ]
 
+    rng = np.random.default_rng(seed)
     W = rng.standard_normal((nelements, rep_size, D))
     b = rng.uniform(0.0, 2.0 * np.pi, (nelements, D))
 
-    return {"X": X, "N": N, "Q": Q, "W": W, "b": b, "max_atoms": max_atoms}
+    result: dict[str, Any] = {"X": X, "N": N, "Q": Q, "W": W, "b": b, "max_atoms": max_atoms}
+
+    if include_dX:
+        result["dX"] = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
+
+    return result
 
 
 def benchmark_rff_features_elemental() -> tuple[float, str]:
-    """Benchmark rff_features_elemental on synthetic QM7b-like data (N=500 molecules)."""
-    rng = np.random.default_rng(42)
-    D = 2000
-    inputs = _make_qm7b_elemental_inputs(500, D, rng)
+    """Benchmark rff_features_elemental on synthetic QM7b-like data (N=4000 molecules)."""
+    n_mols = 4000
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D)
     X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
 
     start = time.perf_counter()
     _ = rff_features_elemental(X, Q, W, b)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff::rff_features_elemental (N=500, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_features_elemental (N={n_mols}, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gradient_elemental() -> tuple[float, str]:
-    """Benchmark rff_gradient_elemental on synthetic QM7b-like data (N=50 molecules)."""
-    rng = np.random.default_rng(42)
-    D = 500
-    n_mols = 50
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
-    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
-    n_mols_actual, max_atoms, rep_size = X.shape
-    # dX shape: (nmol, max_atoms, rep_size, max_atoms, 3)
-    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
+    """Benchmark rff_gradient_elemental on synthetic QM7b-like data (N=600 molecules)."""
+    n_mols = 600
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, include_dX=True)
+    X, Q, W, b, dX = inputs["X"], inputs["Q"], inputs["W"], inputs["b"], inputs["dX"]
 
     start = time.perf_counter()
     _ = rff_gradient_elemental(X, dX, Q, W, b)
@@ -1173,32 +1095,29 @@ def benchmark_rff_gradient_elemental() -> tuple[float, str]:
 
 
 def benchmark_rff_gramian_elemental() -> tuple[float, str]:
-    """Benchmark rff_gramian_elemental on synthetic QM7b-like data (N=500 molecules)."""
-    rng = np.random.default_rng(42)
-    D = 2000
-    n_mols = 500
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
+    """Benchmark rff_gramian_elemental on synthetic QM7b-like data (N=4000 molecules)."""
+    n_mols = 4000
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D)
     X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
     n_mols_actual = X.shape[0]
-    Y = rng.standard_normal(n_mols_actual)
+    Y = np.random.default_rng(42).standard_normal(n_mols_actual)
 
     start = time.perf_counter()
     _ = rff_gramian_elemental(X, Q, W, b, Y)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff::rff_gramian_elemental (N=500, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gramian_elemental (N={n_mols}, D={D}, QM7b-like)"
 
 
 def benchmark_rff_full_gramian_elemental() -> tuple[float, str]:
-    """Benchmark rff_full_gramian_elemental on synthetic QM7b-like data (N=50)."""
+    """Benchmark rff_full_gramian_elemental on synthetic QM7b-like data (N=600)."""
+    n_mols = 600
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, include_dX=True)
+    X, Q, W, b, dX = inputs["X"], inputs["Q"], inputs["W"], inputs["b"], inputs["dX"]
+    n_mols_actual = X.shape[0]
     rng = np.random.default_rng(42)
-    D = 500
-    n_mols = 50
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
-    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
-    n_mols_actual, max_atoms, rep_size = X.shape
-    # dX shape: (nmol, max_atoms, rep_size, max_atoms, 3)
-    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
     Y = rng.standard_normal(n_mols_actual)
     # F is 1D, shape (ngrads,) where ngrads = 3 * sum(natoms per mol)
     ngrads = 3 * sum(len(q) for q in Q)
@@ -1212,14 +1131,11 @@ def benchmark_rff_full_gramian_elemental() -> tuple[float, str]:
 
 
 def benchmark_rff_full_elemental() -> tuple[float, str]:
-    """Benchmark rff_full_elemental on synthetic QM7b-like data (N=50 molecules)."""
-    rng = np.random.default_rng(42)
-    D = 500
-    n_mols = 50
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
-    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
-    n_mols_actual, max_atoms, rep_size = X.shape
-    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
+    """Benchmark rff_full_elemental on synthetic QM7b-like data (N=600 molecules)."""
+    n_mols = 600
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, include_dX=True)
+    X, Q, W, b, dX = inputs["X"], inputs["Q"], inputs["W"], inputs["b"], inputs["dX"]
 
     start = time.perf_counter()
     _ = rff_full_elemental(X, dX, Q, W, b)
@@ -1229,14 +1145,12 @@ def benchmark_rff_full_elemental() -> tuple[float, str]:
 
 
 def benchmark_rff_gradient_gramian_elemental() -> tuple[float, str]:
-    """Benchmark rff_gradient_gramian_elemental on synthetic QM7b-like data (N=50)."""
+    """Benchmark rff_gradient_gramian_elemental on synthetic QM7b-like data (N=600)."""
+    n_mols = 600
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, include_dX=True)
+    X, Q, W, b, dX = inputs["X"], inputs["Q"], inputs["W"], inputs["b"], inputs["dX"]
     rng = np.random.default_rng(42)
-    D = 500
-    n_mols = 50
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
-    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
-    n_mols_actual, max_atoms, rep_size = X.shape
-    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
     ngrads = 3 * sum(len(q) for q in Q)
     F = rng.standard_normal(ngrads)
 
@@ -1248,31 +1162,28 @@ def benchmark_rff_gradient_gramian_elemental() -> tuple[float, str]:
 
 
 def benchmark_rff_gramian_elemental_rfp() -> tuple[float, str]:
-    """Benchmark rff_gramian_elemental_rfp on synthetic QM7b-like data (N=500 molecules)."""
-    rng = np.random.default_rng(42)
-    D = 2000
-    n_mols = 500
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
+    """Benchmark rff_gramian_elemental_rfp on synthetic QM7b-like data (N=4000 molecules)."""
+    n_mols = 4000
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D)
     X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
     n_mols_actual = X.shape[0]
-    Y = rng.standard_normal(n_mols_actual)
+    Y = np.random.default_rng(42).standard_normal(n_mols_actual)
 
     start = time.perf_counter()
     _ = rff_gramian_elemental_rfp(X, Q, W, b, Y)
     elapsed = (time.perf_counter() - start) * 1000
 
-    return elapsed, f"rff::rff_gramian_elemental_rfp (N=500, D={D}, QM7b-like)"
+    return elapsed, f"rff::rff_gramian_elemental_rfp (N={n_mols}, D={D}, QM7b-like)"
 
 
 def benchmark_rff_gradient_gramian_elemental_rfp() -> tuple[float, str]:
-    """Benchmark rff_gradient_gramian_elemental_rfp on synthetic QM7b-like data (N=50)."""
+    """Benchmark rff_gradient_gramian_elemental_rfp on synthetic QM7b-like data (N=600)."""
+    n_mols = 600
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, include_dX=True)
+    X, Q, W, b, dX = inputs["X"], inputs["Q"], inputs["W"], inputs["b"], inputs["dX"]
     rng = np.random.default_rng(42)
-    D = 500
-    n_mols = 50
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
-    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
-    n_mols_actual, max_atoms, rep_size = X.shape
-    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
     ngrads = 3 * sum(len(q) for q in Q)
     F = rng.standard_normal(ngrads)
 
@@ -1284,14 +1195,13 @@ def benchmark_rff_gradient_gramian_elemental_rfp() -> tuple[float, str]:
 
 
 def benchmark_rff_full_gramian_elemental_rfp() -> tuple[float, str]:
-    """Benchmark rff_full_gramian_elemental_rfp on synthetic QM7b-like data (N=50)."""
+    """Benchmark rff_full_gramian_elemental_rfp on synthetic QM7b-like data (N=600)."""
+    n_mols = 600
+    D = n_mols // 2
+    inputs = _make_qm7b_elemental_inputs(n_mols, D, include_dX=True)
+    X, Q, W, b, dX = inputs["X"], inputs["Q"], inputs["W"], inputs["b"], inputs["dX"]
+    n_mols_actual = X.shape[0]
     rng = np.random.default_rng(42)
-    D = 500
-    n_mols = 50
-    inputs = _make_qm7b_elemental_inputs(n_mols, D, rng)
-    X, Q, W, b = inputs["X"], inputs["Q"], inputs["W"], inputs["b"]
-    n_mols_actual, max_atoms, rep_size = X.shape
-    dX = rng.standard_normal((n_mols_actual, max_atoms, rep_size, max_atoms, 3))
     Y = rng.standard_normal(n_mols_actual)
     ngrads = 3 * sum(len(q) for q in Q)
     F = rng.standard_normal(ngrads)
