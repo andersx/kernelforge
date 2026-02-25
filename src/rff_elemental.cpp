@@ -141,14 +141,16 @@ void rff_gramian_elemental(
     if (chunk_size == 0)
         throw std::invalid_argument("rff_gramian_elemental: zero chunk_size");
 
-    std::memset(ZtZ, 0, D * D * sizeof(double));
-    std::memset(ZtY, 0, D * sizeof(double));
-
-    for (std::size_t chunk_start = 0; chunk_start < nmol; chunk_start += chunk_size) {
-        const std::size_t chunk_end = std::min(chunk_start + chunk_size, nmol);
+    // Accumulate directly into ZtZ/ZtY; clear_or_sum avoids memset.
+    std::size_t chunk_idx = 0;
+    for (std::size_t chunk_start = 0; chunk_start < nmol; chunk_start += chunk_size, ++chunk_idx) {
+        const std::size_t chunk_end  = std::min(chunk_start + chunk_size, nmol);
         const std::size_t this_chunk = chunk_end - chunk_start;
 
         double *LZ = aligned_alloc_64(this_chunk * D);
+
+        // zero accum on first chunk, then sum
+        double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
         rff_features_elemental(
             X     + chunk_start * max_atoms * rep_size,
@@ -158,12 +160,12 @@ void rff_gramian_elemental(
             this_chunk, max_atoms, rep_size, nelements, D,
             LZ);
 
-        // ZtZ += LZ^T @ LZ  (upper triangle via DSYRK, main thread)
+        // ZtZ += LZ^T @ LZ  (upper triangle via DSYRK)
         cblas_dsyrk(CblasRowMajor, CblasUpper, CblasTrans,
                     static_cast<int>(D),
                     static_cast<int>(this_chunk),
                     1.0, LZ, static_cast<int>(D),
-                    1.0, ZtZ, static_cast<int>(D));
+                    clear_or_sum, ZtZ, static_cast<int>(D));
 
         // ZtY += LZ^T @ Y_chunk
         cblas_dgemv(CblasRowMajor, CblasTrans,
@@ -171,7 +173,7 @@ void rff_gramian_elemental(
                     static_cast<int>(D),
                     1.0, LZ, static_cast<int>(D),
                     Y + chunk_start, 1,
-                    1.0, ZtY, 1);
+                    clear_or_sum, ZtY, 1);
 
         aligned_free_64(LZ);
     }
@@ -200,39 +202,44 @@ void rff_full_gramian_elemental(
     if (nmol == 0 || D == 0)
         throw std::invalid_argument("rff_full_gramian_elemental: zero dimension");
 
-    std::memset(ZtZ, 0, D * D * sizeof(double));
-    std::memset(ZtY, 0, D * sizeof(double));
-
     // ---- Energy loop (chunked) ----
-    for (std::size_t cs = 0; cs < nmol; cs += energy_chunk) {
-        const std::size_t ce = std::min(cs + energy_chunk, nmol);
-        const std::size_t nc = ce - cs;
+    // Accumulate directly into ZtZ/ZtY; clear_or_sum avoids memset.
+    {
+        std::size_t chunk_idx = 0;
+        for (std::size_t cs = 0; cs < nmol; cs += energy_chunk, ++chunk_idx) {
+            const std::size_t ce = std::min(cs + energy_chunk, nmol);
+            const std::size_t nc = ce - cs;
 
-        double *LZ = aligned_alloc_64(nc * D);
+            double *LZ = aligned_alloc_64(nc * D);
 
-        rff_features_elemental(
-            X     + cs * max_atoms * rep_size,
-            Q     + cs * max_atoms,
-            sizes + cs,
-            W, b,
-            nc, max_atoms, rep_size, nelements, D,
-            LZ);
+            // zero accum on first chunk, then sum
+            double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
-        cblas_dsyrk(CblasRowMajor, CblasUpper, CblasTrans,
-                    static_cast<int>(D), static_cast<int>(nc),
-                    1.0, LZ, static_cast<int>(D),
-                    1.0, ZtZ, static_cast<int>(D));
+            rff_features_elemental(
+                X     + cs * max_atoms * rep_size,
+                Q     + cs * max_atoms,
+                sizes + cs,
+                W, b,
+                nc, max_atoms, rep_size, nelements, D,
+                LZ);
 
-        cblas_dgemv(CblasRowMajor, CblasTrans,
-                    static_cast<int>(nc), static_cast<int>(D),
-                    1.0, LZ, static_cast<int>(D),
-                    Y + cs, 1,
-                    1.0, ZtY, 1);
+            cblas_dsyrk(CblasRowMajor, CblasUpper, CblasTrans,
+                        static_cast<int>(D), static_cast<int>(nc),
+                        1.0, LZ, static_cast<int>(D),
+                        clear_or_sum, ZtZ, static_cast<int>(D));
 
-        aligned_free_64(LZ);
+            cblas_dgemv(CblasRowMajor, CblasTrans,
+                        static_cast<int>(nc), static_cast<int>(D),
+                        1.0, LZ, static_cast<int>(D),
+                        Y + cs, 1,
+                        clear_or_sum, ZtY, 1);
+
+            aligned_free_64(LZ);
+        }
     }
 
     // ---- Force loop (chunked) ----
+    // Energy loop already ran so beta=1.0 always.
     // Precompute cumulative atom offsets for F indexing
     std::vector<std::size_t> cum_atoms(nmol + 1);
     cum_atoms[0] = 0;
@@ -463,15 +470,15 @@ void rff_gradient_gramian_elemental(
     if (chunk_size == 0)
         throw std::invalid_argument("rff_gradient_gramian_elemental: zero chunk_size");
 
-    std::memset(GtG, 0, D * D * sizeof(double));
-    std::memset(GtF, 0, D * sizeof(double));
-
     // Precompute cumulative atom offsets for F indexing
     std::vector<std::size_t> cum_atoms(nmol + 1);
     cum_atoms[0] = 0;
     for (std::size_t i = 0; i < nmol; ++i)
         cum_atoms[i + 1] = cum_atoms[i] + static_cast<std::size_t>(sizes[i]);
 
+    // Accumulate directly into GtG/GtF; clear_or_sum avoids memset.
+    // chunk_idx only incremented when a chunk actually does work (ngrads_chunk > 0).
+    std::size_t chunk_idx = 0;
     for (std::size_t cs = 0; cs < nmol; cs += chunk_size) {
         const std::size_t ce = std::min(cs + chunk_size, nmol);
         const std::size_t nc = ce - cs;
@@ -482,6 +489,9 @@ void rff_gradient_gramian_elemental(
         if (ngrads_chunk == 0) continue;
 
         double *G = aligned_alloc_64(D * ngrads_chunk);
+
+        // zero accum on first non-empty chunk, then sum
+        double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
         rff_gradient_elemental(
             X  + cs * max_atoms * rep_size,
@@ -497,16 +507,17 @@ void rff_gradient_gramian_elemental(
         cblas_dsyrk(CblasRowMajor, CblasUpper, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),
                     1.0, G, static_cast<int>(ngrads_chunk),
-                    1.0, GtG, static_cast<int>(D));
+                    clear_or_sum, GtG, static_cast<int>(D));
 
         // GtF += G @ F_chunk
         cblas_dgemv(CblasRowMajor, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),
                     1.0, G, static_cast<int>(ngrads_chunk),
                     F + 3 * cum_atoms[cs], 1,
-                    1.0, GtF, 1);
+                    clear_or_sum, GtF, 1);
 
         aligned_free_64(G);
+        ++chunk_idx;
     }
 
     // Symmetrize
@@ -534,16 +545,17 @@ void rff_gramian_elemental_rfp(
     if (chunk_size == 0)
         throw std::invalid_argument("rff_gramian_elemental_rfp: zero chunk_size");
 
-    const std::size_t nt = D * (D + 1) / 2;
-    std::memset(ZtZ_rfp, 0, nt * sizeof(double));
-    std::memset(ZtY,     0, D  * sizeof(double));
-
     // rff_features_elemental uses OMP internally → serial outer loop.
-    for (std::size_t cs = 0; cs < nmol; cs += chunk_size) {
+    // Accumulate directly into ZtZ_rfp/ZtY; clear_or_sum avoids memset.
+    std::size_t chunk_idx = 0;
+    for (std::size_t cs = 0; cs < nmol; cs += chunk_size, ++chunk_idx) {
         const std::size_t ce = std::min(cs + chunk_size, nmol);
         const std::size_t nc = ce - cs;
 
         double *LZ = aligned_alloc_64(nc * D);
+
+        // zero accum on first chunk, then sum
+        double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
         rff_features_elemental(
             X     + cs * max_atoms * rep_size,
@@ -558,13 +570,13 @@ void rff_gramian_elemental_rfp(
         kf_dsfrk('N', 'U', 'N',
                  static_cast<blas_int>(D), static_cast<blas_int>(nc),
                  1.0, LZ, static_cast<blas_int>(D),
-                 1.0, ZtZ_rfp);
+                 clear_or_sum, ZtZ_rfp);
 
         cblas_dgemv(CblasRowMajor, CblasTrans,
                     static_cast<int>(nc), static_cast<int>(D),
                     1.0, LZ, static_cast<int>(D),
                     Y + cs, 1,
-                    1.0, ZtY, 1);
+                    clear_or_sum, ZtY, 1);
 
         aligned_free_64(LZ);
     }
@@ -587,10 +599,6 @@ void rff_gradient_gramian_elemental_rfp(
     if (chunk_size == 0)
         throw std::invalid_argument("rff_gradient_gramian_elemental_rfp: zero chunk_size");
 
-    const std::size_t nt = D * (D + 1) / 2;
-    std::memset(GtG_rfp, 0, nt * sizeof(double));
-    std::memset(GtF,     0, D  * sizeof(double));
-
     // Precompute cumulative atom offsets for F indexing
     std::vector<std::size_t> cum_atoms(nmol + 1);
     cum_atoms[0] = 0;
@@ -598,6 +606,9 @@ void rff_gradient_gramian_elemental_rfp(
         cum_atoms[i + 1] = cum_atoms[i] + static_cast<std::size_t>(sizes[i]);
 
     // rff_gradient_elemental uses OMP internally → serial outer loop.
+    // Accumulate directly into GtG_rfp/GtF; clear_or_sum avoids memset.
+    // chunk_idx only incremented when a chunk actually does work (ngrads_chunk > 0).
+    std::size_t chunk_idx = 0;
     for (std::size_t cs = 0; cs < nmol; cs += chunk_size) {
         const std::size_t ce = std::min(cs + chunk_size, nmol);
         const std::size_t nc = ce - cs;
@@ -608,6 +619,9 @@ void rff_gradient_gramian_elemental_rfp(
         if (ngrads_chunk == 0) continue;
 
         double *G = aligned_alloc_64(D * ngrads_chunk);
+
+        // zero accum on first non-empty chunk, then sum
+        double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
         rff_gradient_elemental(
             X  + cs * max_atoms * rep_size,
@@ -623,15 +637,16 @@ void rff_gradient_gramian_elemental_rfp(
         kf_dsfrk('N', 'U', 'T',
                  static_cast<blas_int>(D), static_cast<blas_int>(ngrads_chunk),
                  1.0, G, static_cast<blas_int>(ngrads_chunk),
-                 1.0, GtG_rfp);
+                 clear_or_sum, GtG_rfp);
 
         cblas_dgemv(CblasRowMajor, CblasNoTrans,
                     static_cast<int>(D), static_cast<int>(ngrads_chunk),
                     1.0, G, static_cast<int>(ngrads_chunk),
                     F + 3 * cum_atoms[cs], 1,
-                    1.0, GtF, 1);
+                    clear_or_sum, GtF, 1);
 
         aligned_free_64(G);
+        ++chunk_idx;
     }
 }
 
@@ -652,40 +667,44 @@ void rff_full_gramian_elemental_rfp(
     if (energy_chunk == 0 || force_chunk == 0)
         throw std::invalid_argument("rff_full_gramian_elemental_rfp: zero chunk size");
 
-    const std::size_t nt = D * (D + 1) / 2;
-    std::memset(ZtZ_rfp, 0, nt * sizeof(double));
-    std::memset(ZtY,     0, D  * sizeof(double));
-
     // ---- Energy loop (serial: rff_features_elemental uses OMP) ----
-    for (std::size_t cs = 0; cs < nmol; cs += energy_chunk) {
-        const std::size_t ce = std::min(cs + energy_chunk, nmol);
-        const std::size_t nc = ce - cs;
+    // Accumulate directly into ZtZ_rfp/ZtY; clear_or_sum avoids memset.
+    {
+        std::size_t chunk_idx = 0;
+        for (std::size_t cs = 0; cs < nmol; cs += energy_chunk, ++chunk_idx) {
+            const std::size_t ce = std::min(cs + energy_chunk, nmol);
+            const std::size_t nc = ce - cs;
 
-        double *LZ = aligned_alloc_64(nc * D);
+            double *LZ = aligned_alloc_64(nc * D);
 
-        rff_features_elemental(
-            X     + cs * max_atoms * rep_size,
-            Q     + cs * max_atoms,
-            sizes + cs,
-            W, b,
-            nc, max_atoms, rep_size, nelements, D,
-            LZ);
+            // zero accum on first chunk, then sum
+            double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
-        kf_dsfrk('N', 'U', 'N',
-                 static_cast<blas_int>(D), static_cast<blas_int>(nc),
-                 1.0, LZ, static_cast<blas_int>(D),
-                 1.0, ZtZ_rfp);
+            rff_features_elemental(
+                X     + cs * max_atoms * rep_size,
+                Q     + cs * max_atoms,
+                sizes + cs,
+                W, b,
+                nc, max_atoms, rep_size, nelements, D,
+                LZ);
 
-        cblas_dgemv(CblasRowMajor, CblasTrans,
-                    static_cast<int>(nc), static_cast<int>(D),
-                    1.0, LZ, static_cast<int>(D),
-                    Y + cs, 1,
-                    1.0, ZtY, 1);
+            kf_dsfrk('N', 'U', 'N',
+                     static_cast<blas_int>(D), static_cast<blas_int>(nc),
+                     1.0, LZ, static_cast<blas_int>(D),
+                     clear_or_sum, ZtZ_rfp);
 
-        aligned_free_64(LZ);
+            cblas_dgemv(CblasRowMajor, CblasTrans,
+                        static_cast<int>(nc), static_cast<int>(D),
+                        1.0, LZ, static_cast<int>(D),
+                        Y + cs, 1,
+                        clear_or_sum, ZtY, 1);
+
+            aligned_free_64(LZ);
+        }
     }
 
     // ---- Force loop (serial: rff_gradient_elemental uses OMP) ----
+    // Energy loop already ran so beta=1.0 always.
     std::vector<std::size_t> cum_atoms(nmol + 1);
     cum_atoms[0] = 0;
     for (std::size_t i = 0; i < nmol; ++i)
