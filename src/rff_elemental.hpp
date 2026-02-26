@@ -18,11 +18,10 @@ namespace kf::rff {
 // b:         (nelements, D) row-major - per-element bias vectors
 // LZ:        (nmol, D) row-major output - summed features per molecule
 void rff_features_elemental(
-    const double *X, const int *Q, const int *sizes,
-    const double *W, const double *b,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    double *LZ);
+    const double *X, const int *Q, const int *sizes, const double *W, const double *b,
+    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size, std::size_t nelements,
+    std::size_t D, double *LZ
+);
 
 // Compute gradient of element-stratified RFF features w.r.t. atomic coords.
 //
@@ -42,13 +41,10 @@ void rff_features_elemental(
 // G:       (D, ngrads) row-major output
 //          G[d, g] = derivative of feature d w.r.t. gradient component g
 void rff_gradient_elemental(
-    const double *X, const double *dX,
-    const int *Q, const int *sizes,
-    const double *W, const double *b,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t ngrads,
-    double *G);
+    const double *X, const double *dX, const int *Q, const int *sizes, const double *W,
+    const double *b, std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D, std::size_t ngrads, double *G
+);
 
 // Combined energy+force feature matrix (stacked), elemental version:
 //   Z_full[0:nmol, :]          = rff_features_elemental(...)  (nmol, D)
@@ -57,13 +53,10 @@ void rff_gradient_elemental(
 // ngrads = 3 * sum(sizes)
 // Z_full: (nmol + ngrads, D) row-major output
 void rff_full_elemental(
-    const double *X, const double *dX,
-    const int *Q, const int *sizes,
-    const double *W, const double *b,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t ngrads,
-    double *Z_full);
+    const double *X, const double *dX, const int *Q, const int *sizes, const double *W,
+    const double *b, std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D, std::size_t ngrads, double *Z_full
+);
 
 // Compute chunked Gramian for energy-only RFF training:
 //   ZtZ = sum_chunks  LZ_chunk^T @ LZ_chunk   (D, D)
@@ -78,13 +71,10 @@ void rff_full_elemental(
 // ZtZ:      (D, D) row-major output — symmetric Gram matrix
 // ZtY:       (D,) output — projection vector
 void rff_gramian_elemental(
-    const double *X, const int *Q, const int *sizes,
-    const double *W, const double *b,
-    const double *Y,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t chunk_size,
-    double *ZtZ, double *ZtY);
+    const double *X, const int *Q, const int *sizes, const double *W, const double *b,
+    const double *Y, std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D, std::size_t chunk_size, double *ZtZ, double *ZtY
+);
 
 // Compute chunked Gramian for force-only elemental RFF training:
 //   GtG = G @ G^T,  GtF = G @ F
@@ -94,14 +84,10 @@ void rff_gramian_elemental(
 // GtG:        (D, D) row-major output
 // GtF:        (D,) output
 void rff_gradient_gramian_elemental(
-    const double *X, const double *dX,
-    const int *Q, const int *sizes,
-    const double *W, const double *b,
-    const double *F,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t chunk_size,
-    double *GtG, double *GtF);
+    const double *X, const double *dX, const int *Q, const int *sizes, const double *W,
+    const double *b, const double *F, std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D, std::size_t chunk_size, double *GtG, double *GtF
+);
 
 // Compute chunked Gramian for energy+force RFF training.
 //   ZtZ accumulates both energy and force contributions:
@@ -119,54 +105,41 @@ void rff_gradient_gramian_elemental(
 // ZtZ:        (D, D) row-major output
 // ZtY:         (D,) output
 void rff_full_gramian_elemental(
-    const double *X, const double *dX,
-    const int *Q, const int *sizes,
-    const double *W, const double *b,
-    const double *Y, const double *F,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t energy_chunk, std::size_t force_chunk,
-    double *ZtZ, double *ZtY);
+    const double *X, const double *dX, const int *Q, const int *sizes, const double *W,
+    const double *b, const double *Y, const double *F, std::size_t nmol, std::size_t max_atoms,
+    std::size_t rep_size, std::size_t nelements, std::size_t D, std::size_t energy_chunk,
+    std::size_t force_chunk, double *ZtZ, double *ZtY
+);
 
 // Chunked Gramian for energy-only elemental RFF training, RFP-packed output:
 //   ZtZ_rfp = pack_upper(Z^T @ Z),  ZtY = Z^T @ Y
 //
 // ZtZ_rfp: 1D array of length D*(D+1)/2, TRANSR='N', UPLO='U'
 void rff_gramian_elemental_rfp(
-    const double *X, const int *Q, const int *sizes,
-    const double *W, const double *b,
-    const double *Y,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t chunk_size,
-    double *ZtZ_rfp, double *ZtY);
+    const double *X, const int *Q, const int *sizes, const double *W, const double *b,
+    const double *Y, std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D, std::size_t chunk_size, double *ZtZ_rfp, double *ZtY
+);
 
 // Chunked Gramian for force-only elemental RFF training, RFP-packed output:
 //   GtG_rfp = pack_upper(G @ G^T),  GtF = G @ F
 //
 // GtG_rfp: 1D array of length D*(D+1)/2, TRANSR='N', UPLO='U'
 void rff_gradient_gramian_elemental_rfp(
-    const double *X, const double *dX,
-    const int *Q, const int *sizes,
-    const double *W, const double *b,
-    const double *F,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t chunk_size,
-    double *GtG_rfp, double *GtF);
+    const double *X, const double *dX, const int *Q, const int *sizes, const double *W,
+    const double *b, const double *F, std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
+    std::size_t nelements, std::size_t D, std::size_t chunk_size, double *GtG_rfp, double *GtF
+);
 
 // Chunked Gramian for energy+force elemental RFF training, RFP-packed output:
 //   ZtZ_rfp = pack_upper(Z^T@Z + G@G^T),  ZtY = Z^T@Y + G@F
 //
 // ZtZ_rfp: 1D array of length D*(D+1)/2, TRANSR='N', UPLO='U'
 void rff_full_gramian_elemental_rfp(
-    const double *X, const double *dX,
-    const int *Q, const int *sizes,
-    const double *W, const double *b,
-    const double *Y, const double *F,
-    std::size_t nmol, std::size_t max_atoms, std::size_t rep_size,
-    std::size_t nelements, std::size_t D,
-    std::size_t energy_chunk, std::size_t force_chunk,
-    double *ZtZ_rfp, double *ZtY);
+    const double *X, const double *dX, const int *Q, const int *sizes, const double *W,
+    const double *b, const double *Y, const double *F, std::size_t nmol, std::size_t max_atoms,
+    std::size_t rep_size, std::size_t nelements, std::size_t D, std::size_t energy_chunk,
+    std::size_t force_chunk, double *ZtZ_rfp, double *ZtY
+);
 
 }  // namespace kf::rff

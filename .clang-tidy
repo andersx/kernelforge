@@ -1,6 +1,9 @@
 ---
 # KernelForge C++ Static Analysis Configuration
-# Moderate checks for code quality without being overly restrictive
+# Moderate checks for code quality tailored for numerical/scientific computing
+# - Allows pointer arithmetic and C-style casts (common in BLAS/LAPACK interfaces)
+# - Allows deferred initialization and magic numbers (common in numerical code)
+# - Enforces modern C++ practices where appropriate
 
 Checks: >
   bugprone-*,
@@ -9,12 +12,15 @@ Checks: >
   modernize-*,
   performance-*,
   readability-*,
+  misc-*,
   -bugprone-easily-swappable-parameters,
   -bugprone-implicit-widening-of-multiplication-result,
   -modernize-use-trailing-return-type,
   -modernize-avoid-c-arrays,
+  -modernize-use-auto,
   -readability-identifier-length,
   -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
   -readability-magic-numbers,
   -cppcoreguidelines-avoid-magic-numbers,
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
@@ -24,6 +30,7 @@ Checks: >
   -cppcoreguidelines-avoid-const-or-ref-data-members,
   -cppcoreguidelines-owning-memory,
   -cppcoreguidelines-no-malloc,
+  -cppcoreguidelines-init-variables,
   -performance-no-int-to-ptr
 
 CheckOptions:

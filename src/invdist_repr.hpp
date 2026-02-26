@@ -24,8 +24,9 @@ void inverse_distance_upper(const double *R_flat, std::size_t N, double eps, dou
  *   d(1/r_ij)/dr_i = -(r_i - r_j)/r^3
  *   d(1/r_ij)/dr_j = +(r_i - r_j)/r^3
  */
-void inverse_distance_upper_and_jacobian(const double *R_flat, std::size_t N, double eps, double *x,
-                                         double *J);
+void inverse_distance_upper_and_jacobian(
+    const double *R_flat, std::size_t N, double eps, double *x, double *J
+);
 
 }  // namespace invdist
 }  // namespace kf

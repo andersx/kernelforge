@@ -14,45 +14,61 @@ namespace math {
 extern "C" {
 void dpotrf_(const char *uplo, const blas_int *n, double *a, const blas_int *lda, blas_int *info);
 
-void dgels_(const char *trans, const blas_int *m, const blas_int *n, const blas_int *nrhs,
-            double *a, const blas_int *lda, double *b, const blas_int *ldb, double *work,
-            const blas_int *lwork, blas_int *info);
+void dgels_(
+    const char *trans, const blas_int *m, const blas_int *n, const blas_int *nrhs, double *a,
+    const blas_int *lda, double *b, const blas_int *ldb, double *work, const blas_int *lwork,
+    blas_int *info
+);
 
-void dgelsd_(const blas_int *m, const blas_int *n, const blas_int *nrhs, double *a,
-             const blas_int *lda, double *b, const blas_int *ldb, double *s, const double *rcond,
-             blas_int *rank, double *work, const blas_int *lwork, blas_int *iwork, blas_int *info);
+void dgelsd_(
+    const blas_int *m, const blas_int *n, const blas_int *nrhs, double *a, const blas_int *lda,
+    double *b, const blas_int *ldb, double *s, const double *rcond, blas_int *rank, double *work,
+    const blas_int *lwork, blas_int *iwork, blas_int *info
+);
 
-double dlange_(const char *norm, const blas_int *m, const blas_int *n, const double *a,
-               const blas_int *lda, double *work);
+double dlange_(
+    const char *norm, const blas_int *m, const blas_int *n, const double *a, const blas_int *lda,
+    double *work
+);
 
-void dgetrf_(const blas_int *m, const blas_int *n, double *a, const blas_int *lda,
-             blas_int *ipiv, blas_int *info);
+void dgetrf_(
+    const blas_int *m, const blas_int *n, double *a, const blas_int *lda, blas_int *ipiv,
+    blas_int *info
+);
 
-void dgecon_(const char *norm, const blas_int *n, const double *a, const blas_int *lda,
-             const double *anorm, double *rcond, double *work, blas_int *iwork, blas_int *info);
+void dgecon_(
+    const char *norm, const blas_int *n, const double *a, const blas_int *lda, const double *anorm,
+    double *rcond, double *work, blas_int *iwork, blas_int *info
+);
 
-void dpotrs_(const char *uplo, const blas_int *n, const blas_int *nrhs, const double *a,
-             const blas_int *lda, double *b, const blas_int *ldb, blas_int *info);
+void dpotrs_(
+    const char *uplo, const blas_int *n, const blas_int *nrhs, const double *a, const blas_int *lda,
+    double *b, const blas_int *ldb, blas_int *info
+);
 
 void dpftrf_(const char *TRANSR, const char *UPLO, const blas_int *N, double *A, blas_int *INFO);
 
-void dpftrs_(const char *TRANSR, const char *UPLO, const blas_int *N, const blas_int *NRHS,
-             const double *A, double *B, const blas_int *LDB, blas_int *INFO);
+void dpftrs_(
+    const char *TRANSR, const char *UPLO, const blas_int *N, const blas_int *NRHS, const double *A,
+    double *B, const blas_int *LDB, blas_int *INFO
+);
 
-void dtrttf_(const char *TRANSR, const char *UPLO, const blas_int *N, const double *A,
-             const blas_int *LDA, double *ARF, blas_int *INFO);
+void dtrttf_(
+    const char *TRANSR, const char *UPLO, const blas_int *N, const double *A, const blas_int *LDA,
+    double *ARF, blas_int *INFO
+);
 
-void dtfttr_(const char *TRANSR, const char *UPLO, const blas_int *N, const double *ARF, double *A,
-             const blas_int *LDA, blas_int *INFO);
+void dtfttr_(
+    const char *TRANSR, const char *UPLO, const blas_int *N, const double *ARF, double *A,
+    const blas_int *LDA, blas_int *INFO
+);
 }
 
 // Solve K * alpha = y using Cholesky factorization.
 // K is symmetric positive-definite (will be overwritten).
 void solve_cholesky(double *K, const double *y, blas_int n, double *alpha, double regularize) {
-    if (n <= 0)
-        throw std::runtime_error("n must be > 0");
-    if (!K || !y)
-        throw std::runtime_error("K and y must be non-null");
+    if (n <= 0) throw std::runtime_error("n must be > 0");
+    if (!K || !y) throw std::runtime_error("K and y must be non-null");
 
     const std::size_t n_size = static_cast<std::size_t>(n);
 
@@ -115,12 +131,12 @@ static inline std::size_t rfp_diag_index_lower_N(blas_int n, blas_int j0) {
     return rfp_diag_index_upper_N(n, ju);
 }
 
-void solve_cholesky_rfp(double *K_arf, const double *y, blas_int n, double *alpha,
-                        double regularize, char uplo, char transr) {
-    if (n <= 0)
-        throw std::runtime_error("n must be > 0");
-    if (!K_arf || !y || !alpha)
-        throw std::runtime_error("null pointer");
+void solve_cholesky_rfp(
+    double *K_arf, const double *y, blas_int n, double *alpha, double regularize, char uplo,
+    char transr
+) {
+    if (n <= 0) throw std::runtime_error("n must be > 0");
+    if (!K_arf || !y || !alpha) throw std::runtime_error("null pointer");
     if (!(uplo == 'U' || uplo == 'u' || uplo == 'L' || uplo == 'l'))
         throw std::runtime_error("uplo must be 'U' or 'L'");
     if (!(transr == 'N' || transr == 'n'))
@@ -147,28 +163,27 @@ void solve_cholesky_rfp(double *K_arf, const double *y, blas_int n, double *alph
 
     blas_int info = 0;
     dpftrf_(&transr, &uplo, &n, K_arf, &info);
-    if (info != 0)
-        throw std::runtime_error("DPFTRF failed, info=" + std::to_string(info));
+    if (info != 0) throw std::runtime_error("DPFTRF failed, info=" + std::to_string(info));
 
     const blas_int nrhs = 1, ldb = n;
     dpftrs_(&transr, &uplo, &n, &nrhs, K_arf, alpha, &ldb, &info);
-    if (info != 0)
-        throw std::runtime_error("DPFTRS failed, info=" + std::to_string(info));
+    if (info != 0) throw std::runtime_error("DPFTRS failed, info=" + std::to_string(info));
 }
 
-blas_int full_to_rfp(char transr, char uplo, blas_int n, const double *A_colmaj, blas_int lda,
-                     double *ARF) {
+blas_int full_to_rfp(
+    char transr, char uplo, blas_int n, const double *A_colmaj, blas_int lda, double *ARF
+) {
     blas_int info = 0;
     dtrttf_(&transr, &uplo, &n, A_colmaj, &lda, ARF, &info);
     return info;
 }
 
-blas_int rfp_to_full(char transr, char uplo, blas_int n, const double *ARF, double *A_colmaj,
-                     blas_int lda) {
+blas_int rfp_to_full(
+    char transr, char uplo, blas_int n, const double *ARF, double *A_colmaj, blas_int lda
+) {
     blas_int info = 0;
     dtfttr_(&transr, &uplo, &n, ARF, A_colmaj, &lda, &info);
-    if (info != 0)
-        return info;
+    if (info != 0) return info;
 
     // Normalize UPLO
     const bool upper = (uplo == 'U' || uplo == 'u');
@@ -198,10 +213,8 @@ blas_int rfp_to_full(char transr, char uplo, blas_int n, const double *ARF, doub
 // Solve min||A x - y||_2 using QR/LQ decomposition (DGELS, 'N' transpose).
 // A is C-order (row-major) m×n; a temporary column-major copy is made internally.
 void solve_qr(const double *A, const double *y, blas_int m, blas_int n, double *x) {
-    if (m <= 0 || n <= 0)
-        throw std::runtime_error("m and n must be > 0");
-    if (!A || !y || !x)
-        throw std::runtime_error("null pointer");
+    if (m <= 0 || n <= 0) throw std::runtime_error("m and n must be > 0");
+    if (!A || !y || !x) throw std::runtime_error("null pointer");
 
     const std::size_t m_sz = static_cast<std::size_t>(m);
     const std::size_t n_sz = static_cast<std::size_t>(n);
@@ -231,8 +244,7 @@ void solve_qr(const double *A, const double *y, blas_int m, blas_int n, double *
     std::vector<double> work(static_cast<std::size_t>(lwork));
     dgels_(&trans, &m, &n, &nrhs, A_f.data(), &m, B.data(), &ldb, work.data(), &lwork, &info);
 
-    if (info != 0)
-        throw std::runtime_error("DGELS failed, info=" + std::to_string(info));
+    if (info != 0) throw std::runtime_error("DGELS failed, info=" + std::to_string(info));
 
     // Solution is in B[0:n]
     std::memcpy(x, B.data(), n_sz * sizeof(double));
@@ -240,12 +252,9 @@ void solve_qr(const double *A, const double *y, blas_int m, blas_int n, double *
 
 // Solve min||A x - y||_2 using divide-and-conquer SVD (DGELSD).
 // A is C-order (row-major) m×n; a temporary column-major copy is made internally.
-void solve_svd(const double *A, const double *y, blas_int m, blas_int n, double *x,
-               double rcond) {
-    if (m <= 0 || n <= 0)
-        throw std::runtime_error("m and n must be > 0");
-    if (!A || !y || !x)
-        throw std::runtime_error("null pointer");
+void solve_svd(const double *A, const double *y, blas_int m, blas_int n, double *x, double rcond) {
+    if (m <= 0 || n <= 0) throw std::runtime_error("m and n must be > 0");
+    if (!A || !y || !x) throw std::runtime_error("null pointer");
 
     const std::size_t m_sz = static_cast<std::size_t>(m);
     const std::size_t n_sz = static_cast<std::size_t>(n);
@@ -272,8 +281,22 @@ void solve_svd(const double *A, const double *y, blas_int m, blas_int n, double 
     blas_int lwork_q = -1;
     double work_q = 0.0;
     blas_int iwork_q = 0;
-    dgelsd_(&m, &n, &nrhs, A_f.data(), &m, B.data(), &ldb, S.data(), &rcond, &rank, &work_q,
-            &lwork_q, &iwork_q, &info);
+    dgelsd_(
+        &m,
+        &n,
+        &nrhs,
+        A_f.data(),
+        &m,
+        B.data(),
+        &ldb,
+        S.data(),
+        &rcond,
+        &rank,
+        &work_q,
+        &lwork_q,
+        &iwork_q,
+        &info
+    );
 
     const blas_int lwork = static_cast<blas_int>(work_q);
     const blas_int liwork = iwork_q;
@@ -281,11 +304,24 @@ void solve_svd(const double *A, const double *y, blas_int m, blas_int n, double 
     std::vector<double> work(static_cast<std::size_t>(lwork));
     std::vector<blas_int> iwork(static_cast<std::size_t>(liwork));
 
-    dgelsd_(&m, &n, &nrhs, A_f.data(), &m, B.data(), &ldb, S.data(), &rcond, &rank, work.data(),
-            &lwork, iwork.data(), &info);
+    dgelsd_(
+        &m,
+        &n,
+        &nrhs,
+        A_f.data(),
+        &m,
+        B.data(),
+        &ldb,
+        S.data(),
+        &rcond,
+        &rank,
+        work.data(),
+        &lwork,
+        iwork.data(),
+        &info
+    );
 
-    if (info != 0)
-        throw std::runtime_error("DGELSD failed, info=" + std::to_string(info));
+    if (info != 0) throw std::runtime_error("DGELSD failed, info=" + std::to_string(info));
 
     // Solution is in B[0:n]
     std::memcpy(x, B.data(), n_sz * sizeof(double));
@@ -294,10 +330,8 @@ void solve_svd(const double *A, const double *y, blas_int m, blas_int n, double 
 // 1-norm condition number of square n×n matrix via LU factorization.
 // A is C-order; no transposition needed since cond(A) = cond(A^T).
 double condition_number_ge(const double *A, blas_int n) {
-    if (n <= 0)
-        throw std::runtime_error("n must be > 0");
-    if (!A)
-        throw std::runtime_error("null pointer");
+    if (n <= 0) throw std::runtime_error("n must be > 0");
+    if (!A) throw std::runtime_error("null pointer");
 
     const std::size_t n_sz = static_cast<std::size_t>(n);
 
@@ -316,20 +350,16 @@ double condition_number_ge(const double *A, blas_int n) {
     std::vector<blas_int> ipiv(n_sz);
     blas_int info = 0;
     dgetrf_(&n, &n, A_copy.data(), &n, ipiv.data(), &info);
-    if (info != 0)
-        throw std::runtime_error("DGETRF failed, info=" + std::to_string(info));
+    if (info != 0) throw std::runtime_error("DGETRF failed, info=" + std::to_string(info));
 
     // Estimate reciprocal condition number
     double rcond = 0.0;
     std::vector<double> work_con(static_cast<std::size_t>(4 * n));
     std::vector<blas_int> iwork_con(n_sz);
-    dgecon_(&norm, &n, A_copy.data(), &n, &anorm, &rcond, work_con.data(), iwork_con.data(),
-            &info);
-    if (info != 0)
-        throw std::runtime_error("DGECON failed, info=" + std::to_string(info));
+    dgecon_(&norm, &n, A_copy.data(), &n, &anorm, &rcond, work_con.data(), iwork_con.data(), &info);
+    if (info != 0) throw std::runtime_error("DGECON failed, info=" + std::to_string(info));
 
-    if (rcond == 0.0)
-        return std::numeric_limits<double>::infinity();
+    if (rcond == 0.0) return std::numeric_limits<double>::infinity();
 
     return 1.0 / rcond;
 }

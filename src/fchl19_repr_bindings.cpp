@@ -39,23 +39,22 @@ static std::vector<double> as_coords_vector(const py::array &arr, size_t natoms)
 
 static std::vector<int> as_int_vector(const py::array &arr, size_t expected = SIZE_MAX) {
     auto buf = arr.cast<py::array_t<int, py::array::c_style | py::array::forcecast>>();
-    if (buf.ndim() != 1)
-        throw std::invalid_argument("array must be 1D");
+    if (buf.ndim() != 1) throw std::invalid_argument("array must be 1D");
     if (expected != SIZE_MAX && static_cast<size_t>(buf.shape(0)) != expected)
         throw std::invalid_argument("unexpected array length");
     auto r = buf.unchecked<1>();
     return std::vector<int>(r.data(0), r.data(0) + r.shape(0));
 }
 
-py::array_t<double> generate_fchl_acsf_py(const py::array &coords,     // (n,3) or (3n,)
-                                          const py::array &nuclear_z,  // (n,)
-                                          std::vector<int> elements, int nRs2, int nRs3,
-                                          int nFourier, double eta2, double eta3, double zeta,
-                                          double rcut, double acut, double two_body_decay,
-                                          double three_body_decay, double three_body_weight) {
+py::array_t<double> generate_fchl_acsf_py(
+    const py::array &coords,     // (n,3) or (3n,)
+    const py::array &nuclear_z,  // (n,)
+    std::vector<int> elements, int nRs2, int nRs3, int nFourier, double eta2, double eta3,
+    double zeta, double rcut, double acut, double two_body_decay, double three_body_decay,
+    double three_body_weight
+) {
     const size_t natoms = static_cast<size_t>(nuclear_z.cast<py::array>().shape(0));
-    if (natoms == 0)
-        throw std::invalid_argument("n_atoms must be > 0");
+    if (natoms == 0) throw std::invalid_argument("n_atoms must be > 0");
 
     std::vector<double> coords_v = as_coords_vector(coords, natoms);
     std::vector<int> z_v = as_int_vector(nuclear_z, natoms);
@@ -93,9 +92,23 @@ py::array_t<double> generate_fchl_acsf_py(const py::array &coords,     // (n,3) 
     std::vector<double> rep;
     {
         py::gil_scoped_release release;
-        kf::fchl19::generate_fchl_acsf(coords_v, z_v, elements, Rs2_v, Rs3_v, Ts_v, eta2, eta3, zeta,
-                                       rcut, acut, two_body_decay, three_body_decay,
-                                       norm_three_body_weight, rep);
+        kf::fchl19::generate_fchl_acsf(
+            coords_v,
+            z_v,
+            elements,
+            Rs2_v,
+            Rs3_v,
+            Ts_v,
+            eta2,
+            eta3,
+            zeta,
+            rcut,
+            acut,
+            two_body_decay,
+            three_body_decay,
+            norm_three_body_weight,
+            rep
+        );
     }
 
     if (rep.size() != natoms * rep_size)
@@ -109,9 +122,10 @@ py::array_t<double> generate_fchl_acsf_py(const py::array &coords,     // (n,3) 
 }
 
 // Build basis arrays like in your Python: linspace(0,rcut,1+n)[1:]
-static void build_basis_from_sizes(int nRs2, int nRs3, int nFourier, double rcut, double acut,
-                                   std::vector<double> &Rs2, std::vector<double> &Rs3,
-                                   std::vector<double> &Ts) {
+static void build_basis_from_sizes(
+    int nRs2, int nRs3, int nFourier, double rcut, double acut, std::vector<double> &Rs2,
+    std::vector<double> &Rs3, std::vector<double> &Ts
+) {
     Rs2.clear();
     Rs3.clear();
     Ts.clear();
@@ -129,21 +143,19 @@ static void build_basis_from_sizes(int nRs2, int nRs3, int nFourier, double rcut
     }
 }
 
-static py::tuple generate_fchl_acsf_rep_and_grad_py(const py::array &coords,     // (n,3)
-                                                    const py::array &nuclear_z,  // (n,)
-                                                    std::vector<int> elements, int nRs2, int nRs3,
-                                                    int nFourier, double eta2, double eta3,
-                                                    double zeta, double rcut, double acut,
-                                                    double two_body_decay, double three_body_decay,
-                                                    double three_body_weight) {
+static py::tuple generate_fchl_acsf_rep_and_grad_py(
+    const py::array &coords,     // (n,3)
+    const py::array &nuclear_z,  // (n,)
+    std::vector<int> elements, int nRs2, int nRs3, int nFourier, double eta2, double eta3,
+    double zeta, double rcut, double acut, double two_body_decay, double three_body_decay,
+    double three_body_weight
+) {
     const std::size_t natoms = static_cast<std::size_t>(nuclear_z.cast<py::array>().shape(0));
-    if (natoms == 0)
-        throw std::invalid_argument("n_atoms must be > 0");
+    if (natoms == 0) throw std::invalid_argument("n_atoms must be > 0");
 
     std::vector<double> coords_v = as_coords_vector(coords, natoms);
     std::vector<int> z_v = as_int_vector(nuclear_z, natoms);
-    if (elements.empty())
-        elements = {1, 6, 7, 8, 16};
+    if (elements.empty()) elements = {1, 6, 7, 8, 16};
 
     std::vector<double> Rs2_v, Rs3_v, Ts_v;
     build_basis_from_sizes(nRs2, nRs3, nFourier, rcut, acut, Rs2_v, Rs3_v, Ts_v);
@@ -157,21 +169,40 @@ static py::tuple generate_fchl_acsf_rep_and_grad_py(const py::array &coords,    
     std::vector<double> rep, grad;
     {
         py::gil_scoped_release release;
-        kf::fchl19::generate_fchl_acsf_and_gradients(coords_v, z_v, elements, Rs2_v, Rs3_v, Ts_v, eta2,
-                                                 eta3, zeta, rcut, acut, two_body_decay,
-                                                 three_body_decay, w3, rep, grad);
+        kf::fchl19::generate_fchl_acsf_and_gradients(
+            coords_v,
+            z_v,
+            elements,
+            Rs2_v,
+            Rs3_v,
+            Ts_v,
+            eta2,
+            eta3,
+            zeta,
+            rcut,
+            acut,
+            two_body_decay,
+            three_body_decay,
+            w3,
+            rep,
+            grad
+        );
     }
 
     // Wrap outputs
     py::array_t<double> rep_arr(
-        py::array::ShapeContainer{(py::ssize_t)natoms, (py::ssize_t)rep_size});
+        py::array::ShapeContainer{(py::ssize_t)natoms, (py::ssize_t)rep_size}
+    );
     auto R = rep_arr.mutable_unchecked<2>();
     for (std::size_t i = 0; i < natoms; ++i)
         for (std::size_t j = 0; j < rep_size; ++j)
             R(i, j) = rep[i * rep_size + j];
 
     py::array_t<double> grad_arr(py::array::ShapeContainer{
-        (py::ssize_t)natoms, (py::ssize_t)rep_size, (py::ssize_t)(3 * natoms)});
+        (py::ssize_t)natoms,
+        (py::ssize_t)rep_size,
+        (py::ssize_t)(3 * natoms)
+    });
     auto G = grad_arr.mutable_unchecked<3>();
     std::size_t idx = 0;
     for (std::size_t i = 0; i < natoms; ++i)
@@ -186,17 +217,34 @@ static py::tuple generate_fchl_acsf_rep_and_grad_py(const py::array &coords,    
 PYBIND11_MODULE(fchl19_repr, m) {
     m.doc() = "FCHL19 representation and gradients";
 
-    m.def("compute_rep_size", &kf::fchl19::compute_rep_size, py::arg("nelements"), py::arg("nbasis2"),
-          py::arg("nbasis3"), py::arg("nabasis"),
-          "Compute the total representation size per-atom.");
+    m.def(
+        "compute_rep_size",
+        &kf::fchl19::compute_rep_size,
+        py::arg("nelements"),
+        py::arg("nbasis2"),
+        py::arg("nbasis3"),
+        py::arg("nabasis"),
+        "Compute the total representation size per-atom."
+    );
 
-    m.def("generate_fchl_acsf", &generate_fchl_acsf_py, py::arg("coords"), py::arg("nuclear_z"),
-          py::arg("elements") = std::vector<int>{1, 6, 7, 8, 16}, py::arg("nRs2") = 24,
-          py::arg("nRs3") = 20, py::arg("nFourier") = 1, py::arg("eta2") = 0.32,
-          py::arg("eta3") = 2.7, py::arg("zeta") = M_PI, py::arg("rcut") = 8.0,
-          py::arg("acut") = 8.0, py::arg("two_body_decay") = 1.8,
-          py::arg("three_body_decay") = 0.57, py::arg("three_body_weight") = 13.4,
-          R"pbdoc(
+    m.def(
+        "generate_fchl_acsf",
+        &generate_fchl_acsf_py,
+        py::arg("coords"),
+        py::arg("nuclear_z"),
+        py::arg("elements") = std::vector<int>{1, 6, 7, 8, 16},
+        py::arg("nRs2") = 24,
+        py::arg("nRs3") = 20,
+        py::arg("nFourier") = 1,
+        py::arg("eta2") = 0.32,
+        py::arg("eta3") = 2.7,
+        py::arg("zeta") = M_PI,
+        py::arg("rcut") = 8.0,
+        py::arg("acut") = 8.0,
+        py::arg("two_body_decay") = 1.8,
+        py::arg("three_body_decay") = 0.57,
+        py::arg("three_body_weight") = 13.4,
+        R"pbdoc(
 Generate FCHL-like ACSF representation.
 
 
@@ -228,16 +276,27 @@ Returns
 -------
 ndarray, shape (n_atoms, rep_size)
 Per-atom representation.
-)pbdoc");
+)pbdoc"
+    );
 
-    m.def("generate_fchl_acsf_and_gradients", &generate_fchl_acsf_rep_and_grad_py,
-          py::arg("coords"), py::arg("nuclear_z"),
-          py::arg("elements") = std::vector<int>{1, 6, 7, 8, 16}, py::arg("nRs2") = 24,
-          py::arg("nRs3") = 20, py::arg("nFourier") = 1, py::arg("eta2") = 0.32,
-          py::arg("eta3") = 2.7, py::arg("zeta") = M_PI, py::arg("rcut") = 8.0,
-          py::arg("acut") = 8.0, py::arg("two_body_decay") = 1.8,
-          py::arg("three_body_decay") = 0.57, py::arg("three_body_weight") = 13.4,
-          R"pbdoc(
+    m.def(
+        "generate_fchl_acsf_and_gradients",
+        &generate_fchl_acsf_rep_and_grad_py,
+        py::arg("coords"),
+        py::arg("nuclear_z"),
+        py::arg("elements") = std::vector<int>{1, 6, 7, 8, 16},
+        py::arg("nRs2") = 24,
+        py::arg("nRs3") = 20,
+        py::arg("nFourier") = 1,
+        py::arg("eta2") = 0.32,
+        py::arg("eta3") = 2.7,
+        py::arg("zeta") = M_PI,
+        py::arg("rcut") = 8.0,
+        py::arg("acut") = 8.0,
+        py::arg("two_body_decay") = 1.8,
+        py::arg("three_body_decay") = 0.57,
+        py::arg("three_body_weight") = 13.4,
+        R"pbdoc(
 Generate ACSF representation and its Jacobian with respect to atomic coordinates.
 
 This version computes gradients by **central finite differences** over coordinates
@@ -249,5 +308,6 @@ Returns
 (rep, grad)
   rep : (n_atoms, rep_size)
   grad: (n_atoms, rep_size, n_atoms, 3)
-)pbdoc");
+)pbdoc"
+    );
 }
