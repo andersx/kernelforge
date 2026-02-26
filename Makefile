@@ -33,9 +33,17 @@ environment:
 
 check: format typecheck
 
-format:
+format: format-python format-cpp
+
+format-python:
 	uv run ruff format python/ tests/
 	uv run ruff check --select I --fix python/ tests/
+
+format-cpp:
+	clang-format -i src/*.cpp src/*.hpp src/*.h
+
+tidy:
+	clang-tidy src/*.cpp src/*.hpp -- -std=c++17 -Isrc
 
 typecheck:
 	uv run ty check python/ tests/
@@ -44,4 +52,3 @@ clean:
 	rm -rf ./.venv/
 	rm -rf ./.ruff_cache/
 	rm -rf ./.pytest_cache/
-
