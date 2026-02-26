@@ -16,7 +16,8 @@ namespace py = pybind11;
 
 py::array_t<double> solve_cholesky_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> K_in,
-    py::array_t<double, py::array::c_style | py::array::forcecast> y_in, double regularize = 0.0) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_in, double regularize = 0.0
+) {
     py::buffer_info Kbuf = K_in.request(true);
     py::buffer_info ybuf = y_in.request();
 
@@ -48,7 +49,8 @@ py::array_t<double> solve_cholesky_py(
 static py::array_t<double> cho_solve_rfp_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> K_rfp_in,  // 1-D RFP
     py::array_t<double, py::array::c_style | py::array::forcecast> y_in,      // 1-D
-    double l2 = 0.0) {
+    double l2 = 0.0
+) {
     auto Kbuf = K_rfp_in.request();  // factorization overwrites K_rfp in-place
     auto ybuf = y_in.request();
 
@@ -65,8 +67,7 @@ static py::array_t<double> cho_solve_rfp_py(
     const auto *y = static_cast<const double *>(ybuf.ptr);
 
     double *alpha_ptr = aligned_alloc_64(n_size);
-    if (!alpha_ptr)
-        throw std::bad_alloc();
+    if (!alpha_ptr) throw std::bad_alloc();
 
     kf::math::solve_cholesky_rfp(K_rfp, y, n, alpha_ptr, l2, 'U', 'N');
 
@@ -89,7 +90,8 @@ static inline char swap_uplo(char u) {
 // We pass the raw C-order pointer straight to Fortran, but **swap UPLO**.
 py::array_t<double> full_to_rfp_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> A_in, char uplo = 'L',
-    char transr = 'N') {
+    char transr = 'N'
+) {
     py::buffer_info Abuf = A_in.request();  // C-order; no copy
     if (Abuf.ndim != 2 || Abuf.shape[0] != Abuf.shape[1])
         throw std::runtime_error("A must be square (n x n).");
@@ -104,8 +106,7 @@ py::array_t<double> full_to_rfp_py(
     const std::size_t n_size = static_cast<std::size_t>(n);
     const std::size_t nt = n_size * (n_size + 1) / 2;
     double *ARF = aligned_alloc_64(nt);
-    if (!ARF)
-        throw std::bad_alloc();
+    if (!ARF) throw std::bad_alloc();
 
     // Treat Arow as column-major A^T; swap UPLO so the intended triangle is used
     const blas_int lda = n;
@@ -125,12 +126,11 @@ py::array_t<double> full_to_rfp_py(
 // the transpose view is identical, and swapping UPLO ensures the expected triangle is filled.
 py::array_t<double> rfp_to_full_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> ARF_in, blas_int n,
-    char uplo = 'L', char transr = 'N') {
-    if (n <= 0)
-        throw std::runtime_error("n must be > 0");
+    char uplo = 'L', char transr = 'N'
+) {
+    if (n <= 0) throw std::runtime_error("n must be > 0");
     py::buffer_info Rbuf = ARF_in.request();
-    if (Rbuf.ndim != 1)
-        throw std::runtime_error("ARF must be a 1-D array.");
+    if (Rbuf.ndim != 1) throw std::runtime_error("ARF must be a 1-D array.");
     const std::size_t n_size = static_cast<std::size_t>(n);
     const std::size_t need = n_size * (n_size + 1) / 2;
     if (static_cast<std::size_t>(Rbuf.shape[0]) != need)
@@ -144,8 +144,7 @@ py::array_t<double> rfp_to_full_py(
     // Allocate full matrix buffer once; we will *return it as C-order*
     const std::size_t nn = n_size * n_size;
     double *A = aligned_alloc_64(nn);
-    if (!A)
-        throw std::bad_alloc();
+    if (!A) throw std::bad_alloc();
 
     // Fortran writes treating A as column-major; swap UPLO to compensate
     const blas_int lda = n;
@@ -161,17 +160,18 @@ py::array_t<double> rfp_to_full_py(
         /* shape   */ {(py::ssize_t)n, (py::ssize_t)n},
         /* strides */ {(py::ssize_t)(sizeof(double) * n), (py::ssize_t)sizeof(double)},
         /* ptr     */ A,
-        /* base    */ cap);
+        /* base    */ cap
+    );
 }
 
 static py::array_t<double> solve_qr_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> A_in,
-    py::array_t<double, py::array::c_style | py::array::forcecast> y_in) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_in
+) {
     py::buffer_info Abuf = A_in.request();
     py::buffer_info ybuf = y_in.request();
 
-    if (Abuf.ndim != 2)
-        throw std::runtime_error("A must be 2D (m x n).");
+    if (Abuf.ndim != 2) throw std::runtime_error("A must be 2D (m x n).");
     if (ybuf.ndim != 1 || ybuf.shape[0] != Abuf.shape[0])
         throw std::runtime_error("y must be 1D with length m (rows of A).");
 
@@ -192,13 +192,12 @@ static py::array_t<double> solve_qr_py(
 
 static py::array_t<double> solve_svd_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> A_in,
-    py::array_t<double, py::array::c_style | py::array::forcecast> y_in,
-    double rcond = 0.0) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> y_in, double rcond = 0.0
+) {
     py::buffer_info Abuf = A_in.request();
     py::buffer_info ybuf = y_in.request();
 
-    if (Abuf.ndim != 2)
-        throw std::runtime_error("A must be 2D (m x n).");
+    if (Abuf.ndim != 2) throw std::runtime_error("A must be 2D (m x n).");
     if (ybuf.ndim != 1 || ybuf.shape[0] != Abuf.shape[0])
         throw std::runtime_error("y must be 1D with length m (rows of A).");
 
@@ -218,7 +217,8 @@ static py::array_t<double> solve_svd_py(
 }
 
 static double condition_number_ge_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> A_in) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> A_in
+) {
     py::buffer_info Abuf = A_in.request();
 
     if (Abuf.ndim != 2 || Abuf.shape[0] != Abuf.shape[1])
@@ -247,37 +247,76 @@ std::string get_blas_info() {
 
 PYBIND11_MODULE(kernelmath, m) {
     m.doc() = "Mathematical utilities (Cholesky solvers, etc.)";
-    m.def("solve_cholesky", &solve_cholesky_py, py::arg("K"), py::arg("y"),
-          py::arg("regularize") = 0.0,
-          "Solve Kx=y using Cholesky factorization.\n"
-          "- K is overwritten with factorization\n"
-          "- y is preserved\n"
-          "- regularize is added to diagonal of K\n"
-          "- alpha is returned");
-    m.def("cho_solve_rfp", &cho_solve_rfp_py, py::arg("K_rfp"), py::arg("y"),
-          py::arg("l2") = 0.0,
-          "Solve (K + l2*I) @ alpha = y where K is in RFP packed format.\n"
-          "K_rfp is overwritten with the Cholesky factor — pass K_rfp.copy() to preserve it.\n"
-          "Uses TRANSR='N', UPLO='U' (the convention all kernelforge RFP kernels produce).\n"
-          "l2: L2 regularization added to the diagonal before factorization (default 0.0).\n"
-          "Returns alpha as a 1D numpy array of length n.");
-    m.def("full_to_rfp", &full_to_rfp_py, py::arg("A"), py::arg("uplo") = 'U',
-          py::arg("transr") = 'N',
-          "Full (n×n, Fortran-order) -> RFP (1-D). No copies; A must be F-contiguous.");
-    m.def("rfp_to_full", &rfp_to_full_py, py::arg("ARF"), py::arg("n"), py::arg("uplo") = 'U',
-          py::arg("transr") = 'N',
-          "RFP (1-D) -> Full (n×n, Fortran-order). No extra copies; returns F-contiguous.");
-    m.def("solve_qr", &solve_qr_py, py::arg("A"), py::arg("y"),
-          "Solve min||A@x - y||_2 (overdetermined) or min||x||_2 s.t. A@x=y (underdetermined).\n"
-          "A is m×n, y is length m; returns x of length n.\n"
-          "Uses DGELS (QR/LQ decomposition). A must have full rank.");
-    m.def("solve_svd", &solve_svd_py, py::arg("A"), py::arg("y"), py::arg("rcond") = 0.0,
-          "Same as solve_qr but uses DGELSD (divide-and-conquer SVD).\n"
-          "Handles rank-deficient A: singular values < rcond*sigma_max are treated as zero.\n"
-          "rcond=0.0 uses machine epsilon as threshold.");
-    m.def("condition_number_ge", &condition_number_ge_py, py::arg("A"),
-          "1-norm condition number of a square matrix A via LU factorization (DGETRF+DGECON).\n"
-          "Works for any square matrix (not just symmetric/positive-definite).");
-    m.def("get_blas_info", &get_blas_info,
-          "Return a string identifying the BLAS backend and integer width, e.g. 'OpenBLAS ILP64'.");
+    m.def(
+        "solve_cholesky",
+        &solve_cholesky_py,
+        py::arg("K"),
+        py::arg("y"),
+        py::arg("regularize") = 0.0,
+        "Solve Kx=y using Cholesky factorization.\n"
+        "- K is overwritten with factorization\n"
+        "- y is preserved\n"
+        "- regularize is added to diagonal of K\n"
+        "- alpha is returned"
+    );
+    m.def(
+        "cho_solve_rfp",
+        &cho_solve_rfp_py,
+        py::arg("K_rfp"),
+        py::arg("y"),
+        py::arg("l2") = 0.0,
+        "Solve (K + l2*I) @ alpha = y where K is in RFP packed format.\n"
+        "K_rfp is overwritten with the Cholesky factor — pass K_rfp.copy() to preserve it.\n"
+        "Uses TRANSR='N', UPLO='U' (the convention all kernelforge RFP kernels produce).\n"
+        "l2: L2 regularization added to the diagonal before factorization (default 0.0).\n"
+        "Returns alpha as a 1D numpy array of length n."
+    );
+    m.def(
+        "full_to_rfp",
+        &full_to_rfp_py,
+        py::arg("A"),
+        py::arg("uplo") = 'U',
+        py::arg("transr") = 'N',
+        "Full (n×n, Fortran-order) -> RFP (1-D). No copies; A must be F-contiguous."
+    );
+    m.def(
+        "rfp_to_full",
+        &rfp_to_full_py,
+        py::arg("ARF"),
+        py::arg("n"),
+        py::arg("uplo") = 'U',
+        py::arg("transr") = 'N',
+        "RFP (1-D) -> Full (n×n, Fortran-order). No extra copies; returns F-contiguous."
+    );
+    m.def(
+        "solve_qr",
+        &solve_qr_py,
+        py::arg("A"),
+        py::arg("y"),
+        "Solve min||A@x - y||_2 (overdetermined) or min||x||_2 s.t. A@x=y (underdetermined).\n"
+        "A is m×n, y is length m; returns x of length n.\n"
+        "Uses DGELS (QR/LQ decomposition). A must have full rank."
+    );
+    m.def(
+        "solve_svd",
+        &solve_svd_py,
+        py::arg("A"),
+        py::arg("y"),
+        py::arg("rcond") = 0.0,
+        "Same as solve_qr but uses DGELSD (divide-and-conquer SVD).\n"
+        "Handles rank-deficient A: singular values < rcond*sigma_max are treated as zero.\n"
+        "rcond=0.0 uses machine epsilon as threshold."
+    );
+    m.def(
+        "condition_number_ge",
+        &condition_number_ge_py,
+        py::arg("A"),
+        "1-norm condition number of a square matrix A via LU factorization (DGETRF+DGECON).\n"
+        "Works for any square matrix (not just symmetric/positive-definite)."
+    );
+    m.def(
+        "get_blas_info",
+        &get_blas_info,
+        "Return a string identifying the BLAS backend and integer width, e.g. 'OpenBLAS ILP64'."
+    );
 }

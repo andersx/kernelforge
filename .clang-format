@@ -18,7 +18,11 @@ NamespaceIndentation: None
 IndentPPDirectives: BeforeHash
 
 # Alignment
-AlignAfterOpenBracket: Align
+# Function call formatting (Python-style)
+# Long function calls break with one argument per line
+AlignAfterOpenBracket: BlockIndent
+BinPackArguments: false
+AllowAllArgumentsOnNextLine: false
 AlignConsecutiveAssignments: None
 AlignConsecutiveDeclarations: None
 AlignOperands: Align
@@ -26,10 +30,11 @@ AlignTrailingComments: true
 
 # Line breaks
 AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortLoopsOnASingleLine: false
 AllowShortBlocksOnASingleLine: Never
 AllowShortCaseLabelsOnASingleLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
 AlwaysBreakAfterReturnType: None
 AlwaysBreakBeforeMultilineStrings: false
 

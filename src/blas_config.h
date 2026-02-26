@@ -55,11 +55,15 @@ void openblas_set_num_threads(int num_threads);
 //   LP64 -> int,  ILP64 -> long (int64_t on Linux x86_64)
 extern "C" {
     #ifdef KF_BLAS_ILP64
-void dsfrk_(const char *transr, const char *uplo, const char *trans, const long *n, const long *k,
-            const double *alpha, const double *a, const long *lda, const double *beta, double *c);
+void dsfrk_(
+    const char *transr, const char *uplo, const char *trans, const long *n, const long *k,
+    const double *alpha, const double *a, const long *lda, const double *beta, double *c
+);
     #else
-void dsfrk_(const char *transr, const char *uplo, const char *trans, const int *n, const int *k,
-            const double *alpha, const double *a, const int *lda, const double *beta, double *c);
+void dsfrk_(
+    const char *transr, const char *uplo, const char *trans, const int *n, const int *k,
+    const double *alpha, const double *a, const int *lda, const double *beta, double *c
+);
     #endif
 }
 
@@ -100,8 +104,10 @@ inline void kf_blas_set_num_threads(int n) {
 
 // kf_dsfrk: portable wrapper for LAPACK's DSFRK (RFP symmetric rank-k update).
 // Replaces LAPACKE_dsfrk which is not exported by all OpenBLAS builds.
-inline void kf_dsfrk(char transr, char uplo, char trans, blas_int n, blas_int k, double alpha,
-                     const double *a, blas_int lda, double beta, double *c) {
+inline void kf_dsfrk(
+    char transr, char uplo, char trans, blas_int n, blas_int k, double alpha, const double *a,
+    blas_int lda, double beta, double *c
+) {
 #if defined(KF_USE_MKL) && defined(KF_BLAS_ILP64)
     // MKL ILP64: MKL_INT is 'long long' but blas_int is int64_t = 'long' on Linux.
     // Both are 64-bit; cast to match MKL's declaration and suppress the type mismatch.

@@ -7,18 +7,21 @@ namespace fchl19 {
 
 // Local (atom-pair-wise) Gaussian kernel functions
 
-void kernel_gaussian(const std::vector<double> &x1, const std::vector<double> &x2,
-                     const std::vector<int> &q1, const std::vector<int> &q2,
-                     const std::vector<int> &n1, const std::vector<int> &n2, int nm1, int nm2,
-                     int max_atoms1, int max_atoms2, int rep_size, double sigma, double *kernel_out);
+void kernel_gaussian(
+    const std::vector<double> &x1, const std::vector<double> &x2, const std::vector<int> &q1,
+    const std::vector<int> &q2, const std::vector<int> &n1, const std::vector<int> &n2, int nm1,
+    int nm2, int max_atoms1, int max_atoms2, int rep_size, double sigma, double *kernel_out
+);
 
-void kernel_gaussian_symm_rfp(const std::vector<double> &x, const std::vector<int> &q,
-                              const std::vector<int> &n, int nm, int max_atoms, int rep_size,
-                              double sigma, double *arf);
+void kernel_gaussian_symm_rfp(
+    const std::vector<double> &x, const std::vector<int> &q, const std::vector<int> &n, int nm,
+    int max_atoms, int rep_size, double sigma, double *arf
+);
 
-void kernel_gaussian_symm(const std::vector<double> &x, const std::vector<int> &q,
-                          const std::vector<int> &n, int nm, int max_atoms, int rep_size,
-                          double sigma, double *kernel_out);
+void kernel_gaussian_symm(
+    const std::vector<double> &x, const std::vector<int> &q, const std::vector<int> &n, int nm,
+    int max_atoms, int rep_size, double sigma, double *kernel_out
+);
 
 void kernel_gaussian_jacobian(
     const std::vector<double> &x1,   // (nm1, max_atoms1, rep)
@@ -52,19 +55,20 @@ void kernel_gaussian_jacobian_t(
     double *kernel_out  // (naq1, nm2) row-major
 );
 
-void kernel_gaussian_hessian(const std::vector<double> &x1,   // (nm1, max_atoms1, rep_size)
-                             const std::vector<double> &x2,   // (nm2, max_atoms2, rep_size)
-                             const std::vector<double> &dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-                             const std::vector<double> &dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
-                             const std::vector<int> &q1,      // (nm1, max_atoms1)
-                             const std::vector<int> &q2,      // (nm2, max_atoms2)
-                             const std::vector<int> &n1,      // (nm1)
-                             const std::vector<int> &n2,      // (nm2)
-                             int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
-                             int naq1,  // must equal 3 * sum_a n1[a]
-                             int naq2,  // must equal 3 * sum_b n2[b]
-                             double sigma,
-                             double *kernel_out  // (naq2, naq1) row-major
+void kernel_gaussian_hessian(
+    const std::vector<double> &x1,   // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &x2,   // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double> &dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const std::vector<int> &q1,      // (nm1, max_atoms1)
+    const std::vector<int> &q2,      // (nm2, max_atoms2)
+    const std::vector<int> &n1,      // (nm1)
+    const std::vector<int> &n2,      // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    int naq1,  // must equal 3 * sum_a n1[a]
+    int naq2,  // must equal 3 * sum_b n2[b]
+    double sigma,
+    double *kernel_out  // (naq2, naq1) row-major
 );
 
 void kernel_gaussian_hessian_symm(
@@ -93,30 +97,26 @@ void kernel_gaussian_hessian_symm_rfp(
 // Output: ((nm1+naq1) x (nm2+naq2)) row-major matrix.
 // Blocks: [0:nm1,0:nm2]=scalar, [0:nm1,nm2:]=jac_t, [nm1:,0:nm2]=jac, [nm1:,nm2:]=hessian.
 void kernel_gaussian_full(
-    const std::vector<double> &x1, const std::vector<double> &x2,
-    const std::vector<double> &dx1, const std::vector<double> &dx2,
-    const std::vector<int> &q1, const std::vector<int> &q2,
-    const std::vector<int> &n1, const std::vector<int> &n2,
-    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
-    int naq1, int naq2, double sigma,
+    const std::vector<double> &x1, const std::vector<double> &x2, const std::vector<double> &dx1,
+    const std::vector<double> &dx2, const std::vector<int> &q1, const std::vector<int> &q2,
+    const std::vector<int> &n1, const std::vector<int> &n2, int nm1, int nm2, int max_atoms1,
+    int max_atoms2, int rep_size, int naq1, int naq2, double sigma,
     double *kernel_out  // ((nm1+naq1) x (nm2+naq2)), row-major
 );
 
 // Full combined energy+force kernel (symmetric, full square output).
 // Output: ((nm+naq) x (nm+naq)) row-major, fully filled symmetric matrix.
 void kernel_gaussian_full_symm(
-    const std::vector<double> &x, const std::vector<double> &dx,
-    const std::vector<int> &q, const std::vector<int> &n,
-    int nm, int max_atoms, int rep_size, int naq, double sigma,
+    const std::vector<double> &x, const std::vector<double> &dx, const std::vector<int> &q,
+    const std::vector<int> &n, int nm, int max_atoms, int rep_size, int naq, double sigma,
     double *kernel_out  // ((nm+naq) x (nm+naq)), row-major
 );
 
 // Full combined energy+force kernel (symmetric, RFP output).
 // Output: 1-D array of length BIG*(BIG+1)/2, BIG=nm+naq, TRANSR='N', UPLO='U'.
 void kernel_gaussian_full_symm_rfp(
-    const std::vector<double> &x, const std::vector<double> &dx,
-    const std::vector<int> &q, const std::vector<int> &n,
-    int nm, int max_atoms, int rep_size, int naq, double sigma,
+    const std::vector<double> &x, const std::vector<double> &dx, const std::vector<int> &q,
+    const std::vector<int> &n, int nm, int max_atoms, int rep_size, int naq, double sigma,
     double *arf  // length (nm+naq)*(nm+naq+1)/2
 );
 

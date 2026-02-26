@@ -17,11 +17,23 @@
 
 namespace kf {
 
-void kernel_gaussian_symm(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
-                          double *Kptr) {
+void kernel_gaussian_symm(
+    const double *Xptr, blas_int n, blas_int rep_size, double alpha, double *Kptr
+) {
     // 1) DSYRK (RowMajor, lower triangle): K = (-2*alpha) * X * X^T + 0*K
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, n, rep_size, -2.0 * alpha, Xptr, rep_size,
-                0.0, Kptr, n);
+    cblas_dsyrk(
+        CblasRowMajor,
+        CblasLower,
+        CblasNoTrans,
+        n,
+        rep_size,
+        -2.0 * alpha,
+        Xptr,
+        rep_size,
+        0.0,
+        Kptr,
+        n
+    );
 
     // 2) diag = -0.5 * diag(K)
     const std::size_t n_size = static_cast<std::size_t>(n);
@@ -127,8 +139,9 @@ void kernel_gaussian_symm_rfp_dsfrk(const double *Xptr, blas_int n, blas_int rep
 // For N <= TILE_RFP the whole matrix fits in one tile (single DSYRK + scatter).
 static constexpr blas_int TILE_RFP = 8192;
 
-void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size, double alpha,
-                              double *arf) {
+void kernel_gaussian_symm_rfp(
+    const double *Xptr, blas_int n, blas_int rep_size, double alpha, double *arf
+) {
     // Compute symmetric Gaussian kernel directly into RFP format using tiled DGEMM/DSYRK.
     // Output: arf[n*(n+1)/2] in Rectangular Full Packed (RFP) format
     //   (Fortran TRANSR='N', UPLO='U').
@@ -137,10 +150,8 @@ void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
     // For N >> TILE_RFP this is far less than N×N.
     // For N <= TILE_RFP the whole matrix fits in one tile (single DSYRK + scatter).
 
-    if (n <= 0 || rep_size <= 0)
-        throw std::invalid_argument("n and rep_size must be > 0");
-    if (!Xptr || !arf)
-        throw std::invalid_argument("Xptr and arf must be non-null");
+    if (n <= 0 || rep_size <= 0) throw std::invalid_argument("n and rep_size must be > 0");
+    if (!Xptr || !arf) throw std::invalid_argument("Xptr and arf must be non-null");
 
     const std::size_t n_sz = static_cast<std::size_t>(n);
     const std::size_t d_sz = static_cast<std::size_t>(rep_size);
@@ -160,8 +171,7 @@ void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
     const blas_int T = std::min<blas_int>(TILE_RFP, n);
     const std::size_t tile_buf_sz = static_cast<std::size_t>(T) * static_cast<std::size_t>(T);
     double *tile = aligned_alloc_64(tile_buf_sz);
-    if (!tile)
-        throw std::bad_alloc();
+    if (!tile) throw std::bad_alloc();
 
     // 3) Tile over the upper triangle.
     //    Outer loop: tile-columns tc (j range [j0, j1))
@@ -182,8 +192,19 @@ void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
                 // ---- Diagonal tile: only upper triangle needed ----
                 // DSYRK (lower, row-major) into tile[Ti×Ti]
                 // tile[p*Ti + q] = -2*alpha * X[i0+p] · X[i0+q]  for q <= p (lower)
-                cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, Ti, rep_size, -2.0 * alpha, Xi,
-                            rep_size, 0.0, tile, Ti);
+                cblas_dsyrk(
+                    CblasRowMajor,
+                    CblasLower,
+                    CblasNoTrans,
+                    Ti,
+                    rep_size,
+                    -2.0 * alpha,
+                    Xi,
+                    rep_size,
+                    0.0,
+                    tile,
+                    Ti
+                );
 
                 // Scatter lower triangle of tile → RFP (with exp).
                 // DSYRK row-major lower: tile[p*Ti + q] valid for q <= p.
@@ -196,16 +217,32 @@ void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
                         const blas_int gj = i0 + p;  // global j
                         const double val = std::exp(
                             sq[gi] + sq[gj] +
-                            tile[static_cast<std::size_t>(p) * static_cast<std::size_t>(Ti) +
-                                 static_cast<std::size_t>(q)]);
+                            tile
+                                [static_cast<std::size_t>(p) * static_cast<std::size_t>(Ti) +
+                                 static_cast<std::size_t>(q)]
+                        );
                         arf[rfp_index_upper_N(n, gi, gj)] = val;
                     }
                 }
             } else {
                 // ---- Off-diagonal tile: i range is strictly left of j range ----
                 // tile[Ti × Tj] = (-2*alpha) * X[i0:i1] @ X[j0:j1]^T
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Ti, Tj, rep_size, -2.0 * alpha,
-                            Xi, rep_size, Xj, rep_size, 0.0, tile, Tj);
+                cblas_dgemm(
+                    CblasRowMajor,
+                    CblasNoTrans,
+                    CblasTrans,
+                    Ti,
+                    Tj,
+                    rep_size,
+                    -2.0 * alpha,
+                    Xi,
+                    rep_size,
+                    Xj,
+                    rep_size,
+                    0.0,
+                    tile,
+                    Tj
+                );
 
                 // Scatter all Ti×Tj entries → RFP (with exp).
                 // tile[p*Tj + q] corresponds to global (i=i0+p, j=j0+q), i < j always.
@@ -216,8 +253,10 @@ void kernel_gaussian_symm_rfp(const double *Xptr, blas_int n, blas_int rep_size,
                         const blas_int gj = j0 + q;
                         const double val = std::exp(
                             sq[gi] + sq[gj] +
-                            tile[static_cast<std::size_t>(p) * static_cast<std::size_t>(Tj) +
-                                 static_cast<std::size_t>(q)]);
+                            tile
+                                [static_cast<std::size_t>(p) * static_cast<std::size_t>(Tj) +
+                                 static_cast<std::size_t>(q)]
+                        );
                         arf[rfp_index_upper_N(n, gi, gj)] = val;
                     }
                 }
@@ -239,20 +278,31 @@ static inline void rowwise_self_norms(const double *X, std::size_t n, std::size_
     }
 }
 
-void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::size_t n2,
-                     std::size_t d, double alpha, double *K) {
+void kernel_gaussian(
+    const double *X1, const double *X2, std::size_t n1, std::size_t n2, std::size_t d, double alpha,
+    double *K
+) {
     // 1) K = (-2*alpha) * X1 * X2^T
     // RowMajor: A=X1 (n1 x d), B=X2 (n2 x d) but we pass Trans(B) => (d x n2)
     // lda = d, ldb = d, ldc = n1
     const double gemm_alpha = -2.0 * alpha;
     const double gemm_beta = 0.0;
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                static_cast<blas_int>(n1),                 // M
-                static_cast<blas_int>(n2),                 // N
-                static_cast<blas_int>(d),                  // K
-                gemm_alpha, X1, static_cast<blas_int>(d),  // A, lda
-                X2, static_cast<blas_int>(d),              // B, ldb  (Trans)
-                gemm_beta, K, static_cast<blas_int>(n2));  // C
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(n1),  // M
+        static_cast<blas_int>(n2),  // N
+        static_cast<blas_int>(d),   // K
+        gemm_alpha,
+        X1,
+        static_cast<blas_int>(d),  // A, lda
+        X2,
+        static_cast<blas_int>(d),  // B, ldb  (Trans)
+        gemm_beta,
+        K,
+        static_cast<blas_int>(n2)
+    );  // C
 
     // 2) Rowwise self norms
     std::vector<double> nrm1(n1), nrm2(n2);
@@ -263,12 +313,32 @@ void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::si
     std::vector<double> one_n1(n1, 1.0), one_n2(n2, 1.0);
 
     // 3) K += alpha * (ones_n2 * nrm1^T)   => GER(m=n1, n=n2)
-    cblas_dger(CblasRowMajor, static_cast<blas_int>(n1), static_cast<blas_int>(n2), alpha,
-               one_n1.data(), 1, nrm2.data(), 1, K, static_cast<blas_int>(n2));
+    cblas_dger(
+        CblasRowMajor,
+        static_cast<blas_int>(n1),
+        static_cast<blas_int>(n2),
+        alpha,
+        one_n1.data(),
+        1,
+        nrm2.data(),
+        1,
+        K,
+        static_cast<blas_int>(n2)
+    );
 
     // 4) K += alpha * (nrm2 * ones_n1^T)
-    cblas_dger(CblasRowMajor, static_cast<blas_int>(n1), static_cast<blas_int>(n2), alpha,
-               nrm1.data(), 1, one_n2.data(), 1, K, static_cast<blas_int>(n2));
+    cblas_dger(
+        CblasRowMajor,
+        static_cast<blas_int>(n1),
+        static_cast<blas_int>(n2),
+        alpha,
+        nrm1.data(),
+        1,
+        one_n2.data(),
+        1,
+        K,
+        static_cast<blas_int>(n2)
+    );
 
     // 5) Elementwise exp
     const std::size_t total = n2 * n1;
@@ -278,18 +348,13 @@ void kernel_gaussian(const double *X1, const double *X2, std::size_t n1, std::si
     }
 }
 
-void kernel_gaussian_jacobian(const double *X1, const double *dX1, const double *X2, std::size_t N1,
-                              std::size_t N2, std::size_t M, std::size_t D, double sigma,
-                              double *K_out) {
-    if (!X1 || !dX1 || !X2 || !K_out)
-        throw std::invalid_argument("null pointer");
-    if (N1 == 0 || N2 == 0 || M == 0 || D == 0)
-        throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
-
-    // Profiling timers
-    double t_start = omp_get_wtime();
+void kernel_gaussian_jacobian(
+    const double *X1, const double *dX1, const double *X2, std::size_t N1, std::size_t N2,
+    std::size_t M, std::size_t D, double sigma, double *K_out
+) {
+    if (!X1 || !dX1 || !X2 || !K_out) throw std::invalid_argument("null pointer");
+    if (N1 == 0 || N2 == 0 || M == 0 || D == 0) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const double inv_s2 = 1.0 / (sigma * sigma);
 
@@ -335,10 +400,22 @@ void kernel_gaussian_jacobian(const double *X1, const double *dX1, const double 
             // J1a is (M x D) row-major in memory.
             // Row-major DGEMM: op(A)=A^T ⇒ (D x M), lda = D; B=W (M x N2), ldb=N2; C(Kblock) (D x
             // N2), ldc=N2
-            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, static_cast<blas_int>(D),
-                        static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0, J1a,
-                        static_cast<blas_int>(D), W_local, static_cast<blas_int>(N2), 0.0, Kblock,
-                        static_cast<blas_int>(N2));
+            cblas_dgemm(
+                CblasRowMajor,
+                CblasTrans,
+                CblasNoTrans,
+                static_cast<blas_int>(D),
+                static_cast<blas_int>(N2),
+                static_cast<blas_int>(M),
+                1.0,
+                J1a,
+                static_cast<blas_int>(D),
+                W_local,
+                static_cast<blas_int>(N2),
+                0.0,
+                Kblock,
+                static_cast<blas_int>(N2)
+            );
         }
 
         // Free thread-local buffer
@@ -347,35 +424,19 @@ void kernel_gaussian_jacobian(const double *X1, const double *dX1, const double 
 
     // Restore BLAS threading
     kf_blas_set_num_threads(saved_blas_threads);
-
-    // Profiling output
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-        printf("\n=== kernel_gaussian_jacobian profiling ===\n");
-        printf("Problem size: N1=%zu, N2=%zu, M=%zu, D=%zu\n", N1, N2, M, D);
-        printf("Output size: %zu x %zu\n", N1 * D, N2);
-        printf("TOTAL (parallelized over N1):     %8.4f ms\n", t_total * 1000);
-        printf("==========================================\n\n");
-    }
 }
 
 // Transposed Jacobian kernel: Jacobians on reference side (X2, dX2) instead of query side
 // Output: K_t(N1, N2*D) where K_t[a, b*D+d] = sum_i (k_ab/σ²) * (x1[a,i] - x2[b,i]) * J2[b,i,d]
 // Relationship: kernel_gaussian_jacobian_t(X2, X1, dX1, σ) == kernel_gaussian_jacobian(X1, dX1, X2,
 // σ).T
-void kernel_gaussian_jacobian_t(const double *X1, const double *X2, const double *dX2,
-                                std::size_t N1, std::size_t N2, std::size_t M, std::size_t D,
-                                double sigma, double *K_out) {
-    if (!X1 || !X2 || !dX2 || !K_out)
-        throw std::invalid_argument("null pointer");
-    if (N1 == 0 || N2 == 0 || M == 0 || D == 0)
-        throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
-
-    // Profiling timers
-    double t_start = omp_get_wtime();
+void kernel_gaussian_jacobian_t(
+    const double *X1, const double *X2, const double *dX2, std::size_t N1, std::size_t N2,
+    std::size_t M, std::size_t D, double sigma, double *K_out
+) {
+    if (!X1 || !X2 || !dX2 || !K_out) throw std::invalid_argument("null pointer");
+    if (N1 == 0 || N2 == 0 || M == 0 || D == 0) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const double inv_s2 = 1.0 / (sigma * sigma);
 
@@ -420,10 +481,22 @@ void kernel_gaussian_jacobian_t(const double *X1, const double *X2, const double
             // DGEMM: Kblock(N1 × D) = W_local^T(N1 × M) @ J2b(M × D)
             // W_local is (M × N1) row-major, transposed to (N1 × M)
             // J2b is (M × D) row-major
-            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, static_cast<blas_int>(N1),
-                        static_cast<blas_int>(D), static_cast<blas_int>(M), 1.0, W_local,
-                        static_cast<blas_int>(N1), J2b, static_cast<blas_int>(D), 0.0, Kblock,
-                        static_cast<blas_int>(D));
+            cblas_dgemm(
+                CblasRowMajor,
+                CblasTrans,
+                CblasNoTrans,
+                static_cast<blas_int>(N1),
+                static_cast<blas_int>(D),
+                static_cast<blas_int>(M),
+                1.0,
+                W_local,
+                static_cast<blas_int>(N1),
+                J2b,
+                static_cast<blas_int>(D),
+                0.0,
+                Kblock,
+                static_cast<blas_int>(D)
+            );
 
             // Copy Kblock to the appropriate columns of K_out
             // K_out is (N1, N2*D) row-major: K_out[a, b*D : (b+1)*D] = Kblock[a, :]
@@ -441,48 +514,30 @@ void kernel_gaussian_jacobian_t(const double *X1, const double *X2, const double
 
     // Restore BLAS threading
     kf_blas_set_num_threads(saved_blas_threads);
-
-    // Profiling output
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-        printf("\n=== kernel_gaussian_jacobian_t profiling ===\n");
-        printf("Problem size: N1=%zu, N2=%zu, M=%zu, D=%zu\n", N1, N2, M, D);
-        printf("Output size: %zu x %zu\n", N1, N2 * D);
-        printf("TOTAL (parallelized over N2):     %8.4f ms\n", t_total * 1000);
-        printf("==========================================\n\n");
-    }
 }
 
 static inline void row_axpy(std::size_t n, double alpha, const double *x, double *y) {
     for (std::size_t i = 0; i < n; ++i)
         y[i] += alpha * x[i];
 }
-// If using MKL and you want local control of threads around level-1/2 ops:
-// #include <mkl.h>
 
-void kernel_gaussian_hessian(const double *__restrict X1, const double *__restrict dX1,
-                             const double *__restrict X2, const double *__restrict dX2,
-                             std::size_t N1, std::size_t N2, std::size_t M, std::size_t D1,
-                             std::size_t D2, double sigma,
-                             std::size_t tile_B,  // now used
-                             double *__restrict H_out) {
-    if (!X1 || !dX1 || !X2 || !dX2 || !H_out)
-        throw std::invalid_argument("null pointer");
+void kernel_gaussian_hessian(
+    const double *__restrict X1, const double *__restrict dX1, const double *__restrict X2,
+    const double *__restrict dX2, std::size_t N1, std::size_t N2, std::size_t M, std::size_t D1,
+    std::size_t D2, double sigma,
+    std::size_t tile_B,  // now used
+    double *__restrict H_out
+) {
+    if (!X1 || !dX1 || !X2 || !dX2 || !H_out) throw std::invalid_argument("null pointer");
     if (N1 == 0 || N2 == 0 || M == 0 || D1 == 0 || D2 == 0)
         throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const std::size_t big_rows = N1 * D1;
     const std::size_t big_cols = N2 * D2;
 
     const double inv_s2 = 1.0 / (sigma * sigma);
     const double inv_s4 = inv_s2 * inv_s2;
-
-    // Profiling timers
-    double t_start = omp_get_wtime();
-    double t_phase1, t_phase2, t_phase3, t_phase4, t_phase5, t_phase6;
 
     // 1) Distances → C = K/s^2 and C4 = K/s^4
     std::vector<double> n1(N1), n2(N2);
@@ -509,10 +564,22 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
 
     // S = X1 @ X2^T  (N1 x N2)  ← let BLAS thread this
     double *S = aligned_alloc_64(N1 * N2);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(N1),
-                static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0, X1,
-                static_cast<blas_int>(M), X2, static_cast<blas_int>(M), 0.0, S,
-                static_cast<blas_int>(N2));
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(N1),
+        static_cast<blas_int>(N2),
+        static_cast<blas_int>(M),
+        1.0,
+        X1,
+        static_cast<blas_int>(M),
+        X2,
+        static_cast<blas_int>(M),
+        0.0,
+        S,
+        static_cast<blas_int>(N2)
+    );
 
     // C, C4
     double *C = aligned_alloc_64(N1 * N2);
@@ -526,11 +593,9 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
             C4[a * N2 + b] = k * inv_s4;
         }
     }
-    t_phase1 = omp_get_wtime() - t_start;
 
     // 2) Pack J1_hat (N1*D1 × M) and J2_hat (N2*D2 × M): same row-major layout.
     //    Each row (a*D1+dj) of J1_hat is column dj of the (M×D1) Jacobian for molecule a.
-    double t2_start = omp_get_wtime();
     double *J1_hat = aligned_alloc_64(big_rows * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
@@ -554,29 +619,50 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
                 row[i] = J2[i * D2 + dj];
         }
     }
-    t_phase2 = omp_get_wtime() - t2_start;
 
     // 3) No global Gram matrix. D1×D2 Gram blocks computed on-the-fly in phase 6.
     //    Avoids writing/reading the big_rows × big_cols = (N1*D1)×(N2*D2) H_out,
     //    which at N=1000, D=27 is 5.8 GB and bottlenecked by cold-page memory bandwidth.
     double t3_start = omp_get_wtime();
-    t_phase3 = omp_get_wtime() - t3_start;  // nothing to do
 
     // 4) Projection tables: V1X2 = J1_hat @ X2^T (big_rows × N2),
     //                        V2X1 = J2_hat @ X1^T (big_cols × N1)
     double t4_start = omp_get_wtime();
     double *V1X2_all = aligned_alloc_64(big_rows * N2);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big_rows),
-                static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0, J1_hat,
-                static_cast<blas_int>(M), X2, static_cast<blas_int>(M), 0.0, V1X2_all,
-                static_cast<blas_int>(N2));
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(big_rows),
+        static_cast<blas_int>(N2),
+        static_cast<blas_int>(M),
+        1.0,
+        J1_hat,
+        static_cast<blas_int>(M),
+        X2,
+        static_cast<blas_int>(M),
+        0.0,
+        V1X2_all,
+        static_cast<blas_int>(N2)
+    );
 
     double *V2X1_all = aligned_alloc_64(big_cols * N1);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big_cols),
-                static_cast<blas_int>(N1), static_cast<blas_int>(M), 1.0, J2_hat,
-                static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V2X1_all,
-                static_cast<blas_int>(N1));
-    t_phase4 = omp_get_wtime() - t4_start;
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(big_cols),
+        static_cast<blas_int>(N1),
+        static_cast<blas_int>(M),
+        1.0,
+        J2_hat,
+        static_cast<blas_int>(M),
+        X1,
+        static_cast<blas_int>(M),
+        0.0,
+        V2X1_all,
+        static_cast<blas_int>(N1)
+    );
 
     // 5) Self projections: U1[a]=J1_a^T x1_a, U2[b]=J2_b^T x2_b
     double t5_start = omp_get_wtime();
@@ -589,28 +675,49 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
     for (std::size_t a = 0; a < N1; ++a) {
         const double *__restrict x1 = X1 + a * M;
         const double *__restrict J1 = dX1 + (a * M) * D1;
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D1),
-                    1.0, J1, static_cast<blas_int>(D1), x1, 1, 0.0, U1.data() + a * D1, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D1),
+            1.0,
+            J1,
+            static_cast<blas_int>(D1),
+            x1,
+            1,
+            0.0,
+            U1.data() + a * D1,
+            1
+        );
     }
 
 #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
         const double *__restrict x2 = X2 + b * M;
         const double *__restrict J2 = dX2 + (b * M) * D2;
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D2),
-                    1.0, J2, static_cast<blas_int>(D2), x2, 1, 0.0, U2.data() + b * D2, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D2),
+            1.0,
+            J2,
+            static_cast<blas_int>(D2),
+            x2,
+            1,
+            0.0,
+            U2.data() + b * D2,
+            1
+        );
     }
 
     kf_blas_set_num_threads(saved_blas_threads_phase5);
-
-    t_phase5 = omp_get_wtime() - t5_start;
 
     // 6) All blocks: compute D1×D2 Gram on-the-fly per (a,b), fuse scale + rank-1 + write H_out.
     //    Avoids ever writing the cold N1*D1 × N2*D2 global Gram matrix; each D1×D2 Gblk
     //    (D=27: 5832 bytes) stays hot in L1 cache.
     double t6_start = omp_get_wtime();
-    if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N2);
+    if (tile_B == 0) tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N2);
 
     int saved_blas_threads = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
@@ -635,10 +742,22 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
 
                     // Gram block: Gblk(D1×D2) = J1_hat[a*D1:, :] @ J2_hat[b*D2:, :]^T
                     const double *__restrict J2b_hat = J2_hat + b * D2 * M;
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(D1),
-                                static_cast<blas_int>(D2), static_cast<blas_int>(M), 1.0, J1a_hat,
-                                static_cast<blas_int>(M), J2b_hat, static_cast<blas_int>(M), 0.0,
-                                Gblk, static_cast<blas_int>(D2));
+                    cblas_dgemm(
+                        CblasRowMajor,
+                        CblasNoTrans,
+                        CblasTrans,
+                        static_cast<blas_int>(D1),
+                        static_cast<blas_int>(D2),
+                        static_cast<blas_int>(M),
+                        1.0,
+                        J1a_hat,
+                        static_cast<blas_int>(M),
+                        J2b_hat,
+                        static_cast<blas_int>(M),
+                        0.0,
+                        Gblk,
+                        static_cast<blas_int>(D2)
+                    );
 
                     // v1 = U1[a] - V1X2_all[aD1:(a+1)D1, b]
 #pragma omp simd
@@ -665,35 +784,8 @@ void kernel_gaussian_hessian(const double *__restrict X1, const double *__restri
         }
         aligned_free_64(Gblk);
     }
-    t_phase6 = omp_get_wtime() - t6_start;
 
     kf_blas_set_num_threads(saved_blas_threads);
-
-    // Profiling output (can be controlled via environment variable)
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-#pragma omp critical
-        {
-            printf("\n=== kernel_gaussian_hessian profiling ===\n");
-            printf("Problem size: N1=%zu, N2=%zu, M=%zu, D1=%zu, D2=%zu\n", N1, N2, M, D1, D2);
-            printf("Output size: %zu x %zu\n", big_rows, big_cols);
-            printf("Phase 1 (distance coefficients):  %8.4f ms  (%5.1f%%)\n", t_phase1 * 1000,
-                   100 * t_phase1 / t_total);
-            printf("Phase 2 (pack Jacobians):          %8.4f ms  (%5.1f%%)\n", t_phase2 * 1000,
-                   100 * t_phase2 / t_total);
-            printf("Phase 3 (base Gram DGEMM):         %8.4f ms  (%5.1f%%)\n", t_phase3 * 1000,
-                   100 * t_phase3 / t_total);
-            printf("Phase 4 (projection tables):       %8.4f ms  (%5.1f%%)\n", t_phase4 * 1000,
-                   100 * t_phase4 / t_total);
-            printf("Phase 5 (self projections):        %8.4f ms  (%5.1f%%)\n", t_phase5 * 1000,
-                   100 * t_phase5 / t_total);
-            printf("Phase 6 (per-block corrections):   %8.4f ms  (%5.1f%%)\n", t_phase6 * 1000,
-                   100 * t_phase6 / t_total);
-            printf("TOTAL:                             %8.4f ms\n", t_total * 1000);
-            printf("=========================================\n\n");
-        }
-    }
 
     // Free aligned allocations
     aligned_free_64(V2X1_all);
@@ -715,13 +807,11 @@ void kernel_gaussian_hessian_symm(
     // Builds only the lower triangle and mirrors to upper.
     // void rbf_hessian_full_tiled_gemm_symmetric(
     const double *__restrict X1, const double *__restrict dX1, std::size_t N1, std::size_t M,
-    std::size_t D1, double sigma, std::size_t tile_B, double *__restrict H_out) {
-    if (!X1 || !dX1 || !H_out)
-        throw std::invalid_argument("null pointer");
-    if (N1 == 0 || M == 0 || D1 == 0)
-        throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
+    std::size_t D1, double sigma, std::size_t tile_B, double *__restrict H_out
+) {
+    if (!X1 || !dX1 || !H_out) throw std::invalid_argument("null pointer");
+    if (N1 == 0 || M == 0 || D1 == 0) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const std::size_t N = N1;
     const std::size_t D = D1;
@@ -729,10 +819,6 @@ void kernel_gaussian_hessian_symm(
 
     const double inv_s2 = 1.0 / (sigma * sigma);
     const double inv_s4 = inv_s2 * inv_s2;
-
-    // Profiling timers
-    double t_start = omp_get_wtime();
-    double t_phase1, t_phase2, t_phase3, t_phase4, t_phase5, t_phase6;
 
     // Zero output once (we'll fill lower and mirror to upper at the end)
     // std::fill(H_out, H_out + BIG*BIG, 0.0);
@@ -752,9 +838,19 @@ void kernel_gaussian_hessian_symm(
     // S = X1 @ X1^T (lower) via DSYRK, then mirror to upper for convenient reads
     double *S = aligned_alloc_64(N * N);
     std::memset(S, 0, N * N * sizeof(double));
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, static_cast<blas_int>(N),
-                static_cast<blas_int>(M), 1.0, X1, static_cast<blas_int>(M), 0.0, S,
-                static_cast<blas_int>(N));
+    cblas_dsyrk(
+        CblasRowMajor,
+        CblasLower,
+        CblasNoTrans,
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        X1,
+        static_cast<blas_int>(M),
+        0.0,
+        S,
+        static_cast<blas_int>(N)
+    );
 #pragma omp parallel for
     for (std::size_t i = 0; i < N; ++i) {
         for (std::size_t j = i + 1; j < N; ++j) {
@@ -773,10 +869,8 @@ void kernel_gaussian_hessian_symm(
             C4[a * N + b] = k * inv_s4;
         }
     }
-    t_phase1 = omp_get_wtime() - t_start;
 
     // 2) Pack J_hat (N*D x M) from dX1 (N,M,D): row i=(a*D+dj) is column dj of (M x D)
-    double t2_start = omp_get_wtime();
     double *J_hat = aligned_alloc_64(BIG * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
@@ -788,22 +882,31 @@ void kernel_gaussian_hessian_symm(
                 row[i] = J[i * D + dj];
         }
     }
-    t_phase2 = omp_get_wtime() - t2_start;
 
     // 3) No global Gram matrix. D×D Gram blocks computed on-the-fly in phase 6.
     //    Avoids allocating/writing/reading the BIG×BIG = (N*D)² H_out in phase 3/6,
     //    which at N=1000, D=27 is 5.8 GB and bottlenecked by cold-page memory bandwidth.
     double t3_start = omp_get_wtime();
-    t_phase3 = omp_get_wtime() - t3_start;  // nothing to do
 
     // 4) Projection table V = J_hat @ X1^T  (BIG x N)
     double t4_start = omp_get_wtime();
     double *V = aligned_alloc_64(BIG * N);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(BIG),
-                static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, J_hat,
-                static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V,
-                static_cast<blas_int>(N));
-    t_phase4 = omp_get_wtime() - t4_start;
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(BIG),
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        J_hat,
+        static_cast<blas_int>(M),
+        X1,
+        static_cast<blas_int>(M),
+        0.0,
+        V,
+        static_cast<blas_int>(N)
+    );
 
     // 5) Self projections: U[a] = J_a^T x_a  (N x D)
     double t5_start = omp_get_wtime();
@@ -817,20 +920,29 @@ void kernel_gaussian_hessian_symm(
         const double *__restrict x = X1 + a * M;
         const double *__restrict Ja = dX1 + (a * M) * D;
         double *__restrict Ua = U.data() + a * D;
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D),
-                    1.0, Ja, static_cast<blas_int>(D), x, 1, 0.0, Ua, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D),
+            1.0,
+            Ja,
+            static_cast<blas_int>(D),
+            x,
+            1,
+            0.0,
+            Ua,
+            1
+        );
     }
 
     kf_blas_set_num_threads(saved_blas_threads_phase5);
-
-    t_phase5 = omp_get_wtime() - t5_start;
 
     // 6) Lower-triangle blocks: compute D×D Gram on-the-fly per (a,b), fuse scale + rank-1.
     //    Avoids ever writing the cold BIG×BIG global Gram matrix; each D×D Gblk
     //    (D=27: 5832 bytes) stays hot in L1 cache.
     double t6_start = omp_get_wtime();
-    if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
+    if (tile_B == 0) tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
 
     int saved_blas_threads_symm = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
@@ -855,10 +967,22 @@ void kernel_gaussian_hessian_symm(
 
                     // Gram block: Gblk(D×D) = J_hat[a*D:(a+1)*D, :] @ J_hat[b*D:(b+1)*D, :]^T
                     const double *__restrict Jb_hat = J_hat + b * D * M;
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(D),
-                                static_cast<blas_int>(D), static_cast<blas_int>(M), 1.0, Ja_hat,
-                                static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M), 0.0,
-                                Gblk, static_cast<blas_int>(D));
+                    cblas_dgemm(
+                        CblasRowMajor,
+                        CblasNoTrans,
+                        CblasTrans,
+                        static_cast<blas_int>(D),
+                        static_cast<blas_int>(D),
+                        static_cast<blas_int>(M),
+                        1.0,
+                        Ja_hat,
+                        static_cast<blas_int>(M),
+                        Jb_hat,
+                        static_cast<blas_int>(M),
+                        0.0,
+                        Gblk,
+                        static_cast<blas_int>(D)
+                    );
 
                     // v1 = U[a] - V[aD:(a+1)D, b]
 #pragma omp simd
@@ -888,7 +1012,6 @@ void kernel_gaussian_hessian_symm(
         }
         aligned_free_64(Gblk);
     }
-    t_phase6 = omp_get_wtime() - t6_start;
 
     kf_blas_set_num_threads(saved_blas_threads_symm);
 
@@ -912,33 +1035,6 @@ void kernel_gaussian_hessian_symm(
         }
     }
 
-    // Profiling output
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-#pragma omp critical
-        {
-            printf("\n=== kernel_gaussian_hessian_symm profiling ===\n");
-            printf("Problem size: N=%zu, M=%zu, D=%zu\n", N, M, D);
-            printf("Output size: %zu x %zu (full symmetric)\n", BIG, BIG);
-            printf("Phase 1 (distance coefficients):  %8.4f ms  (%5.1f%%)\n", t_phase1 * 1000,
-                   100 * t_phase1 / t_total);
-            printf("Phase 2 (pack Jacobians):          %8.4f ms  (%5.1f%%)\n", t_phase2 * 1000,
-                   100 * t_phase2 / t_total);
-            printf("Phase 3 (base Gram):               %8.4f ms  (%5.1f%%)  [on-the-fly per block "
-                   "in phase 6]\n",
-                   t_phase3 * 1000, 100 * t_phase3 / t_total);
-            printf("Phase 4 (projection table):        %8.4f ms  (%5.1f%%)\n", t_phase4 * 1000,
-                   100 * t_phase4 / t_total);
-            printf("Phase 5 (self projections):        %8.4f ms  (%5.1f%%)\n", t_phase5 * 1000,
-                   100 * t_phase5 / t_total);
-            printf("Phase 6 (per-block Gram+correct):  %8.4f ms  (%5.1f%%)\n", t_phase6 * 1000,
-                   100 * t_phase6 / t_total);
-            printf("TOTAL:                             %8.4f ms\n", t_total * 1000);
-            printf("===============================================\n\n");
-        }
-    }
-
     aligned_free_64(V);
     aligned_free_64(J_hat);
     aligned_free_64(C4);
@@ -953,15 +1049,13 @@ void kernel_gaussian_hessian_symm(
 // Symmetric Hessian kernel with RFP output (memory-efficient)
 // Output H_rfp: packed lower triangle, length BIG*(BIG+1)/2 where BIG=N*D
 // Memory savings: ~50% compared to full matrix
-void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double *__restrict dX1,
-                                      std::size_t N1, std::size_t M, std::size_t D1, double sigma,
-                                      std::size_t tile_B, double *__restrict H_rfp) {
-    if (!X1 || !dX1 || !H_rfp)
-        throw std::invalid_argument("null pointer");
-    if (N1 == 0 || M == 0 || D1 == 0)
-        throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
+void kernel_gaussian_hessian_symm_rfp(
+    const double *__restrict X1, const double *__restrict dX1, std::size_t N1, std::size_t M,
+    std::size_t D1, double sigma, std::size_t tile_B, double *__restrict H_rfp
+) {
+    if (!X1 || !dX1 || !H_rfp) throw std::invalid_argument("null pointer");
+    if (N1 == 0 || M == 0 || D1 == 0) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const std::size_t N = N1;
     const std::size_t D = D1;
@@ -970,10 +1064,6 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
 
     const double inv_s2 = 1.0 / (sigma * sigma);
     const double inv_s4 = inv_s2 * inv_s2;
-
-    // Profiling timers
-    double t_start = omp_get_wtime();
-    double t_phase1, t_phase2, t_phase3, t_phase4, t_phase5, t_phase6;
 
     // NOTE: H_rfp is NOT zeroed here. Every element is written exactly once in
     // phase 6, so a prior memset would only waste time on a cold 2.9 GB buffer.
@@ -993,9 +1083,19 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
     // S = X1 @ X1^T (lower) via DSYRK, then mirror to upper for convenient reads
     double *S = aligned_alloc_64(N * N);
     std::memset(S, 0, N * N * sizeof(double));
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, static_cast<blas_int>(N),
-                static_cast<blas_int>(M), 1.0, X1, static_cast<blas_int>(M), 0.0, S,
-                static_cast<blas_int>(N));
+    cblas_dsyrk(
+        CblasRowMajor,
+        CblasLower,
+        CblasNoTrans,
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        X1,
+        static_cast<blas_int>(M),
+        0.0,
+        S,
+        static_cast<blas_int>(N)
+    );
 #pragma omp parallel for
     for (std::size_t i = 0; i < N; ++i) {
         for (std::size_t j = i + 1; j < N; ++j) {
@@ -1014,10 +1114,8 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
             C4[a * N + b] = k * inv_s4;
         }
     }
-    t_phase1 = omp_get_wtime() - t_start;
 
     // 2) Pack J_hat (N*D x M): row (a*D+dj) = column dj of J_a  (identical to hessian_symm)
-    double t2_start = omp_get_wtime();
     double *J_hat = aligned_alloc_64(BIG * M);
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
@@ -1029,7 +1127,6 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
                 row[i] = J[i * D + dj];
         }
     }
-    t_phase2 = omp_get_wtime() - t2_start;
 
     // 3) No global Gram matrix allocated here.
     //    The D×D Gram block for each (a,b) pair is computed on-the-fly in phase 6
@@ -1037,16 +1134,26 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
     //    This avoids allocating the BIG×BIG = (N*D)² temp matrix (~5.8 GB for N=1000,D=27)
     //    that the previous implementation used, and eliminates its ~2.4 GB/s-limited memset.
     double t3_start = omp_get_wtime();
-    t_phase3 = omp_get_wtime() - t3_start;  // nothing to do
 
     // 4) Projection table V = J_hat @ X1^T  (BIG x N)  (identical to hessian_symm)
     double t4_start = omp_get_wtime();
     double *V = aligned_alloc_64(BIG * N);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(BIG),
-                static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, J_hat,
-                static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V,
-                static_cast<blas_int>(N));
-    t_phase4 = omp_get_wtime() - t4_start;
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(BIG),
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        J_hat,
+        static_cast<blas_int>(M),
+        X1,
+        static_cast<blas_int>(M),
+        0.0,
+        V,
+        static_cast<blas_int>(N)
+    );
 
     // 5) Self projections: U[a] = J_a^T x_a  (N x D)  (identical to hessian_symm)
     double t5_start = omp_get_wtime();
@@ -1060,19 +1167,28 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
         const double *__restrict x = X1 + a * M;
         const double *__restrict Ja = dX1 + (a * M) * D;
         double *__restrict Ua = U.data() + a * D;
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D),
-                    1.0, Ja, static_cast<blas_int>(D), x, 1, 0.0, Ua, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D),
+            1.0,
+            Ja,
+            static_cast<blas_int>(D),
+            x,
+            1,
+            0.0,
+            Ua,
+            1
+        );
     }
 
     kf_blas_set_num_threads(saved_blas_threads_phase5);
 
-    t_phase5 = omp_get_wtime() - t5_start;
-
     // 6) Per-block lower-triangle: compute D×D Gram on-the-fly, apply scaling +
     //    rank-1 correction, write directly to RFP. No H_temp needed.
     double t6_start = omp_get_wtime();
-    if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
+    if (tile_B == 0) tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
 
     int saved_blas_threads_symm = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
@@ -1100,10 +1216,22 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
                     // Compute Gram block: Gblk(D×D) = J_hat[a*D:(a+1)*D, :] @ J_hat[b*D:(b+1)*D,
                     // :]^T J_hat rows are (D×M) for each molecule block.
                     const double *__restrict Jb_hat = J_hat + b * D * M;
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(D),
-                                static_cast<blas_int>(D), static_cast<blas_int>(M), 1.0, Ja_hat,
-                                static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M), 0.0,
-                                Gblk, static_cast<blas_int>(D));
+                    cblas_dgemm(
+                        CblasRowMajor,
+                        CblasNoTrans,
+                        CblasTrans,
+                        static_cast<blas_int>(D),
+                        static_cast<blas_int>(D),
+                        static_cast<blas_int>(M),
+                        1.0,
+                        Ja_hat,
+                        static_cast<blas_int>(M),
+                        Jb_hat,
+                        static_cast<blas_int>(M),
+                        0.0,
+                        Gblk,
+                        static_cast<blas_int>(D)
+                    );
 
                     // v1 = U[a] - V[aD:(a+1)D, b]
 #pragma omp simd
@@ -1136,37 +1264,8 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
         }
         aligned_free_64(Gblk);
     }
-    t_phase6 = omp_get_wtime() - t6_start;
 
     kf_blas_set_num_threads(saved_blas_threads_symm);
-
-    // Profiling output
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-#pragma omp critical
-        {
-            printf("\n=== kernel_gaussian_hessian_symm_rfp profiling ===\n");
-            printf("Problem size: N=%zu, M=%zu, D=%zu\n", N, M, D);
-            printf("Output size: %zu (RFP packed, saves %.1f%% memory)\n", rfp_size,
-                   100.0 * (1.0 - 0.5 * (BIG + 1) / BIG));
-            printf("Phase 1 (distance coefficients):  %8.4f ms  (%5.1f%%)\n", t_phase1 * 1000,
-                   100 * t_phase1 / t_total);
-            printf("Phase 2 (pack Jacobians):          %8.4f ms  (%5.1f%%)\n", t_phase2 * 1000,
-                   100 * t_phase2 / t_total);
-            printf("Phase 3 (base Gram):               %8.4f ms  (%5.1f%%)  [on-the-fly per block "
-                   "in phase 6]\n",
-                   t_phase3 * 1000, 100 * t_phase3 / t_total);
-            printf("Phase 4 (projection table):        %8.4f ms  (%5.1f%%)\n", t_phase4 * 1000,
-                   100 * t_phase4 / t_total);
-            printf("Phase 5 (self projections):        %8.4f ms  (%5.1f%%)\n", t_phase5 * 1000,
-                   100 * t_phase5 / t_total);
-            printf("Phase 6 (per-block Gram+correct):  %8.4f ms  (%5.1f%%)\n", t_phase6 * 1000,
-                   100 * t_phase6 / t_total);
-            printf("TOTAL:                             %8.4f ms\n", t_total * 1000);
-            printf("====================================================\n\n");
-        }
-    }
 
     aligned_free_64(V);
     aligned_free_64(J_hat);
@@ -1193,16 +1292,15 @@ void kernel_gaussian_hessian_symm_rfp(const double *__restrict X1, const double 
 //   U1[a,d]     = (J1_hat row a*D1+d) · X1[a]
 //   U2[b,d]     = (J2_hat row b*D2+d) · X2[b]
 // ============================================================================
-void kernel_gaussian_full(const double *__restrict X1, const double *__restrict dX1,
-                          const double *__restrict X2, const double *__restrict dX2, std::size_t N1,
-                          std::size_t N2, std::size_t M, std::size_t D1, std::size_t D2,
-                          double sigma, std::size_t tile_B, double *__restrict K_full) {
-    if (!X1 || !dX1 || !X2 || !dX2 || !K_full)
-        throw std::invalid_argument("null pointer");
+void kernel_gaussian_full(
+    const double *__restrict X1, const double *__restrict dX1, const double *__restrict X2,
+    const double *__restrict dX2, std::size_t N1, std::size_t N2, std::size_t M, std::size_t D1,
+    std::size_t D2, double sigma, std::size_t tile_B, double *__restrict K_full
+) {
+    if (!X1 || !dX1 || !X2 || !dX2 || !K_full) throw std::invalid_argument("null pointer");
     if (N1 == 0 || N2 == 0 || M == 0 || D1 == 0 || D2 == 0)
         throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const double inv_s2 = 1.0 / (sigma * sigma);
     const double inv_s4 = inv_s2 * inv_s2;
@@ -1211,8 +1309,6 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
     const std::size_t big_cols = N2 * D2;         // cols of hessian block
     const std::size_t full_rows = N1 + big_rows;  // total rows of K_full
     const std::size_t full_cols = N2 + big_cols;  // total cols of K_full (= stride)
-
-    double t_start = omp_get_wtime();
 
     // -------------------------------------------------------------------------
     // Phase 1: Distance coefficients C[a,b] = K/s^2, C4[a,b] = K/s^4
@@ -1238,10 +1334,22 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
     }
 
     double *S = aligned_alloc_64(N1 * N2);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(N1),
-                static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0, X1,
-                static_cast<blas_int>(M), X2, static_cast<blas_int>(M), 0.0, S,
-                static_cast<blas_int>(N2));
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(N1),
+        static_cast<blas_int>(N2),
+        static_cast<blas_int>(M),
+        1.0,
+        X1,
+        static_cast<blas_int>(M),
+        X2,
+        static_cast<blas_int>(M),
+        0.0,
+        S,
+        static_cast<blas_int>(N2)
+    );
 
     double *C = aligned_alloc_64(N1 * N2);
     double *C4 = aligned_alloc_64(N1 * N2);
@@ -1289,16 +1397,40 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
     //   V2X1 (big_cols x N1) = J2_hat @ X1^T
     // -------------------------------------------------------------------------
     double *V1X2 = aligned_alloc_64(big_rows * N2);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big_rows),
-                static_cast<blas_int>(N2), static_cast<blas_int>(M), 1.0, J1_hat,
-                static_cast<blas_int>(M), X2, static_cast<blas_int>(M), 0.0, V1X2,
-                static_cast<blas_int>(N2));
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(big_rows),
+        static_cast<blas_int>(N2),
+        static_cast<blas_int>(M),
+        1.0,
+        J1_hat,
+        static_cast<blas_int>(M),
+        X2,
+        static_cast<blas_int>(M),
+        0.0,
+        V1X2,
+        static_cast<blas_int>(N2)
+    );
 
     double *V2X1 = aligned_alloc_64(big_cols * N1);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big_cols),
-                static_cast<blas_int>(N1), static_cast<blas_int>(M), 1.0, J2_hat,
-                static_cast<blas_int>(M), X1, static_cast<blas_int>(M), 0.0, V2X1,
-                static_cast<blas_int>(N1));
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(big_cols),
+        static_cast<blas_int>(N1),
+        static_cast<blas_int>(M),
+        1.0,
+        J2_hat,
+        static_cast<blas_int>(M),
+        X1,
+        static_cast<blas_int>(M),
+        0.0,
+        V2X1,
+        static_cast<blas_int>(N1)
+    );
 
     // -------------------------------------------------------------------------
     // Phase 4: Self projections U1[a*D1+d] = J1_hat[a,d,:] · X1[a,:]
@@ -1311,15 +1443,37 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
 
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N1; ++a) {
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D1),
-                    1.0, dX1 + a * M * D1, static_cast<blas_int>(D1), X1 + a * M, 1, 0.0,
-                    U1.data() + a * D1, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D1),
+            1.0,
+            dX1 + a * M * D1,
+            static_cast<blas_int>(D1),
+            X1 + a * M,
+            1,
+            0.0,
+            U1.data() + a * D1,
+            1
+        );
     }
 #pragma omp parallel for schedule(static)
     for (std::size_t b = 0; b < N2; ++b) {
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D2),
-                    1.0, dX2 + b * M * D2, static_cast<blas_int>(D2), X2 + b * M, 1, 0.0,
-                    U2.data() + b * D2, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D2),
+            1.0,
+            dX2 + b * M * D2,
+            static_cast<blas_int>(D2),
+            X2 + b * M,
+            1,
+            0.0,
+            U2.data() + b * D2,
+            1
+        );
     }
 
     kf_blas_set_num_threads(saved_blas_threads);
@@ -1335,8 +1489,7 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
     //   Hess   [N1+a*D1+d1, N2+b*D2+d2]:
     //                               K_full[(N1+a*D1+d1)*full_cols + N2+b*D2+d2]
     // -------------------------------------------------------------------------
-    if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N2);
+    if (tile_B == 0) tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N2);
 
     saved_blas_threads = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
@@ -1391,10 +1544,22 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
                     // ----- Hessian block [N1+a*D1+d1, N2+b*D2+d2] -----
                     // Gram block: Gblk(D1 x D2) = J1_hat[a*D1:,:] @ J2_hat[b*D2:,:]^T
                     const double *J2b_hat = J2_hat + b * D2 * M;
-                    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(D1),
-                                static_cast<blas_int>(D2), static_cast<blas_int>(M), 1.0, J1a_hat,
-                                static_cast<blas_int>(M), J2b_hat, static_cast<blas_int>(M), 0.0,
-                                Gblk, static_cast<blas_int>(D2));
+                    cblas_dgemm(
+                        CblasRowMajor,
+                        CblasNoTrans,
+                        CblasTrans,
+                        static_cast<blas_int>(D1),
+                        static_cast<blas_int>(D2),
+                        static_cast<blas_int>(M),
+                        1.0,
+                        J1a_hat,
+                        static_cast<blas_int>(M),
+                        J2b_hat,
+                        static_cast<blas_int>(M),
+                        0.0,
+                        Gblk,
+                        static_cast<blas_int>(D2)
+                    );
 
                     // v1[d] = U1[a*D1+d] - V1X2[a*D1+d, b]
 #pragma omp simd
@@ -1423,17 +1588,6 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
 
     kf_blas_set_num_threads(saved_blas_threads);
 
-    // Profiling
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-        printf("\n=== kernel_gaussian_full profiling ===\n");
-        printf("Problem size: N1=%zu, N2=%zu, M=%zu, D1=%zu, D2=%zu\n", N1, N2, M, D1, D2);
-        printf("Output size: %zu x %zu\n", full_rows, full_cols);
-        printf("TOTAL: %8.4f ms\n", t_total * 1000);
-        printf("======================================\n\n");
-    }
-
     aligned_free_64(V2X1);
     aligned_free_64(V1X2);
     aligned_free_64(J2_hat);
@@ -1459,15 +1613,13 @@ void kernel_gaussian_full(const double *__restrict X1, const double *__restrict 
 // The jacobian_t upper block is the transpose of the jacobian lower-left block.
 // The hessian block is symmetric; only lower triangle is filled.
 // ============================================================================
-void kernel_gaussian_full_symm(const double *__restrict X, const double *__restrict dX,
-                               std::size_t N, std::size_t M, std::size_t D, double sigma,
-                               std::size_t tile_B, double *__restrict K_full) {
-    if (!X || !dX || !K_full)
-        throw std::invalid_argument("null pointer");
-    if (N == 0 || M == 0 || D == 0)
-        throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
+void kernel_gaussian_full_symm(
+    const double *__restrict X, const double *__restrict dX, std::size_t N, std::size_t M,
+    std::size_t D, double sigma, std::size_t tile_B, double *__restrict K_full
+) {
+    if (!X || !dX || !K_full) throw std::invalid_argument("null pointer");
+    if (N == 0 || M == 0 || D == 0) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const double inv_s2 = 1.0 / (sigma * sigma);
     const double inv_s4 = inv_s2 * inv_s2;
@@ -1475,8 +1627,6 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
     const std::size_t big = N * D;      // rows/cols of hessian block
     const std::size_t BIG = N + big;    // total rows/cols of K_full
     const std::size_t full_cols = BIG;  // stride
-
-    double t_start = omp_get_wtime();
 
     // ---- Phase 1: Distance coefficients (symmetric, lower triangle only) ----
     std::vector<double> nv(N);
@@ -1492,9 +1642,19 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
 
     // S = X @ X^T  (symmetric, N x N)
     double *S = aligned_alloc_64(N * N);
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, static_cast<blas_int>(N),
-                static_cast<blas_int>(M), 1.0, X, static_cast<blas_int>(M), 0.0, S,
-                static_cast<blas_int>(N));
+    cblas_dsyrk(
+        CblasRowMajor,
+        CblasLower,
+        CblasNoTrans,
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        X,
+        static_cast<blas_int>(M),
+        0.0,
+        S,
+        static_cast<blas_int>(N)
+    );
     // Fill upper from lower for distance calculation convenience
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a)
@@ -1531,10 +1691,22 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
 
     // ---- Phase 3: Projection table V (big x N) = J_hat @ X^T ----
     double *V = aligned_alloc_64(big * N);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big),
-                static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, J_hat,
-                static_cast<blas_int>(M), X, static_cast<blas_int>(M), 0.0, V,
-                static_cast<blas_int>(N));
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(big),
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        J_hat,
+        static_cast<blas_int>(M),
+        X,
+        static_cast<blas_int>(M),
+        0.0,
+        V,
+        static_cast<blas_int>(N)
+    );
 
     // ---- Phase 4: Self projections U[a*D+d] = J_hat[a,d,:] · X[a,:] ----
     std::vector<double> U(big);
@@ -1544,9 +1716,20 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
 
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D),
-                    1.0, dX + a * M * D, static_cast<blas_int>(D), X + a * M, 1, 0.0,
-                    U.data() + a * D, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D),
+            1.0,
+            dX + a * M * D,
+            static_cast<blas_int>(D),
+            X + a * M,
+            1,
+            0.0,
+            U.data() + a * D,
+            1
+        );
     }
 
     kf_blas_set_num_threads(saved_blas_threads);
@@ -1559,8 +1742,7 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
     //             [a, N+b*D+d] lower   C[a,b]*(U[b,d] - V[b,d,a])
     //   Hessian:  [N+a*D+d1, N+b*D+d2] (lower: a>=b only full rows, within a==b lower tri)
 
-    if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
+    if (tile_B == 0) tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
 
     saved_blas_threads = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
@@ -1623,10 +1805,22 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
 
                 // ---- Hessian block [N+a*D+d1, N+b*D+d2] (lower triangle: b <= a) ----
                 const double *Jb_hat = J_hat + b * D * M;
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(D),
-                            static_cast<blas_int>(D), static_cast<blas_int>(M), 1.0, Ja_hat,
-                            static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M), 0.0, Gblk,
-                            static_cast<blas_int>(D));
+                cblas_dgemm(
+                    CblasRowMajor,
+                    CblasNoTrans,
+                    CblasTrans,
+                    static_cast<blas_int>(D),
+                    static_cast<blas_int>(D),
+                    static_cast<blas_int>(M),
+                    1.0,
+                    Ja_hat,
+                    static_cast<blas_int>(M),
+                    Jb_hat,
+                    static_cast<blas_int>(M),
+                    0.0,
+                    Gblk,
+                    static_cast<blas_int>(D)
+                );
 
                 // v1[d] = U[a,d] - V[a,d,b]
 #pragma omp simd
@@ -1690,17 +1884,6 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
         }
     }
 
-    // Profiling
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-        printf("\n=== kernel_gaussian_full_symm profiling ===\n");
-        printf("Problem size: N=%zu, M=%zu, D=%zu\n", N, M, D);
-        printf("Output size: %zu x %zu (full symmetric)\n", BIG, BIG);
-        printf("TOTAL: %8.4f ms\n", t_total * 1000);
-        printf("===========================================\n\n");
-    }
-
     aligned_free_64(V);
     aligned_free_64(J_hat);
     aligned_free_64(C4);
@@ -1713,15 +1896,13 @@ void kernel_gaussian_full_symm(const double *__restrict X, const double *__restr
 // Output: 1D RFP array of length BIG*(BIG+1)/2, where BIG = N*(1+D).
 // Uses the same RFP indexing as kernel_gaussian_hessian_symm_rfp (TRANSR='N', UPLO='U').
 // ============================================================================
-void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__restrict dX,
-                                   std::size_t N, std::size_t M, std::size_t D, double sigma,
-                                   std::size_t tile_B, double *__restrict K_rfp) {
-    if (!X || !dX || !K_rfp)
-        throw std::invalid_argument("null pointer");
-    if (N == 0 || M == 0 || D == 0)
-        throw std::invalid_argument("empty dimension");
-    if (!(sigma > 0.0))
-        throw std::invalid_argument("sigma must be > 0");
+void kernel_gaussian_full_symm_rfp(
+    const double *__restrict X, const double *__restrict dX, std::size_t N, std::size_t M,
+    std::size_t D, double sigma, std::size_t tile_B, double *__restrict K_rfp
+) {
+    if (!X || !dX || !K_rfp) throw std::invalid_argument("null pointer");
+    if (N == 0 || M == 0 || D == 0) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
 
     const double inv_s2 = 1.0 / (sigma * sigma);
     const double inv_s4 = inv_s2 * inv_s2;
@@ -1729,8 +1910,6 @@ void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__r
     const std::size_t big = N * D;
     const std::size_t BIG = N + big;  // = N*(1+D)
     const std::size_t rfp_size = BIG * (BIG + 1) / 2;
-
-    double t_start = omp_get_wtime();
 
     // ---- Phase 1: Distance coefficients ----
     std::vector<double> nv(N);
@@ -1745,9 +1924,19 @@ void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__r
     }
 
     double *S = aligned_alloc_64(N * N);
-    cblas_dsyrk(CblasRowMajor, CblasLower, CblasNoTrans, static_cast<blas_int>(N),
-                static_cast<blas_int>(M), 1.0, X, static_cast<blas_int>(M), 0.0, S,
-                static_cast<blas_int>(N));
+    cblas_dsyrk(
+        CblasRowMajor,
+        CblasLower,
+        CblasNoTrans,
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        X,
+        static_cast<blas_int>(M),
+        0.0,
+        S,
+        static_cast<blas_int>(N)
+    );
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a)
         for (std::size_t b = a + 1; b < N; ++b)
@@ -1780,10 +1969,22 @@ void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__r
 
     // ---- Phase 3: Projection table V (big x N) ----
     double *V = aligned_alloc_64(big * N);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(big),
-                static_cast<blas_int>(N), static_cast<blas_int>(M), 1.0, J_hat,
-                static_cast<blas_int>(M), X, static_cast<blas_int>(M), 0.0, V,
-                static_cast<blas_int>(N));
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasNoTrans,
+        CblasTrans,
+        static_cast<blas_int>(big),
+        static_cast<blas_int>(N),
+        static_cast<blas_int>(M),
+        1.0,
+        J_hat,
+        static_cast<blas_int>(M),
+        X,
+        static_cast<blas_int>(M),
+        0.0,
+        V,
+        static_cast<blas_int>(N)
+    );
 
     // ---- Phase 4: Self projections ----
     std::vector<double> U(big);
@@ -1793,9 +1994,20 @@ void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__r
 
 #pragma omp parallel for schedule(static)
     for (std::size_t a = 0; a < N; ++a) {
-        cblas_dgemv(CblasRowMajor, CblasTrans, static_cast<blas_int>(M), static_cast<blas_int>(D),
-                    1.0, dX + a * M * D, static_cast<blas_int>(D), X + a * M, 1, 0.0,
-                    U.data() + a * D, 1);
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasTrans,
+            static_cast<blas_int>(M),
+            static_cast<blas_int>(D),
+            1.0,
+            dX + a * M * D,
+            static_cast<blas_int>(D),
+            X + a * M,
+            1,
+            0.0,
+            U.data() + a * D,
+            1
+        );
     }
 
     kf_blas_set_num_threads(saved_blas_threads);
@@ -1818,8 +2030,7 @@ void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__r
     //   Hessian:  row=N+a*D+d1, col=N+b*D+d2, d1<=d2 when a==b, any when a<b
     //             => rfp(N+a*D+d1, N+b*D+d2) for a<=b
 
-    if (tile_B == 0)
-        tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
+    if (tile_B == 0) tile_B = std::min<std::size_t>(DEFAULT_TILE_SIZE, N);
 
     saved_blas_threads = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
@@ -1866,10 +2077,22 @@ void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__r
                 // ---- Hessian block [N+a*D+d1, N+b*D+d2] ----
                 // For a < b: all D*D entries (both d1<d2 and d1>=d2 positions)
                 // For a == b: upper triangle d1 <= d2
-                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(D),
-                            static_cast<blas_int>(D), static_cast<blas_int>(M), 1.0, Ja_hat,
-                            static_cast<blas_int>(M), Jb_hat, static_cast<blas_int>(M), 0.0, Gblk,
-                            static_cast<blas_int>(D));
+                cblas_dgemm(
+                    CblasRowMajor,
+                    CblasNoTrans,
+                    CblasTrans,
+                    static_cast<blas_int>(D),
+                    static_cast<blas_int>(D),
+                    static_cast<blas_int>(M),
+                    1.0,
+                    Ja_hat,
+                    static_cast<blas_int>(M),
+                    Jb_hat,
+                    static_cast<blas_int>(M),
+                    0.0,
+                    Gblk,
+                    static_cast<blas_int>(D)
+                );
 
 #pragma omp simd
                 for (std::size_t d = 0; d < D; ++d)
@@ -1903,17 +2126,6 @@ void kernel_gaussian_full_symm_rfp(const double *__restrict X, const double *__r
     }
 
     kf_blas_set_num_threads(saved_blas_threads);
-
-    // Profiling
-    const char *profile_env = std::getenv("KERNELFORGE_PROFILE");
-    if (profile_env && std::atoi(profile_env) != 0) {
-        double t_total = omp_get_wtime() - t_start;
-        printf("\n=== kernel_gaussian_full_symm_rfp profiling ===\n");
-        printf("Problem size: N=%zu, M=%zu, D=%zu, BIG=%zu\n", N, M, D, BIG);
-        printf("RFP size: %zu\n", rfp_size);
-        printf("TOTAL: %8.4f ms\n", t_total * 1000);
-        printf("===============================================\n\n");
-    }
 
     aligned_free_64(V);
     aligned_free_64(J_hat);

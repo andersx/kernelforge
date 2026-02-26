@@ -21,8 +21,9 @@ namespace fchl19 {
 // ==================== Helper Functions (file-local) ====================
 
 // Compute the expected representation size per atom
-std::size_t compute_rep_size(std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-                             std::size_t nabasis) {
+std::size_t compute_rep_size(
+    std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3, std::size_t nabasis
+) {
     const std::size_t two_body = nelements * nbasis2;
     const std::size_t n_pairs_symmetric = nelements * (nelements + 1) / 2;  // unordered pairs
     const std::size_t three_body = n_pairs_symmetric * nbasis3 * nabasis;
@@ -35,23 +36,25 @@ static inline std::size_t idx2(std::size_t i, std::size_t j, std::size_t ncols) 
 }
 
 // Gradient indexing: (i, feat, a, d) -> flat index for shape (natoms, rep_size, natoms, 3)
-static inline std::size_t gidx(std::size_t i, std::size_t feat, std::size_t a, std::size_t d,
-                               std::size_t rep_size, std::size_t natoms) {
+static inline std::size_t gidx(
+    std::size_t i, std::size_t feat, std::size_t a, std::size_t d, std::size_t rep_size,
+    std::size_t natoms
+) {
     return (((i * rep_size + feat) * natoms + a) * 3 + d);
 }
 
 // Symmetric pair index for elements p, q
 static inline std::size_t pair_index(std::size_t nelements, int p, int q) {
-    if (p > q)
-        std::swap(p, q);
+    if (p > q) std::swap(p, q);
     long long llp = p, llq = q, llN = static_cast<long long>(nelements);
     long long idx = -llp * (llp + 1) / 2 + llq + llN * llp;
     return static_cast<std::size_t>(idx);
 }
 
 // Half-cosine cutoff decay: 0.5*(cos(pi*r*invrc) + 1)
-static void decay_matrix(const std::vector<double> &rmat, double invrc, std::size_t natoms,
-                         std::vector<double> &out) {
+static void decay_matrix(
+    const std::vector<double> &rmat, double invrc, std::size_t natoms, std::vector<double> &out
+) {
     out.resize(natoms * natoms);
     const double f = M_PI * invrc;
     for (std::size_t i = 0; i < natoms * natoms; ++i) {
@@ -60,8 +63,9 @@ static void decay_matrix(const std::vector<double> &rmat, double invrc, std::siz
 }
 
 // Compute full pairwise distance matrix (natoms x natoms, row-major)
-static std::vector<double> pairwise_distances(const std::vector<double> &coords,
-                                               std::size_t natoms) {
+static std::vector<double> pairwise_distances(
+    const std::vector<double> &coords, std::size_t natoms
+) {
     if (coords.size() != natoms * 3)
         throw std::invalid_argument("coords.size() must equal natoms*3");
     std::vector<double> D(natoms * natoms, 0.0);
@@ -82,22 +86,21 @@ static std::vector<double> pairwise_distances(const std::vector<double> &coords,
 
 // ==================== FCHL19 Representation Functions ====================
 
-void generate_fchl_acsf(const std::vector<double> &coords, const std::vector<int> &nuclear_z,
-                        const std::vector<int> &elements, const std::vector<double> &Rs2,
-                        const std::vector<double> &Rs3, const std::vector<double> &Ts, double eta2,
-                        double eta3, double zeta, double rcut, double acut, double two_body_decay,
-                        double three_body_decay, double three_body_weight,
-                        std::vector<double> &rep) {
+void generate_fchl_acsf(
+    const std::vector<double> &coords, const std::vector<int> &nuclear_z,
+    const std::vector<int> &elements, const std::vector<double> &Rs2,
+    const std::vector<double> &Rs3, const std::vector<double> &Ts, double eta2, double eta3,
+    double zeta, double rcut, double acut, double two_body_decay, double three_body_decay,
+    double three_body_weight, std::vector<double> &rep
+) {
     const size_t natoms = nuclear_z.size();
-    if (coords.size() != natoms * 3)
-        throw std::invalid_argument("coords size must be natoms*3");
+    if (coords.size() != natoms * 3) throw std::invalid_argument("coords size must be natoms*3");
 
     const size_t nelements = elements.size();
     const size_t nbasis2 = Rs2.size();
     const size_t nbasis3 = Rs3.size();
     const size_t nabasis = Ts.size();
-    if (nabasis % 2 != 0)
-        throw std::invalid_argument("Ts.size() (nabasis) must be even");
+    if (nabasis % 2 != 0) throw std::invalid_argument("Ts.size() (nabasis) must be even");
 
     const size_t rep_size = compute_rep_size(nelements, nbasis2, nbasis3, nabasis);
     rep.assign(natoms * rep_size, 0.0);
@@ -138,8 +141,7 @@ void generate_fchl_acsf(const std::vector<double> &coords, const std::vector<int
     std::vector<double> log_Rs2(nbasis2, 0.0);
     std::vector<double> inv_Rs2(nbasis2, 0.0);
     for (size_t k = 0; k < nbasis2; ++k) {
-        if (Rs2[k] <= 0.0)
-            throw std::invalid_argument("All Rs2 must be > 0");
+        if (Rs2[k] <= 0.0) throw std::invalid_argument("All Rs2 must be > 0");
         log_Rs2[k] = std::log(Rs2[k]);
         inv_Rs2[k] = 1.0 / Rs2[k];
     }
@@ -157,15 +159,13 @@ void generate_fchl_acsf(const std::vector<double> &coords, const std::vector<int
             for (size_t j = i + 1; j < natoms; ++j) {
                 const int elem_j = elem_of_atom[j];
                 const double rij = D[idx2(i, j, natoms)];
-                if (rij > rcut)
-                    continue;
+                if (rij > rcut) continue;
 
                 const double rij2 = rij * rij;
                 const double t = eta2 / std::max(rij2, kf::EPS);
                 const double log1pt = std::log1p(t);
                 const double sigma = std::sqrt(std::max(log1pt, 0.0));
-                if (sigma < kf::EPS)
-                    continue;
+                if (sigma < kf::EPS) continue;
                 const double mu = std::log(rij) - 0.5 * log1pt;
                 const double decay_ij = rdecay2[idx2(i, j, natoms)];
                 const double inv_pref =
@@ -204,11 +204,9 @@ void generate_fchl_acsf(const std::vector<double> &coords, const std::vector<int
 
         const double *rb = &coords[3 * i];
         for (size_t j = 0; j + 1 < natoms; ++j) {
-            if (j == i)
-                continue;
+            if (j == i) continue;
             const double rij = D[idx2(i, j, natoms)];
-            if (rij > acut)
-                continue;
+            if (rij > acut) continue;
             const int elem_j = elem_of_atom[j];
             const double *ra = &coords[3 * j];
 
@@ -219,11 +217,9 @@ void generate_fchl_acsf(const std::vector<double> &coords, const std::vector<int
             const double eij2 = (ra[2] - rb[2]) * inv_rij;
 
             for (size_t k = j + 1; k < natoms; ++k) {
-                if (k == i)
-                    continue;
+                if (k == i) continue;
                 const double rik = D[idx2(i, k, natoms)];
-                if (rik > acut)
-                    continue;
+                if (rik > acut) continue;
                 const int elem_k = elem_of_atom[k];
                 const double *rc = &coords[3 * k];
 
@@ -256,8 +252,7 @@ void generate_fchl_acsf(const std::vector<double> &coords, const std::vector<int
                 const double sin_i = std::sqrt(std::max(0.0, 1.0 - cos_i * cos_i));
                 // o=1: cos(1*angle) = cos_i, sin(1*angle) = sin_i
                 angular[0] = ang_w[0] * cos_i;
-                if (nabasis > 1)
-                    angular[1] = ang_w[0] * sin_i;
+                if (nabasis > 1) angular[1] = ang_w[0] * sin_i;
 
                 // Higher harmonics o=3,5,... via Chebyshev recurrence
                 if (n_harm > 1) {
@@ -276,8 +271,7 @@ void generate_fchl_acsf(const std::vector<double> &coords, const std::vector<int
                         if (n == ang_o[harm_stored]) {
                             angular[2 * harm_stored] = ang_w[harm_stored] * cn;
                             angular[2 * harm_stored + 1] = ang_w[harm_stored] * sn;
-                            if (++harm_stored >= n_harm)
-                                break;
+                            if (++harm_stored >= n_harm) break;
                         }
                     }
                 }
@@ -316,10 +310,10 @@ void generate_fchl_acsf_and_gradients(
     const std::vector<int> &elements, const std::vector<double> &Rs2,
     const std::vector<double> &Rs3, const std::vector<double> &Ts, double eta2, double eta3,
     double zeta, double rcut, double acut, double two_body_decay, double three_body_decay,
-    double three_body_weight, std::vector<double> &rep, std::vector<double> &grad) {
+    double three_body_weight, std::vector<double> &rep, std::vector<double> &grad
+) {
     const size_t natoms = nuclear_z.size();
-    if (coords.size() != natoms * 3)
-        throw std::invalid_argument("coords size must be natoms*3");
+    if (coords.size() != natoms * 3) throw std::invalid_argument("coords size must be natoms*3");
     const size_t nelements = elements.size();
     const size_t nbasis2 = Rs2.size();
     const size_t nbasis3 = Rs3.size();
@@ -337,8 +331,7 @@ void generate_fchl_acsf_and_gradients(
     std::vector<int> elem_of_atom(natoms, -1);
     for (size_t i = 0; i < natoms; ++i) {
         auto it = z2idx.find(nuclear_z[i]);
-        if (it == z2idx.end())
-            throw std::runtime_error("Unknown element in nuclear_z");
+        if (it == z2idx.end()) throw std::runtime_error("Unknown element in nuclear_z");
         elem_of_atom[i] = it->second;
     }
 
@@ -372,8 +365,7 @@ void generate_fchl_acsf_and_gradients(
     // Precompute log(Rs2)
     std::vector<double> log_Rs2(nbasis2);
     for (size_t k = 0; k < nbasis2; ++k) {
-        if (Rs2[k] <= 0.0)
-            throw std::invalid_argument("Rs2 must be >0");
+        if (Rs2[k] <= 0.0) throw std::invalid_argument("Rs2 must be >0");
         log_Rs2[k] = std::log(Rs2[k]);
     }
 
@@ -383,14 +375,12 @@ void generate_fchl_acsf_and_gradients(
         for (size_t j = i + 1; j < natoms; ++j) {
             const int elem_j = elem_of_atom[j];
             const double rij = D[idx2(i, j, natoms)];
-            if (rij > rcut)
-                continue;
+            if (rij > rcut) continue;
             const double invr = invD[idx2(i, j, natoms)];
             const double invr2 = invD2[idx2(i, j, natoms)];
             const double s2 = std::log1p(eta2 * invr2);  // sigma^2
             const double sigma = std::sqrt(std::max(s2, 0.0));
-            if (sigma < kf::EPS)
-                continue;
+            if (sigma < kf::EPS) continue;
             const double mu = std::log(rij) - 0.5 * s2;
             const double decay_ij = rdecay2[idx2(i, j, natoms)];
             const double scaling = std::pow(rij, -two_body_decay);
@@ -472,11 +462,9 @@ void generate_fchl_acsf_and_gradients(
         const double *rb = &coords[3 * i];
         const double Bx = rb[0], By = rb[1], Bz = rb[2];
         for (size_t j = 0; j + 1 < natoms; ++j) {
-            if (j == i)
-                continue;
+            if (j == i) continue;
             const double rij = D[idx2(i, j, natoms)];
-            if (rij > acut)
-                continue;
+            if (rij > acut) continue;
             const double rij2 = D2[idx2(i, j, natoms)];
             const double invrij = invD[idx2(i, j, natoms)];
             const double invrij2 = invD2[idx2(i, j, natoms)];
@@ -493,11 +481,9 @@ void generate_fchl_acsf_and_gradients(
             const double s_ij = -M_PI * std::sin(M_PI * rij * inv_acut) * 0.5 * invrij * inv_acut;
 
             for (size_t k = j + 1; k < natoms; ++k) {
-                if (k == i)
-                    continue;
+                if (k == i) continue;
                 const double rik = D[idx2(i, k, natoms)];
-                if (rik > acut)
-                    continue;
+                if (rik > acut) continue;
                 const double rik2 = D2[idx2(i, k, natoms)];
                 const double invrik = invD[idx2(i, k, natoms)];
                 const double invrik2 = invD2[idx2(i, k, natoms)];
@@ -560,7 +546,8 @@ void generate_fchl_acsf_and_gradients(
                 // d_ijdecay[t] = s_ij * (B[t] - A[t])
                 const double d_ijd0 = s_ij * (Bx - Ax), d_ijd1 = s_ij * (By - Ay),
                              d_ijd2 = s_ij * (Bz - Az);
-                const double s_ik = -M_PI * std::sin(M_PI * rik * inv_acut) * 0.5 * invrik * inv_acut;
+                const double s_ik =
+                    -M_PI * std::sin(M_PI * rik * inv_acut) * 0.5 * invrik * inv_acut;
                 const double d_ikd0 = s_ik * (Bx - Cx), d_ikd1 = s_ik * (By - Cy),
                              d_ikd2 = s_ik * (Bz - Cz);
 
@@ -783,8 +770,7 @@ void generate_fchl_acsf_and_gradients(
             for (size_t a = 0; a < natoms; ++a) {
                 for (size_t t = 0; t < 3; ++t) {
                     const double v = atom_grad[(off * natoms + a) * 3 + t];
-                    if (v != 0.0)
-                        grad[gidx(i, three_offset + off, a, t, rep_size, natoms)] += v;
+                    if (v != 0.0) grad[gidx(i, three_offset + off, a, t, rep_size, natoms)] += v;
                 }
             }
         }

@@ -34,16 +34,16 @@ void inverse_distance_upper(const double *R_flat, std::size_t N, double eps, dou
             const double Dz = zi - R_flat[j0 + 2];
 
             double r2 = Dx * Dx + Dy * Dy + Dz * Dz;
-            if (r2 < eps2)
-                r2 = eps2;
+            if (r2 < eps2) r2 = eps2;
 
             x[p] = 1.0 / std::sqrt(r2);
         }
     }
 }
 
-void inverse_distance_upper_and_jacobian(const double *R_flat, std::size_t N, double eps, double *x,
-                                         double *J) {
+void inverse_distance_upper_and_jacobian(
+    const double *R_flat, std::size_t N, double eps, double *x, double *J
+) {
     const std::size_t M = num_pairs(N);
     const std::size_t D = 3 * N;
 
@@ -66,8 +66,7 @@ void inverse_distance_upper_and_jacobian(const double *R_flat, std::size_t N, do
             const double Dz = zi - R_flat[j0 + 2];
 
             double r2 = Dx * Dx + Dy * Dy + Dz * Dz;
-            if (r2 < eps2)
-                r2 = eps2;
+            if (r2 < eps2) r2 = eps2;
 
             const double inv_r = 1.0 / std::sqrt(r2);
             const double inv_r3 = inv_r / r2;  // 1/r^3
