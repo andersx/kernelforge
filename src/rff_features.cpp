@@ -12,6 +12,7 @@
 // Project headers
 #include "aligned_alloc64.hpp"
 #include "blas_config.h"
+#include "profiling.h"
 #include "rff_features.hpp"
 
 namespace kf::rff {
@@ -24,9 +25,14 @@ void rff_features(
     if (N == 0 || rep_size == 0 || D == 0)
         throw std::invalid_argument("rff_features: zero dimension");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_dgemm = 0.0, t_cos_scaling = 0.0;
+#endif
+
     // Z = X @ W  via DGEMM
     // X is (N, rep_size), W is (rep_size, D), Z is (N, D)
     // RowMajor: M=N, N=D, K=rep_size
+    PROFILE_START(dgemm);
     cblas_dgemm(
         CblasRowMajor,
         CblasNoTrans,
@@ -43,13 +49,15 @@ void rff_features(
         Z,
         static_cast<int>(D)
     );  // C, ldc
+    PROFILE_END(dgemm, t_dgemm);
 
     // Z[:, d] = cos(Z[:, d] + b[d]) * sqrt(2/D)
     const double normalization = std::sqrt(2.0 / static_cast<double>(D));
 
-// Outer loop parallelized: when called standalone this uses all OMP threads;
-// when called from inside an OMP parallel region (e.g. gramian functions),
-// nested parallelism is disabled by default so it serializes — same as before.
+    // Outer loop parallelized: when called standalone this uses all OMP threads;
+    // when called from inside an OMP parallel region (e.g. gramian functions),
+    // nested parallelism is disabled by default so it serializes — same as before.
+    PROFILE_START(cos_scaling);
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < N; ++i) {
 #pragma omp simd
@@ -57,6 +65,25 @@ void rff_features(
             Z[i * D + d] = std::cos(Z[i * D + d] + b[d]) * normalization;
         }
     }
+    PROFILE_END(cos_scaling, t_cos_scaling);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_total = t_dgemm + t_cos_scaling;
+    std::printf(
+        "[PROFILE] rff_features(N=%zu, rep_size=%zu, D=%zu):\n"
+        "  Phase 1 (DGEMM):        %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (cos scaling):  %8.4fs (%5.1f%%)\n"
+        "  Total:                  %8.4fs (100.0%%)\n",
+        N,
+        rep_size,
+        D,
+        t_dgemm,
+        100.0 * t_dgemm / t_total,
+        t_cos_scaling,
+        100.0 * t_cos_scaling / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_gradient(
@@ -66,6 +93,10 @@ void rff_gradient(
     if (!X || !dX || !W || !b || !G) throw std::invalid_argument("rff_gradient: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient: zero dimension");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_dgemv = 0.0, t_dgemm = 0.0, t_sin_scaling = 0.0;
+#endif
 
     const double normalization = -std::sqrt(2.0 / static_cast<double>(D));
     const std::size_t total_grads = N * ncoords;  // total columns of G
@@ -94,10 +125,14 @@ void rff_gradient(
 #pragma omp parallel
     {
         std::vector<double> z_i(D);
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        double t_dgemv_local = 0.0, t_dgemm_local = 0.0, t_sin_scaling_local = 0.0;
+#endif
 
 #pragma omp for schedule(static)
         for (std::size_t i = 0; i < N; ++i) {
             // z_i = b + W^T @ X[i]
+            PROFILE_START(dgemv);
             std::memcpy(z_i.data(), b, D * sizeof(double));
             cblas_dgemv(
                 CblasRowMajor,
@@ -113,11 +148,13 @@ void rff_gradient(
                 z_i.data(),
                 1
             );
+            PROFILE_END(dgemv, t_dgemv_local);
 
             // G[:, i*ncoords:(i+1)*ncoords] = W^T @ dX[i]
             // W is (rep_size, D) row-major → W^T is (D, rep_size); lda = D.
             // dX[i] is (rep_size, ncoords) row-major.
             // Result (D, ncoords) written at column offset i*ncoords; ldc = total_grads.
+            PROFILE_START(dgemm);
             cblas_dgemm(
                 CblasRowMajor,
                 CblasTrans,
@@ -134,8 +171,10 @@ void rff_gradient(
                 G + i * ncoords,  // C col offset i*ncoords in G
                 static_cast<int>(total_grads)
             );
+            PROFILE_END(dgemm, t_dgemm_local);
 
             // Scale row d in-place by sin(z_i[d]) * normalization
+            PROFILE_START(sin_scaling);
             for (std::size_t d = 0; d < D; ++d) {
                 const double factor = std::sin(z_i[d]) * normalization;
                 double *row = G + d * total_grads + i * ncoords;
@@ -144,9 +183,41 @@ void rff_gradient(
                     row[c] *= factor;
                 }
             }
+            PROFILE_END(sin_scaling, t_sin_scaling_local);
         }
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp critical
+        {
+            t_dgemv += t_dgemv_local;
+            t_dgemm += t_dgemm_local;
+            t_sin_scaling += t_sin_scaling_local;
+        }
+#endif
     }  // end omp parallel
     kf_blas_set_num_threads(blas_nt);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_total = t_dgemv + t_dgemm + t_sin_scaling;
+    std::printf(
+        "[PROFILE] rff_gradient(N=%zu, rep_size=%zu, D=%zu, ncoords=%zu):\n"
+        "  Phase 1 (DGEMV z_i):    %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (DGEMM grad):   %8.4fs (%5.1f%%)\n"
+        "  Phase 3 (sin scaling):  %8.4fs (%5.1f%%)\n"
+        "  Total:                  %8.4fs (100.0%%)\n",
+        N,
+        rep_size,
+        D,
+        ncoords,
+        t_dgemv,
+        100.0 * t_dgemv / t_total,
+        t_dgemm,
+        100.0 * t_dgemm / t_total,
+        t_sin_scaling,
+        100.0 * t_sin_scaling / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_gramian_symm(
@@ -158,6 +229,10 @@ void rff_gramian_symm(
     if (N == 0 || rep_size == 0 || D == 0)
         throw std::invalid_argument("rff_gramian_symm: zero dimension");
     if (chunk_size == 0) throw std::invalid_argument("rff_gramian_symm: zero chunk_size");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_rff_features = 0.0, t_dsyrk = 0.0, t_dgemv = 0.0, t_symmetrize = 0.0;
+#endif
 
     const std::size_t nchunks = (N + chunk_size - 1) / chunk_size;
 
@@ -173,9 +248,12 @@ void rff_gramian_symm(
         // zero accum on first chunk, then sum
         double clear_or_sum = (ci == 0) ? 0.0 : 1.0;
 
+        PROFILE_START(rff_features);
         rff_features(X + cs * rep_size, W, b, nc, rep_size, D, Z);
+        PROFILE_END(rff_features, t_rff_features);
 
         // ZtZ += Z^T @ Z  (upper triangle via DSYRK)
+        PROFILE_START(dsyrk);
         cblas_dsyrk(
             CblasRowMajor,
             CblasUpper,
@@ -189,8 +267,10 @@ void rff_gramian_symm(
             ZtZ,
             static_cast<int>(D)
         );
+        PROFILE_END(dsyrk, t_dsyrk);
 
         // ZtY += Z^T @ Y_chunk
+        PROFILE_START(dgemv);
         cblas_dgemv(
             CblasRowMajor,
             CblasTrans,
@@ -205,17 +285,45 @@ void rff_gramian_symm(
             ZtY,
             1
         );
+        PROFILE_END(dgemv, t_dgemv);
 
         aligned_free_64(Z);
     }
 
-// Symmetrize: copy upper triangle to lower
+    // Symmetrize: copy upper triangle to lower
+    PROFILE_START(symmetrize);
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
             ZtZ[j * D + i] = ZtZ[i * D + j];
         }
     }
+    PROFILE_END(symmetrize, t_symmetrize);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_total = t_rff_features + t_dsyrk + t_dgemv + t_symmetrize;
+    std::printf(
+        "[PROFILE] rff_gramian_symm(N=%zu, rep_size=%zu, D=%zu, chunks=%zu):\n"
+        "  Phase 1 (rff_features): %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (DSYRK):        %8.4fs (%5.1f%%)\n"
+        "  Phase 3 (DGEMV ZtY):    %8.4fs (%5.1f%%)\n"
+        "  Phase 4 (symmetrize):   %8.4fs (%5.1f%%)\n"
+        "  Total:                  %8.4fs (100.0%%)\n",
+        N,
+        rep_size,
+        D,
+        nchunks,
+        t_rff_features,
+        100.0 * t_rff_features / t_total,
+        t_dsyrk,
+        100.0 * t_dsyrk / t_total,
+        t_dgemv,
+        100.0 * t_dgemv / t_total,
+        t_symmetrize,
+        100.0 * t_symmetrize / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_full_gramian_symm(
@@ -229,6 +337,13 @@ void rff_full_gramian_symm(
         throw std::invalid_argument("rff_full_gramian_symm: zero dimension");
     if (energy_chunk == 0 || force_chunk == 0)
         throw std::invalid_argument("rff_full_gramian_symm: zero chunk size");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_energy_rff_features = 0.0, t_energy_dsyrk = 0.0, t_energy_dgemv = 0.0;
+    double t_force_rff_gradient = 0.0, t_force_dsyrk = 0.0, t_force_dgemv = 0.0;
+    double t_symmetrize = 0.0;
+    std::size_t energy_chunks = 0, force_chunks = 0;
+#endif
 
     // ---- Energy loop (chunked, sequential) ----
     // Accumulate directly into ZtZ/ZtY; clear_or_sum avoids memset.
@@ -245,9 +360,12 @@ void rff_full_gramian_symm(
             // zero accum on first chunk, then sum
             double clear_or_sum = (ci == 0) ? 0.0 : 1.0;
 
+            PROFILE_START(energy_rff_features);
             rff_features(X + cs * rep_size, W, b, nc, rep_size, D, Z);
+            PROFILE_END(energy_rff_features, t_energy_rff_features);
 
             // ZtZ += Z^T @ Z  (upper triangle via DSYRK)
+            PROFILE_START(energy_dsyrk);
             cblas_dsyrk(
                 CblasRowMajor,
                 CblasUpper,
@@ -261,8 +379,10 @@ void rff_full_gramian_symm(
                 ZtZ,
                 static_cast<int>(D)
             );
+            PROFILE_END(energy_dsyrk, t_energy_dsyrk);
 
             // ZtY += Z^T @ Y_chunk
+            PROFILE_START(energy_dgemv);
             cblas_dgemv(
                 CblasRowMajor,
                 CblasTrans,
@@ -277,8 +397,12 @@ void rff_full_gramian_symm(
                 ZtY,
                 1
             );
+            PROFILE_END(energy_dgemv, t_energy_dgemv);
 
             aligned_free_64(Z);
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            energy_chunks++;
+#endif
         }
     }
 
@@ -292,6 +416,7 @@ void rff_full_gramian_symm(
 
         double *G = aligned_alloc_64(D * ngrads_chunk);
 
+        PROFILE_START(force_rff_gradient);
         rff_gradient(
             X + cs * rep_size,
             dX + cs * rep_size * ncoords,
@@ -303,8 +428,10 @@ void rff_full_gramian_symm(
             ncoords,
             G
         );
+        PROFILE_END(force_rff_gradient, t_force_rff_gradient);
 
         // ZtZ += G @ G^T  (upper triangle, G is D×ngrads_chunk)
+        PROFILE_START(force_dsyrk);
         cblas_dsyrk(
             CblasRowMajor,
             CblasUpper,
@@ -318,8 +445,10 @@ void rff_full_gramian_symm(
             ZtZ,
             static_cast<int>(D)
         );
+        PROFILE_END(force_dsyrk, t_force_dsyrk);
 
         // ZtY += G @ F_chunk
+        PROFILE_START(force_dgemv);
         cblas_dgemv(
             CblasRowMajor,
             CblasNoTrans,
@@ -334,17 +463,70 @@ void rff_full_gramian_symm(
             ZtY,
             1
         );
+        PROFILE_END(force_dgemv, t_force_dgemv);
 
         aligned_free_64(G);
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        force_chunks++;
+#endif
     }
 
-// Symmetrize: copy upper triangle to lower
+    // Symmetrize: copy upper triangle to lower
+    PROFILE_START(symmetrize);
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
             ZtZ[j * D + i] = ZtZ[i * D + j];
         }
     }
+    PROFILE_END(symmetrize, t_symmetrize);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_energy_total = t_energy_rff_features + t_energy_dsyrk + t_energy_dgemv;
+    double t_force_total = t_force_rff_gradient + t_force_dsyrk + t_force_dgemv;
+    double t_total = t_energy_total + t_force_total + t_symmetrize;
+    std::printf(
+        "[PROFILE] rff_full_gramian_symm(N=%zu, D=%zu, ncoords=%zu, e_chunks=%zu, f_chunks=%zu):\n"
+        "  === Energy Loop ===\n"
+        "    rff_features:       %8.4fs (%5.1f%%)\n"
+        "    DSYRK (energy):     %8.4fs (%5.1f%%)\n"
+        "    DGEMV (ZtY):        %8.4fs (%5.1f%%)\n"
+        "    Subtotal:           %8.4fs (%5.1f%%)\n"
+        "  === Force Loop ===\n"
+        "    rff_gradient:       %8.4fs (%5.1f%%)\n"
+        "    DSYRK (force):      %8.4fs (%5.1f%%)\n"
+        "    DGEMV (GtF):        %8.4fs (%5.1f%%)\n"
+        "    Subtotal:           %8.4fs (%5.1f%%)\n"
+        "  === Finalization ===\n"
+        "    Symmetrization:     %8.4fs (%5.1f%%)\n"
+        "  === Total ===\n"
+        "    Total time:         %8.4fs (100.0%%)\n",
+        N,
+        D,
+        ncoords,
+        energy_chunks,
+        force_chunks,
+        t_energy_rff_features,
+        100.0 * t_energy_rff_features / t_total,
+        t_energy_dsyrk,
+        100.0 * t_energy_dsyrk / t_total,
+        t_energy_dgemv,
+        100.0 * t_energy_dgemv / t_total,
+        t_energy_total,
+        100.0 * t_energy_total / t_total,
+        t_force_rff_gradient,
+        100.0 * t_force_rff_gradient / t_total,
+        t_force_dsyrk,
+        100.0 * t_force_dsyrk / t_total,
+        t_force_dgemv,
+        100.0 * t_force_dgemv / t_total,
+        t_force_total,
+        100.0 * t_force_total / t_total,
+        t_symmetrize,
+        100.0 * t_symmetrize / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_full(
@@ -355,17 +537,26 @@ void rff_full(
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_full: zero dimension");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_rff_features = 0.0, t_rff_gradient = 0.0, t_transpose = 0.0;
+#endif
+
     const std::size_t total_grads = N * ncoords;
 
     // Top half: energy features Z[0:N, :]
+    PROFILE_START(rff_features);
     rff_features(X, W, b, N, rep_size, D, Z_full);
+    PROFILE_END(rff_features, t_rff_features);
 
     // Bottom half: G^T where G is (D, total_grads)
     double *G = aligned_alloc_64(D * total_grads);
+    PROFILE_START(rff_gradient);
     rff_gradient(X, dX, W, b, N, rep_size, D, ncoords, G);
+    PROFILE_END(rff_gradient, t_rff_gradient);
 
-// Transpose G (D, total_grads) -> Z_full[N:] (total_grads, D)
-// Z_full[(N + g) * D + d] = G[d * total_grads + g]
+    // Transpose G (D, total_grads) -> Z_full[N:] (total_grads, D)
+    // Z_full[(N + g) * D + d] = G[d * total_grads + g]
+    PROFILE_START(transpose);
 #pragma omp parallel for schedule(static)
     for (std::size_t g = 0; g < total_grads; ++g) {
         double *row = Z_full + (N + g) * D;
@@ -373,8 +564,31 @@ void rff_full(
             row[d] = G[d * total_grads + g];
         }
     }
+    PROFILE_END(transpose, t_transpose);
 
     aligned_free_64(G);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_total = t_rff_features + t_rff_gradient + t_transpose;
+    std::printf(
+        "[PROFILE] rff_full(N=%zu, rep_size=%zu, D=%zu, ncoords=%zu):\n"
+        "  Phase 1 (rff_features): %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (rff_gradient): %8.4fs (%5.1f%%)\n"
+        "  Phase 3 (transpose G):  %8.4fs (%5.1f%%) *** KEY METRIC ***\n"
+        "  Total:                  %8.4fs (100.0%%)\n",
+        N,
+        rep_size,
+        D,
+        ncoords,
+        t_rff_features,
+        100.0 * t_rff_features / t_total,
+        t_rff_gradient,
+        100.0 * t_rff_gradient / t_total,
+        t_transpose,
+        100.0 * t_transpose / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_gradient_gramian_symm(
@@ -387,6 +601,10 @@ void rff_gradient_gramian_symm(
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient_gramian_symm: zero dimension");
     if (chunk_size == 0) throw std::invalid_argument("rff_gradient_gramian_symm: zero chunk_size");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_rff_gradient = 0.0, t_dsyrk = 0.0, t_dgemv = 0.0, t_symmetrize = 0.0;
+#endif
 
     // rff_gradient uses OMP internally; keep outer loop sequential.
     // Accumulate directly into GtG/GtF; clear_or_sum avoids memset.
@@ -401,6 +619,7 @@ void rff_gradient_gramian_symm(
         // zero accum on first chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
+        PROFILE_START(rff_gradient);
         rff_gradient(
             X + cs * rep_size,
             dX + cs * rep_size * ncoords,
@@ -412,8 +631,10 @@ void rff_gradient_gramian_symm(
             ncoords,
             G
         );
+        PROFILE_END(rff_gradient, t_rff_gradient);
 
         // GtG += G @ G^T (upper triangle, G is D×ngrads_chunk)
+        PROFILE_START(dsyrk);
         cblas_dsyrk(
             CblasRowMajor,
             CblasUpper,
@@ -427,8 +648,10 @@ void rff_gradient_gramian_symm(
             GtG,
             static_cast<int>(D)
         );
+        PROFILE_END(dsyrk, t_dsyrk);
 
         // GtF += G @ F_chunk
+        PROFILE_START(dgemv);
         cblas_dgemv(
             CblasRowMajor,
             CblasNoTrans,
@@ -443,17 +666,45 @@ void rff_gradient_gramian_symm(
             GtF,
             1
         );
+        PROFILE_END(dgemv, t_dgemv);
 
         aligned_free_64(G);
     }
 
-// Symmetrize: copy upper triangle to lower
+    // Symmetrize: copy upper triangle to lower
+    PROFILE_START(symmetrize);
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
             GtG[j * D + i] = GtG[i * D + j];
         }
     }
+    PROFILE_END(symmetrize, t_symmetrize);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_total = t_rff_gradient + t_dsyrk + t_dgemv + t_symmetrize;
+    std::printf(
+        "[PROFILE] rff_gradient_gramian_symm(N=%zu, D=%zu, ncoords=%zu, chunks=%zu):\n"
+        "  Phase 1 (rff_gradient): %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (DSYRK GtG):    %8.4fs (%5.1f%%)\n"
+        "  Phase 3 (DGEMV GtF):    %8.4fs (%5.1f%%)\n"
+        "  Phase 4 (symmetrize):   %8.4fs (%5.1f%%)\n"
+        "  Total:                  %8.4fs (100.0%%)\n",
+        N,
+        D,
+        ncoords,
+        chunk_idx,
+        t_rff_gradient,
+        100.0 * t_rff_gradient / t_total,
+        t_dsyrk,
+        100.0 * t_dsyrk / t_total,
+        t_dgemv,
+        100.0 * t_dgemv / t_total,
+        t_symmetrize,
+        100.0 * t_symmetrize / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_gramian_symm_rfp(
@@ -465,6 +716,10 @@ void rff_gramian_symm_rfp(
     if (N == 0 || rep_size == 0 || D == 0)
         throw std::invalid_argument("rff_gramian_symm_rfp: zero dimension");
     if (chunk_size == 0) throw std::invalid_argument("rff_gramian_symm_rfp: zero chunk_size");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_rff_features = 0.0, t_dsfrk = 0.0, t_dgemv = 0.0;
+#endif
 
     const std::size_t nt = D * (D + 1) / 2;
     const std::size_t nchunks = (N + chunk_size - 1) / chunk_size;
@@ -480,9 +735,12 @@ void rff_gramian_symm_rfp(
         // zero accum on first chunk, then sum
         double clear_or_sum = (ci == 0) ? 0.0 : 1.0;
 
+        PROFILE_START(rff_features);
         rff_features(X + cs * rep_size, W, b, nc, rep_size, D, Z);
+        PROFILE_END(rff_features, t_rff_features);
 
         // ZtZ_rfp += Z_chunk^T @ Z_chunk
+        PROFILE_START(dsfrk);
         kf_dsfrk(
             'N',
             'U',
@@ -495,8 +753,10 @@ void rff_gramian_symm_rfp(
             clear_or_sum,
             ZtZ_rfp
         );
+        PROFILE_END(dsfrk, t_dsfrk);
 
         // ZtY += Z_chunk^T @ Y_chunk
+        PROFILE_START(dgemv);
         cblas_dgemv(
             CblasRowMajor,
             CblasTrans,
@@ -511,9 +771,32 @@ void rff_gramian_symm_rfp(
             ZtY,
             1
         );
+        PROFILE_END(dgemv, t_dgemv);
 
         aligned_free_64(Z);
     }
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_total = t_rff_features + t_dsfrk + t_dgemv;
+    std::printf(
+        "[PROFILE] rff_gramian_symm_rfp(N=%zu, rep_size=%zu, D=%zu, chunks=%zu):\n"
+        "  Phase 1 (rff_features): %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (DSFRK):        %8.4fs (%5.1f%%)\n"
+        "  Phase 3 (DGEMV ZtY):    %8.4fs (%5.1f%%)\n"
+        "  Total:                  %8.4fs (100.0%%)\n",
+        N,
+        rep_size,
+        D,
+        nchunks,
+        t_rff_features,
+        100.0 * t_rff_features / t_total,
+        t_dsfrk,
+        100.0 * t_dsfrk / t_total,
+        t_dgemv,
+        100.0 * t_dgemv / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_gradient_gramian_symm_rfp(
@@ -528,6 +811,10 @@ void rff_gradient_gramian_symm_rfp(
     if (chunk_size == 0)
         throw std::invalid_argument("rff_gradient_gramian_symm_rfp: zero chunk_size");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_rff_gradient = 0.0, t_dsfrk = 0.0, t_dgemv = 0.0;
+#endif
+
     // rff_gradient uses OMP internally; outer loop is sequential.
     // Accumulate directly into GtG_rfp/GtF; clear_or_sum avoids memset.
     std::size_t chunk_idx = 0;
@@ -541,6 +828,7 @@ void rff_gradient_gramian_symm_rfp(
         // zero accum on first chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
+        PROFILE_START(rff_gradient);
         rff_gradient(
             X + cs * rep_size,
             dX + cs * rep_size * ncoords,
@@ -552,10 +840,12 @@ void rff_gradient_gramian_symm_rfp(
             ncoords,
             G
         );
+        PROFILE_END(rff_gradient, t_rff_gradient);
 
         // GtG_rfp += G @ G^T
         // G is (D, ngrads_chunk) row-major ≡ (ngrads_chunk, D) col-major with LDA=ngrads_chunk.
         // DSFRK TRANS='T': C += A^T*A where A is (ngrads_chunk, D) → D×D ✓
+        PROFILE_START(dsfrk);
         kf_dsfrk(
             'N',
             'U',
@@ -568,8 +858,10 @@ void rff_gradient_gramian_symm_rfp(
             clear_or_sum,
             GtG_rfp
         );
+        PROFILE_END(dsfrk, t_dsfrk);
 
         // GtF += G @ F_chunk
+        PROFILE_START(dgemv);
         cblas_dgemv(
             CblasRowMajor,
             CblasNoTrans,
@@ -584,9 +876,32 @@ void rff_gradient_gramian_symm_rfp(
             GtF,
             1
         );
+        PROFILE_END(dgemv, t_dgemv);
 
         aligned_free_64(G);
     }
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_total = t_rff_gradient + t_dsfrk + t_dgemv;
+    std::printf(
+        "[PROFILE] rff_gradient_gramian_symm_rfp(N=%zu, D=%zu, ncoords=%zu, chunks=%zu):\n"
+        "  Phase 1 (rff_gradient): %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (DSFRK GtG):    %8.4fs (%5.1f%%)\n"
+        "  Phase 3 (DGEMV GtF):    %8.4fs (%5.1f%%)\n"
+        "  Total:                  %8.4fs (100.0%%)\n",
+        N,
+        D,
+        ncoords,
+        chunk_idx,
+        t_rff_gradient,
+        100.0 * t_rff_gradient / t_total,
+        t_dsfrk,
+        100.0 * t_dsfrk / t_total,
+        t_dgemv,
+        100.0 * t_dgemv / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_full_gramian_symm_rfp(
@@ -600,6 +915,12 @@ void rff_full_gramian_symm_rfp(
         throw std::invalid_argument("rff_full_gramian_symm_rfp: zero dimension");
     if (energy_chunk == 0 || force_chunk == 0)
         throw std::invalid_argument("rff_full_gramian_symm_rfp: zero chunk size");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_energy_rff_features = 0.0, t_energy_dsfrk = 0.0, t_energy_dgemv = 0.0;
+    double t_force_rff_gradient = 0.0, t_force_dsfrk = 0.0, t_force_dgemv = 0.0;
+    std::size_t energy_chunks = 0, force_chunks = 0;
+#endif
 
     // ---- Energy loop (chunked, sequential) ----
     // Accumulate directly into ZtZ_rfp/ZtY; clear_or_sum avoids memset.
@@ -616,9 +937,12 @@ void rff_full_gramian_symm_rfp(
             // zero accum on first chunk, then sum
             double clear_or_sum = (ci == 0) ? 0.0 : 1.0;
 
+            PROFILE_START(energy_rff_features);
             rff_features(X + cs * rep_size, W, b, nc, rep_size, D, Z);
+            PROFILE_END(energy_rff_features, t_energy_rff_features);
 
             // ZtZ_rfp += Z^T @ Z
+            PROFILE_START(energy_dsfrk);
             kf_dsfrk(
                 'N',
                 'U',
@@ -631,8 +955,10 @@ void rff_full_gramian_symm_rfp(
                 clear_or_sum,
                 ZtZ_rfp
             );
+            PROFILE_END(energy_dsfrk, t_energy_dsfrk);
 
             // ZtY += Z^T @ Y_chunk
+            PROFILE_START(energy_dgemv);
             cblas_dgemv(
                 CblasRowMajor,
                 CblasTrans,
@@ -647,8 +973,12 @@ void rff_full_gramian_symm_rfp(
                 ZtY,
                 1
             );
+            PROFILE_END(energy_dgemv, t_energy_dgemv);
 
             aligned_free_64(Z);
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            energy_chunks++;
+#endif
         }
     }
 
@@ -660,6 +990,8 @@ void rff_full_gramian_symm_rfp(
         const std::size_t ngrads_chunk = nc * ncoords;
 
         double *G = aligned_alloc_64(D * ngrads_chunk);
+
+        PROFILE_START(force_rff_gradient);
         rff_gradient(
             X + cs * rep_size,
             dX + cs * rep_size * ncoords,
@@ -671,8 +1003,10 @@ void rff_full_gramian_symm_rfp(
             ncoords,
             G
         );
+        PROFILE_END(force_rff_gradient, t_force_rff_gradient);
 
         // ZtZ_rfp += G @ G^T
+        PROFILE_START(force_dsfrk);
         kf_dsfrk(
             'N',
             'U',
@@ -685,8 +1019,10 @@ void rff_full_gramian_symm_rfp(
             1.0,
             ZtZ_rfp
         );
+        PROFILE_END(force_dsfrk, t_force_dsfrk);
 
         // ZtY += G @ F_chunk
+        PROFILE_START(force_dgemv);
         cblas_dgemv(
             CblasRowMajor,
             CblasNoTrans,
@@ -701,9 +1037,57 @@ void rff_full_gramian_symm_rfp(
             ZtY,
             1
         );
+        PROFILE_END(force_dgemv, t_force_dgemv);
 
         aligned_free_64(G);
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        force_chunks++;
+#endif
     }
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_energy_total = t_energy_rff_features + t_energy_dsfrk + t_energy_dgemv;
+    double t_force_total = t_force_rff_gradient + t_force_dsfrk + t_force_dgemv;
+    double t_total = t_energy_total + t_force_total;
+    std::printf(
+        "[PROFILE] rff_full_gramian_symm_rfp(N=%zu, D=%zu, ncoords=%zu, e_chunks=%zu, "
+        "f_chunks=%zu):\n"
+        "  === Energy Loop ===\n"
+        "    rff_features:       %8.4fs (%5.1f%%)\n"
+        "    DSFRK (energy):     %8.4fs (%5.1f%%)\n"
+        "    DGEMV (ZtY):        %8.4fs (%5.1f%%)\n"
+        "    Subtotal:           %8.4fs (%5.1f%%)\n"
+        "  === Force Loop ===\n"
+        "    rff_gradient:       %8.4fs (%5.1f%%)\n"
+        "    DSFRK (force):      %8.4fs (%5.1f%%)\n"
+        "    DGEMV (GtF):        %8.4fs (%5.1f%%)\n"
+        "    Subtotal:           %8.4fs (%5.1f%%)\n"
+        "  === Total ===\n"
+        "    Total time:         %8.4fs (100.0%%)\n",
+        N,
+        D,
+        ncoords,
+        energy_chunks,
+        force_chunks,
+        t_energy_rff_features,
+        100.0 * t_energy_rff_features / t_total,
+        t_energy_dsfrk,
+        100.0 * t_energy_dsfrk / t_total,
+        t_energy_dgemv,
+        100.0 * t_energy_dgemv / t_total,
+        t_energy_total,
+        100.0 * t_energy_total / t_total,
+        t_force_rff_gradient,
+        100.0 * t_force_rff_gradient / t_total,
+        t_force_dsfrk,
+        100.0 * t_force_dsfrk / t_total,
+        t_force_dgemv,
+        100.0 * t_force_dgemv / t_total,
+        t_force_total,
+        100.0 * t_force_total / t_total,
+        t_total
+    );
+#endif
 }
 
 }  // namespace kf::rff

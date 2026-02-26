@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(KF_BLAS_ILP64 "Use 64-bit integers for BLAS/LAPACK (ILP64)" OFF)
+option(KERNELFORGE_ENABLE_PROFILING "Enable performance profiling instrumentation" OFF)
 
 if(APPLE)
 
@@ -54,6 +55,13 @@ set_property(CACHE KF_BLAS_VENDOR PROPERTY STRINGS AUTO MKL OpenBLAS)
 
 if(KF_BLAS_ILP64)
   add_compile_definitions(KF_BLAS_ILP64)
+endif()
+
+if(KERNELFORGE_ENABLE_PROFILING)
+  add_compile_definitions(KERNELFORGE_ENABLE_PROFILING)
+  message(STATUS "Performance profiling: ENABLED")
+else()
+  message(STATUS "Performance profiling: DISABLED (zero overhead)")
 endif()
 
 # Helper: Configure MKL threading based on compiler
