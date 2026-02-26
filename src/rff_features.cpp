@@ -87,132 +87,110 @@ void rff_features(
 }
 
 void rff_gradient(
-    const double *X, const double *dX, const double *W, const double *b, std::size_t N,
-    std::size_t rep_size, std::size_t D, std::size_t ncoords, double *G
+    const double *X, const double *dX_T, const double *W, const double *b, std::size_t N,
+    std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t dX_T_stride, double *G
 ) {
-    if (!X || !dX || !W || !b || !G) throw std::invalid_argument("rff_gradient: null pointer");
+    if (!X || !dX_T || !W || !b || !G) throw std::invalid_argument("rff_gradient: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient: zero dimension");
 
 #ifdef KERNELFORGE_ENABLE_PROFILING
-    double t_dgemv = 0.0, t_dgemm = 0.0, t_sin_scaling = 0.0;
+    double t_dgemm_z = 0.0, t_dgemm_g = 0.0, t_sin_scaling = 0.0;
 #endif
 
     const double normalization = -std::sqrt(2.0 / static_cast<double>(D));
-    const std::size_t total_grads = N * ncoords;  // total columns of G
+    const std::size_t total_grads = N * ncoords;
 
-    // Parallelize over molecules. Each thread writes to its own non-overlapping
-    // column block of G (molecule i → columns [i*ncoords, (i+1)*ncoords)).
-    //
-    // Per-molecule computation:
-    //   G[:, i*nc:(i+1)*nc] = diag(sin(z_i) * norm) @ W^T @ dX[i]
-    // Split as:
-    //   1. DGEMM: G_chunk = W^T @ dX[i]   (beta=0, initializes the chunk)
-    //   2. Scale row d in-place by sin(z_i[d]) * norm
-    //
-    // This avoids constructing the intermediate dg (D×rep_size) matrix whose
-    // dg[d,r] = sin(z_i[d])*norm*W[r,d] loop reads W with stride-D (column-major
-    // access into a row-major array). BLAS DGEMM with CblasTrans handles the
-    // W transposition via optimised blocked algorithms.
-    //
-    // No initial memset needed: every element of G is initialised by the
-    // per-molecule DGEMM with beta=0.
-    //
-    // Serialise BLAS inside the OMP region to prevent thread oversubscription.
-    // MKL does this automatically; OpenBLAS requires an explicit API call.
-    const int blas_nt = kf_blas_get_num_threads();
-    kf_blas_set_num_threads(1);
-#pragma omp parallel
-    {
-        std::vector<double> z_i(D);
-#ifdef KERNELFORGE_ENABLE_PROFILING
-        double t_dgemv_local = 0.0, t_dgemm_local = 0.0, t_sin_scaling_local = 0.0;
-#endif
+    // --- Step 1: Compute Z (D, N): z values for all molecules ---
+    // Z[d, i] = b[d] + (W^T @ X^T)[d, i]
+    double *Z = aligned_alloc_64(D * N);
 
-#pragma omp for schedule(static)
+    // Initialize Z with broadcast b: Z[d, i] = b[d] for all i
+#pragma omp parallel for schedule(static)
+    for (std::size_t d = 0; d < D; ++d) {
         for (std::size_t i = 0; i < N; ++i) {
-            // z_i = b + W^T @ X[i]
-            PROFILE_START(dgemv);
-            std::memcpy(z_i.data(), b, D * sizeof(double));
-            cblas_dgemv(
-                CblasRowMajor,
-                CblasTrans,
-                static_cast<int>(rep_size),
-                static_cast<int>(D),
-                1.0,
-                W,
-                static_cast<int>(D),
-                X + i * rep_size,
-                1,
-                1.0,
-                z_i.data(),
-                1
-            );
-            PROFILE_END(dgemv, t_dgemv_local);
+            Z[d * N + i] = b[d];
+        }
+    }
 
-            // G[:, i*ncoords:(i+1)*ncoords] = W^T @ dX[i]
-            // W is (rep_size, D) row-major → W^T is (D, rep_size); lda = D.
-            // dX[i] is (rep_size, ncoords) row-major.
-            // Result (D, ncoords) written at column offset i*ncoords; ldc = total_grads.
-            PROFILE_START(dgemm);
-            cblas_dgemm(
-                CblasRowMajor,
-                CblasTrans,
-                CblasNoTrans,
-                static_cast<int>(D),
-                static_cast<int>(ncoords),
-                static_cast<int>(rep_size),
-                1.0,
-                W,  // A: (rep_size, D), lda = D
-                static_cast<int>(D),
-                dX + i * rep_size * ncoords,  // B: dX[i] (rep_size, ncoords)
-                static_cast<int>(ncoords),
-                0.0,              // beta = 0: initialise chunk
-                G + i * ncoords,  // C col offset i*ncoords in G
-                static_cast<int>(total_grads)
-            );
-            PROFILE_END(dgemm, t_dgemm_local);
+    // Z += W^T @ X^T
+    // W: (rep_size, D) row-major → W^T via CblasTrans
+    // X: (N, rep_size) row-major → X^T via CblasTrans
+    // Result: Z (D, N) row-major
+    PROFILE_START(dgemm_z);
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasTrans,                  // W^T
+        CblasTrans,                  // X^T
+        static_cast<int>(D),         // M = D
+        static_cast<int>(N),         // N = N
+        static_cast<int>(rep_size),  // K = rep_size
+        1.0,
+        W,
+        static_cast<int>(D),  // lda for W (rep_size, D)
+        X,
+        static_cast<int>(rep_size),  // ldb for X (N, rep_size)
+        1.0,                         // beta = 1.0 (add to b broadcast)
+        Z,
+        static_cast<int>(N)  // ldc for Z (D, N)
+    );
+    PROFILE_END(dgemm_z, t_dgemm_z);
 
-            // Scale row d in-place by sin(z_i[d]) * normalization
-            PROFILE_START(sin_scaling);
-            for (std::size_t d = 0; d < D; ++d) {
-                const double factor = std::sin(z_i[d]) * normalization;
-                double *row = G + d * total_grads + i * ncoords;
+    // --- Step 2: Compute G (total_grads, D) = dX_T^T @ W ---
+    // dX_T: (rep_size, total_grads) with stride dX_T_stride
+    // W:    (rep_size, D) row-major
+    // G:    (total_grads, D) row-major OUTPUT
+    PROFILE_START(dgemm_g);
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasTrans,                     // dX_T^T
+        CblasNoTrans,                   // W
+        static_cast<int>(total_grads),  // M = total_grads
+        static_cast<int>(D),            // N = D
+        static_cast<int>(rep_size),     // K = rep_size
+        1.0,
+        dX_T,
+        static_cast<int>(dX_T_stride),  // lda: stride of dX_T
+        W,
+        static_cast<int>(D),  // ldb: W (rep_size, D)
+        0.0,                  // beta = 0: initialize G
+        G,
+        static_cast<int>(D)  // ldc: G (total_grads, D)
+    );
+    PROFILE_END(dgemm_g, t_dgemm_g);
+
+    // --- Step 3: Scale G in-place: G[i*nc+c, d] *= sin(Z[d, i]) * norm ---
+    // Iterate over each gradient row sequentially for cache-friendly access
+    PROFILE_START(sin_scaling);
+#pragma omp parallel for schedule(static)
+    for (std::size_t g = 0; g < total_grads; ++g) {
+        const std::size_t i = g / ncoords;  // molecule index
+        double *row = G + g * D;            // G[g, :] — contiguous D elements
 #pragma omp simd
-                for (std::size_t c = 0; c < ncoords; ++c) {
-                    row[c] *= factor;
-                }
-            }
-            PROFILE_END(sin_scaling, t_sin_scaling_local);
+        for (std::size_t d = 0; d < D; ++d) {
+            row[d] *= std::sin(Z[d * N + i]) * normalization;
         }
+    }
+    PROFILE_END(sin_scaling, t_sin_scaling);
+
+    aligned_free_64(Z);
 
 #ifdef KERNELFORGE_ENABLE_PROFILING
-    #pragma omp critical
-        {
-            t_dgemv += t_dgemv_local;
-            t_dgemm += t_dgemm_local;
-            t_sin_scaling += t_sin_scaling_local;
-        }
-#endif
-    }  // end omp parallel
-    kf_blas_set_num_threads(blas_nt);
-
-#ifdef KERNELFORGE_ENABLE_PROFILING
-    double t_total = t_dgemv + t_dgemm + t_sin_scaling;
+    double t_total = t_dgemm_z + t_dgemm_g + t_sin_scaling;
     std::printf(
         "[PROFILE] rff_gradient(N=%zu, rep_size=%zu, D=%zu, ncoords=%zu):\n"
-        "  Phase 1 (DGEMV z_i):    %8.4fs (%5.1f%%)\n"
-        "  Phase 2 (DGEMM grad):   %8.4fs (%5.1f%%)\n"
+        "  Phase 1 (DGEMM Z):      %8.4fs (%5.1f%%)\n"
+        "  Phase 2 (DGEMM G):      %8.4fs (%5.1f%%)\n"
         "  Phase 3 (sin scaling):  %8.4fs (%5.1f%%)\n"
         "  Total:                  %8.4fs (100.0%%)\n",
         N,
         rep_size,
         D,
         ncoords,
-        t_dgemv,
-        100.0 * t_dgemv / t_total,
-        t_dgemm,
-        100.0 * t_dgemm / t_total,
+        t_dgemm_z,
+        100.0 * t_dgemm_z / t_total,
+        t_dgemm_g,
+        100.0 * t_dgemm_g / t_total,
         t_sin_scaling,
         100.0 * t_sin_scaling / t_total,
         t_total
@@ -327,11 +305,12 @@ void rff_gramian_symm(
 }
 
 void rff_full_gramian_symm(
-    const double *X, const double *dX, const double *W, const double *b, const double *Y,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *Y,
     const double *F, std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords,
-    std::size_t energy_chunk, std::size_t force_chunk, double *ZtZ, double *ZtY
+    std::size_t energy_chunk, std::size_t force_chunk, std::size_t dX_T_stride, double *ZtZ,
+    double *ZtY
 ) {
-    if (!X || !dX || !W || !b || !Y || !F || !ZtZ || !ZtY)
+    if (!X || !dX_T || !W || !b || !Y || !F || !ZtZ || !ZtY)
         throw std::invalid_argument("rff_full_gramian_symm: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_full_gramian_symm: zero dimension");
@@ -414,49 +393,50 @@ void rff_full_gramian_symm(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        double *G = aligned_alloc_64(ngrads_chunk * D);
 
         PROFILE_START(force_rff_gradient);
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,
             G
         );
         PROFILE_END(force_rff_gradient, t_force_rff_gradient);
 
-        // ZtZ += G @ G^T  (upper triangle, G is D×ngrads_chunk)
+        // ZtZ += G^T @ G  (upper triangle, G is ngrads_chunk×D)
         PROFILE_START(force_dsyrk);
         cblas_dsyrk(
             CblasRowMajor,
             CblasUpper,
-            CblasNoTrans,
+            CblasTrans,
             static_cast<int>(D),
             static_cast<int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             ZtZ,
             static_cast<int>(D)
         );
         PROFILE_END(force_dsyrk, t_force_dsyrk);
 
-        // ZtY += G @ F_chunk
+        // ZtY += G^T @ F_chunk
         PROFILE_START(force_dgemv);
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
+            CblasTrans,
             static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             F + cs * ncoords,
             1,
             1.0,
@@ -530,52 +510,49 @@ void rff_full_gramian_symm(
 }
 
 void rff_full(
-    const double *X, const double *dX, const double *W, const double *b, std::size_t N,
-    std::size_t rep_size, std::size_t D, std::size_t ncoords, double *Z_full
+    const double *X, const double *dX_T, const double *W, const double *b, std::size_t N,
+    std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t dX_T_stride,
+    double *Z_full
 ) {
-    if (!X || !dX || !W || !b || !Z_full) throw std::invalid_argument("rff_full: null pointer");
+    if (!X || !dX_T || !W || !b || !Z_full) throw std::invalid_argument("rff_full: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_full: zero dimension");
 
 #ifdef KERNELFORGE_ENABLE_PROFILING
-    double t_rff_features = 0.0, t_rff_gradient = 0.0, t_transpose = 0.0;
+    double t_rff_features = 0.0, t_rff_gradient = 0.0;
 #endif
 
     const std::size_t total_grads = N * ncoords;
 
-    // Top half: energy features Z[0:N, :]
+    // Top half: energy features Z[0:N, :] — (N, D) row-major
     PROFILE_START(rff_features);
     rff_features(X, W, b, N, rep_size, D, Z_full);
     PROFILE_END(rff_features, t_rff_features);
 
-    // Bottom half: G^T where G is (D, total_grads)
-    double *G = aligned_alloc_64(D * total_grads);
+    // Bottom half: gradient features — write directly into Z_full[N:, :]
+    // rff_gradient now outputs (total_grads, D) row-major — exactly what we need!
     PROFILE_START(rff_gradient);
-    rff_gradient(X, dX, W, b, N, rep_size, D, ncoords, G);
+    rff_gradient(
+        X,
+        dX_T,
+        W,
+        b,
+        N,
+        rep_size,
+        D,
+        ncoords,
+        dX_T_stride,
+        Z_full + N * D  // write directly at Z_full[N:, :], no transpose needed!
+    );
     PROFILE_END(rff_gradient, t_rff_gradient);
 
-    // Transpose G (D, total_grads) -> Z_full[N:] (total_grads, D)
-    // Z_full[(N + g) * D + d] = G[d * total_grads + g]
-    PROFILE_START(transpose);
-#pragma omp parallel for schedule(static)
-    for (std::size_t g = 0; g < total_grads; ++g) {
-        double *row = Z_full + (N + g) * D;
-        for (std::size_t d = 0; d < D; ++d) {
-            row[d] = G[d * total_grads + g];
-        }
-    }
-    PROFILE_END(transpose, t_transpose);
-
-    aligned_free_64(G);
-
 #ifdef KERNELFORGE_ENABLE_PROFILING
-    double t_total = t_rff_features + t_rff_gradient + t_transpose;
+    double t_total = t_rff_features + t_rff_gradient;
     std::printf(
         "[PROFILE] rff_full(N=%zu, rep_size=%zu, D=%zu, ncoords=%zu):\n"
         "  Phase 1 (rff_features): %8.4fs (%5.1f%%)\n"
         "  Phase 2 (rff_gradient): %8.4fs (%5.1f%%)\n"
-        "  Phase 3 (transpose G):  %8.4fs (%5.1f%%) *** KEY METRIC ***\n"
-        "  Total:                  %8.4fs (100.0%%)\n",
+        "  Total:                  %8.4fs (100.0%%) *** TRANSPOSE ELIMINATED! ***\n",
         N,
         rep_size,
         D,
@@ -584,19 +561,17 @@ void rff_full(
         100.0 * t_rff_features / t_total,
         t_rff_gradient,
         100.0 * t_rff_gradient / t_total,
-        t_transpose,
-        100.0 * t_transpose / t_total,
         t_total
     );
 #endif
 }
 
 void rff_gradient_gramian_symm(
-    const double *X, const double *dX, const double *W, const double *b, const double *F,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *F,
     std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t chunk_size,
-    double *GtG, double *GtF
+    std::size_t dX_T_stride, double *GtG, double *GtF
 ) {
-    if (!X || !dX || !W || !b || !F || !GtG || !GtF)
+    if (!X || !dX_T || !W || !b || !F || !GtG || !GtF)
         throw std::invalid_argument("rff_gradient_gramian_symm: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient_gramian_symm: zero dimension");
@@ -606,7 +581,7 @@ void rff_gradient_gramian_symm(
     double t_rff_gradient = 0.0, t_dsyrk = 0.0, t_dgemv = 0.0, t_symmetrize = 0.0;
 #endif
 
-    // rff_gradient uses OMP internally; keep outer loop sequential.
+    // rff_gradient now uses full BLAS threading; keep outer loop sequential.
     // Accumulate directly into GtG/GtF; clear_or_sum avoids memset.
     std::size_t chunk_idx = 0;
     for (std::size_t cs = 0; cs < N; cs += chunk_size, ++chunk_idx) {
@@ -614,7 +589,8 @@ void rff_gradient_gramian_symm(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        // G is now (ngrads_chunk, D) row-major instead of (D, ngrads_chunk)
+        double *G = aligned_alloc_64(ngrads_chunk * D);
 
         // zero accum on first chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
@@ -622,44 +598,45 @@ void rff_gradient_gramian_symm(
         PROFILE_START(rff_gradient);
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,  // column offset into transposed dX
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,  // stride of full dX_T array
             G
         );
         PROFILE_END(rff_gradient, t_rff_gradient);
 
-        // GtG += G @ G^T (upper triangle, G is D×ngrads_chunk)
+        // GtG += G^T @ G (upper triangle, G is ngrads_chunk × D)
         PROFILE_START(dsyrk);
         cblas_dsyrk(
             CblasRowMajor,
             CblasUpper,
-            CblasNoTrans,
+            CblasTrans,  // Changed: G^T @ G
             static_cast<int>(D),
             static_cast<int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),  // Changed: lda = D (row stride of G)
             clear_or_sum,
             GtG,
             static_cast<int>(D)
         );
         PROFILE_END(dsyrk, t_dsyrk);
 
-        // GtF += G @ F_chunk
+        // GtF += G^T @ F_chunk
         PROFILE_START(dgemv);
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
-            static_cast<int>(ngrads_chunk),
+            CblasTrans,                      // Changed: G^T @ F
+            static_cast<int>(ngrads_chunk),  // Changed: M = ngrads_chunk
+            static_cast<int>(D),             // Changed: N = D
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),  // Changed: lda = D
             F + cs * ncoords,
             1,
             clear_or_sum,
@@ -800,11 +777,11 @@ void rff_gramian_symm_rfp(
 }
 
 void rff_gradient_gramian_symm_rfp(
-    const double *X, const double *dX, const double *W, const double *b, const double *F,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *F,
     std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t chunk_size,
-    double *GtG_rfp, double *GtF
+    std::size_t dX_T_stride, double *GtG_rfp, double *GtF
 ) {
-    if (!X || !dX || !W || !b || !F || !GtG_rfp || !GtF)
+    if (!X || !dX_T || !W || !b || !F || !GtG_rfp || !GtF)
         throw std::invalid_argument("rff_gradient_gramian_symm_rfp: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient_gramian_symm_rfp: zero dimension");
@@ -823,7 +800,7 @@ void rff_gradient_gramian_symm_rfp(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        double *G = aligned_alloc_64(ngrads_chunk * D);
 
         // zero accum on first chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
@@ -831,45 +808,46 @@ void rff_gradient_gramian_symm_rfp(
         PROFILE_START(rff_gradient);
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,
             G
         );
         PROFILE_END(rff_gradient, t_rff_gradient);
 
-        // GtG_rfp += G @ G^T
-        // G is (D, ngrads_chunk) row-major ≡ (ngrads_chunk, D) col-major with LDA=ngrads_chunk.
-        // DSFRK TRANS='T': C += A^T*A where A is (ngrads_chunk, D) → D×D ✓
+        // GtG_rfp += G^T @ G
+        // G is (ngrads_chunk, D) row-major ≡ (D, ngrads_chunk) col-major with LDA=D.
+        // DSFRK TRANS='N': C += A^T*A where A is (D, ngrads_chunk) col-major → D×D ✓
         PROFILE_START(dsfrk);
         kf_dsfrk(
             'N',
             'U',
-            'T',
+            'N',
             static_cast<blas_int>(D),
             static_cast<blas_int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<blas_int>(ngrads_chunk),
+            static_cast<blas_int>(D),
             clear_or_sum,
             GtG_rfp
         );
         PROFILE_END(dsfrk, t_dsfrk);
 
-        // GtF += G @ F_chunk
+        // GtF += G^T @ F_chunk
         PROFILE_START(dgemv);
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
+            CblasTrans,
             static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             F + cs * ncoords,
             1,
             clear_or_sum,
@@ -905,11 +883,12 @@ void rff_gradient_gramian_symm_rfp(
 }
 
 void rff_full_gramian_symm_rfp(
-    const double *X, const double *dX, const double *W, const double *b, const double *Y,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *Y,
     const double *F, std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords,
-    std::size_t energy_chunk, std::size_t force_chunk, double *ZtZ_rfp, double *ZtY
+    std::size_t energy_chunk, std::size_t force_chunk, std::size_t dX_T_stride, double *ZtZ_rfp,
+    double *ZtY
 ) {
-    if (!X || !dX || !W || !b || !Y || !F || !ZtZ_rfp || !ZtY)
+    if (!X || !dX_T || !W || !b || !Y || !F || !ZtZ_rfp || !ZtY)
         throw std::invalid_argument("rff_full_gramian_symm_rfp: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_full_gramian_symm_rfp: zero dimension");
@@ -989,48 +968,49 @@ void rff_full_gramian_symm_rfp(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        double *G = aligned_alloc_64(ngrads_chunk * D);
 
         PROFILE_START(force_rff_gradient);
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,
             G
         );
         PROFILE_END(force_rff_gradient, t_force_rff_gradient);
 
-        // ZtZ_rfp += G @ G^T
+        // ZtZ_rfp += G^T @ G
         PROFILE_START(force_dsfrk);
         kf_dsfrk(
             'N',
             'U',
-            'T',
+            'N',
             static_cast<blas_int>(D),
             static_cast<blas_int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<blas_int>(ngrads_chunk),
+            static_cast<blas_int>(D),
             1.0,
             ZtZ_rfp
         );
         PROFILE_END(force_dsfrk, t_force_dsfrk);
 
-        // ZtY += G @ F_chunk
+        // ZtY += G^T @ F_chunk
         PROFILE_START(force_dgemv);
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
+            CblasTrans,
             static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             F + cs * ncoords,
             1,
             1.0,
