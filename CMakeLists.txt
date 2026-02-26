@@ -47,8 +47,8 @@ if (OpenMP_CXX_FOUND)
   endif()
 endif()
 
-# BLAS vendor selection (Linux only; macOS always uses Accelerate)
-# Values: AUTO (default), MKL, OpenBLAS
+# ---- BLAS/LAPACK backend detection -------------------------------------------
+# BLAS vendor selection: AUTO (default, tries MKL then OpenBLAS), MKL, OpenBLAS
 set(KF_BLAS_VENDOR "AUTO" CACHE STRING "BLAS vendor: AUTO, MKL, OpenBLAS")
 set_property(CACHE KF_BLAS_VENDOR PROPERTY STRINGS AUTO MKL OpenBLAS)
 
@@ -56,124 +56,101 @@ if(KF_BLAS_ILP64)
   add_compile_definitions(KF_BLAS_ILP64)
 endif()
 
-# ---- BLAS/LAPACK backend detection -------------------------------------------
-if(APPLE)
-  # macOS: Always use Accelerate framework
-  # ILP64 defines are set in blas_config.h (ACCELERATE_BLAS_ILP64, ACCELERATE_LAPACK_ILP64)
-  find_library(ACCELERATE Accelerate REQUIRED)
-  set(KF_BLAS_BACKEND "Accelerate")
-  message(STATUS "BLAS backend: Accelerate (Apple)")
-
-elseif(NOT KF_BLAS_VENDOR STREQUAL "OpenBLAS")
-  # Linux: Try Intel MKL first (unless explicitly set to OpenBLAS)
-  # MKL configuration:
-  #   - MKL_THREADING=gnu_thread: Use GNU OpenMP (libgomp) instead of Intel OpenMP (libiomp5)
-  #   - MKL_LINK=dynamic: Dynamic linking (shared libraries)
-  #   - MKL_INTERFACE=lp64/ilp64: 32-bit or 64-bit integers
-  set(MKL_THREADING gnu_thread)  # Use libgomp (GCC/Clang OpenMP), not libiomp5
-  set(MKL_LINK dynamic)
-  if(KF_BLAS_ILP64)
-    set(MKL_INTERFACE ilp64)
+# Helper: Configure MKL threading based on compiler
+function(kf_configure_mkl)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Intel|IntelLLVM")
+    set(MKL_THREADING intel_thread PARENT_SCOPE)  # Intel OpenMP (libiomp5)
   else()
-    set(MKL_INTERFACE lp64)
+    set(MKL_THREADING gnu_thread PARENT_SCOPE)    # GNU OpenMP (libgomp)
   endif()
-
-  # Add standard MKL install location to CMake prefix path
-  list(PREPEND CMAKE_PREFIX_PATH /opt/intel/oneapi/mkl/latest)
-
-  # Try to find MKL (QUIET: don't error if not found)
-  find_package(MKL QUIET)
-
-  if(MKL_FOUND)
-    # MKL found: Set compile definitions
-    add_compile_definitions(KF_USE_MKL)
-    # MKL_ILP64 define is set in blas_config.h when KF_BLAS_ILP64 is defined
-    set(KF_BLAS_BACKEND "MKL")
-    message(STATUS "BLAS backend: Intel MKL (${MKL_INTERFACE}, ${MKL_THREADING})")
-  elseif(KF_BLAS_VENDOR STREQUAL "MKL")
-    # MKL explicitly requested but not found: error
-    message(FATAL_ERROR "Intel MKL explicitly requested (KF_BLAS_VENDOR=MKL) but not found. "
-                        "Install MKL or set KF_BLAS_VENDOR=OpenBLAS or KF_BLAS_VENDOR=AUTO.")
-  endif()
-endif()
-
-# Fallback: Use generic BLAS (OpenBLAS, ATLAS, reference BLAS, etc.)
-if(NOT DEFINED KF_BLAS_BACKEND)
-  if(KF_BLAS_VENDOR STREQUAL "OpenBLAS")
-    # Explicitly force FindBLAS to only search for OpenBLAS (avoids finding MKL
-    # when the oneAPI environment is active and MKL is on LD_LIBRARY_PATH)
-    set(BLA_VENDOR OpenBLAS)
-  endif()
+  set(MKL_LINK dynamic PARENT_SCOPE)
   if(KF_BLAS_ILP64)
-    # OpenBLAS ILP64: requires BLA_SIZEOF_INTEGER=8
-    set(BLA_SIZEOF_INTEGER 8)
-    # OPENBLAS_USE64BITINT define is set in blas_config.h
+    set(MKL_INTERFACE ilp64 PARENT_SCOPE)
+  else()
+    set(MKL_INTERFACE lp64 PARENT_SCOPE)
+  endif()
+endfunction()
+
+# Helper: Find OpenBLAS ILP64 include directory
+function(kf_find_openblas_includes)
+  find_package(PkgConfig QUIET)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(OPENBLAS64 QUIET openblas64)
   endif()
 
-  find_package(BLAS REQUIRED)
-  set(KF_BLAS_BACKEND "OpenBLAS")
-  message(STATUS "BLAS backend: OpenBLAS/generic BLAS")
-endif()
-
-# Common interface for headers from Python/pybind11
-add_library(kf_common INTERFACE)
-target_link_libraries(kf_common INTERFACE pybind11::headers Python::Module)
-
-# Common interface for BLAS backend (provides include directories)
-add_library(kf_blas INTERFACE)
-if(KF_BLAS_BACKEND STREQUAL "Accelerate")
-  # Accelerate doesn't need explicit include directories
-  target_link_libraries(kf_blas INTERFACE ${ACCELERATE})
-elseif(KF_BLAS_BACKEND STREQUAL "MKL")
-  # MKL::MKL provides both include directories and libraries
-  target_link_libraries(kf_blas INTERFACE MKL::MKL)
-else()
-  # BLAS::BLAS provides libraries but NOT include directories.
-  # For ILP64 OpenBLAS the headers live in a non-default location
-  # (e.g. /usr/include/<arch>/openblas64-pthread/).  Find and add them.
-  if(KF_BLAS_ILP64)
-    find_path(KF_OPENBLAS64_INCLUDE cblas.h
+  if(OPENBLAS64_FOUND)
+    set(KF_OPENBLAS_INCLUDES ${OPENBLAS64_INCLUDE_DIRS} PARENT_SCOPE)
+    set(KF_OPENBLAS_SOURCE "pkg-config" PARENT_SCOPE)
+  else()
+    find_path(KF_OPENBLAS_INCLUDE cblas.h
       PATHS
         /usr/include/${CMAKE_LIBRARY_ARCHITECTURE}/openblas64-pthread
         /usr/include/${CMAKE_LIBRARY_ARCHITECTURE}/openblas64
         /usr/include/openblas64
       NO_DEFAULT_PATH)
-    if(KF_OPENBLAS64_INCLUDE)
-      target_include_directories(kf_blas SYSTEM INTERFACE ${KF_OPENBLAS64_INCLUDE})
-      message(STATUS "ILP64 OpenBLAS include dir: ${KF_OPENBLAS64_INCLUDE}")
+    if(KF_OPENBLAS_INCLUDE)
+      set(KF_OPENBLAS_INCLUDES ${KF_OPENBLAS_INCLUDE} PARENT_SCOPE)
+      set(KF_OPENBLAS_SOURCE "fallback" PARENT_SCOPE)
     endif()
   endif()
-  target_link_libraries(kf_blas INTERFACE BLAS::BLAS)
-endif()
-
-# ---- Small helpers to avoid repetition --------------------------------------
-# Track created modules/objlibs so we can link things in one go later
-set(_KF_ALL_MODULES "")
-set(_KF_ALL_OBJLIBS "")
-
-# Create a C++ object library + pybind11 module pair:
-#   kf_add_cpp_module(<base> <obj_src> <binding_src>)
-#   -> object lib: kf_<base>
-#   -> module target: <base> (no underscore prefix)
-function(kf_add_cpp_module base obj_src bind_src)
-  set(obj kf_${base})
-  add_library(${obj} OBJECT ${obj_src})
-  target_link_libraries(${obj} PRIVATE kf_common kf_blas OpenMP::OpenMP_CXX)
-
-  pybind11_add_module(${base} MODULE
-    ${bind_src}
-    $<TARGET_OBJECTS:${obj}>
-  )
-  set_target_properties(${base} PROPERTIES OUTPUT_NAME "${base}")
-  target_link_libraries(${base} PRIVATE kf_blas OpenMP::OpenMP_CXX)
-
-  list(APPEND _KF_ALL_MODULES ${base})
-  list(APPEND _KF_ALL_OBJLIBS ${obj})
-  set(_KF_ALL_MODULES "${_KF_ALL_MODULES}" PARENT_SCOPE)
-  set(_KF_ALL_OBJLIBS "${_KF_ALL_OBJLIBS}" PARENT_SCOPE)
 endfunction()
 
-# Portable optimization; native tuning is opt-in
+# Detect BLAS backend
+if(APPLE)
+  find_library(ACCELERATE Accelerate REQUIRED)
+  set(KF_BLAS_BACKEND "Accelerate")
+  set(KF_BLAS_LIBS ${ACCELERATE})
+  message(STATUS "BLAS backend: Accelerate (Apple)")
+
+elseif(KF_BLAS_VENDOR STREQUAL "MKL" OR
+       (KF_BLAS_VENDOR STREQUAL "AUTO" AND NOT KF_BLAS_VENDOR STREQUAL "OpenBLAS"))
+  kf_configure_mkl()
+  list(PREPEND CMAKE_PREFIX_PATH /opt/intel/oneapi/mkl/latest)
+  find_package(MKL QUIET)
+
+  if(MKL_FOUND)
+    add_compile_definitions(KF_USE_MKL)
+    set(KF_BLAS_BACKEND "MKL")
+    set(KF_BLAS_LIBS MKL::MKL)
+    message(STATUS "BLAS backend: Intel MKL (${MKL_INTERFACE}, ${MKL_THREADING})")
+  elseif(KF_BLAS_VENDOR STREQUAL "MKL")
+    message(FATAL_ERROR "Intel MKL explicitly requested but not found.")
+  endif()
+endif()
+
+# Fallback to OpenBLAS/generic BLAS
+if(NOT DEFINED KF_BLAS_BACKEND)
+  if(KF_BLAS_VENDOR STREQUAL "OpenBLAS")
+    set(BLA_VENDOR OpenBLAS)
+  endif()
+  if(KF_BLAS_ILP64)
+    set(BLA_SIZEOF_INTEGER 8)
+  endif()
+
+  find_package(BLAS REQUIRED)
+  set(KF_BLAS_BACKEND "OpenBLAS")
+  set(KF_BLAS_LIBS BLAS::BLAS)
+  message(STATUS "BLAS backend: OpenBLAS/generic BLAS")
+
+  if(KF_BLAS_ILP64)
+    kf_find_openblas_includes()
+    if(DEFINED KF_OPENBLAS_INCLUDES)
+      message(STATUS "ILP64 OpenBLAS include dir (${KF_OPENBLAS_SOURCE}): ${KF_OPENBLAS_INCLUDES}")
+    endif()
+  endif()
+endif()
+
+# Common interface libraries
+add_library(kf_common INTERFACE)
+target_link_libraries(kf_common INTERFACE pybind11::headers Python::Module)
+
+add_library(kf_blas INTERFACE)
+target_link_libraries(kf_blas INTERFACE ${KF_BLAS_LIBS})
+if(DEFINED KF_OPENBLAS_INCLUDES)
+  target_include_directories(kf_blas SYSTEM INTERFACE ${KF_OPENBLAS_INCLUDES})
+endif()
+
+# ---- Compiler optimization flags ---------------------------------------------
 option(KF_USE_NATIVE "Enable -march/-mcpu=native style flags" OFF)
 
 function(kf_apply_cxx_flags tgt)
@@ -182,101 +159,68 @@ function(kf_apply_cxx_flags tgt)
       -O3 -ffast-math -ftree-vectorize -fopenmp
       $<$<BOOL:${KF_USE_NATIVE}>:-mcpu=native -mtune=native>
     )
-  elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
+  elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel|IntelLLVM")
+    # Intel classic (icc/icpc) and oneAPI (icx/icpx) compilers
     target_compile_options(${tgt} PRIVATE
-      -O3 -ffast-math
-      $<$<BOOL:${KF_USE_NATIVE}>:-xHost -mtune=native>
+      -O3 -ffast-math -qopenmp
+      $<$<BOOL:${KF_USE_NATIVE}>:-xHost>
     )
   endif()
 endfunction()
 
-# ---- C++ modules -------------------------------------------------------------
-kf_add_cpp_module(global_kernels  src/global_kernels.cpp  src/global_kernels_bindings.cpp)
-# FCHL19 is split into two modules: repr and local_kernels
-kf_add_cpp_module(local_kernels   src/local_kernels.cpp   src/local_kernels_bindings.cpp)
-kf_add_cpp_module(fchl19_repr     src/fchl19_repr.cpp     src/fchl19_repr_bindings.cpp)
-kf_add_cpp_module(invdist_repr    src/invdist_repr.cpp    src/invdist_repr_bindings.cpp)
-kf_add_cpp_module(kernelmath      src/math.cpp            src/math_bindings.cpp)
+# ---- Module helper -----------------------------------------------------------
+# Create a C++ object library + pybind11 module pair:
+#   kf_add_cpp_module(<name> SOURCES src... BINDINGS bind...)
+#   -> object lib: kf_<name>  (with optimization flags, BLAS, OpenMP)
+#   -> module:     <name>     (pybind11 module linked to BLAS + OpenMP)
+set(_KF_ALL_MODULES "")
 
-# Kitchen sinks (Random Fourier Features) — split across two obj/binding sources;
-# handled manually so we can pass multiple files without extending the macro.
-add_library(kf_kitchen_sinks OBJECT
-  src/rff_features.cpp
-  src/rff_elemental.cpp)
-target_link_libraries(kf_kitchen_sinks PRIVATE kf_common kf_blas OpenMP::OpenMP_CXX)
-kf_apply_cxx_flags(kf_kitchen_sinks)
+function(kf_add_cpp_module name)
+  cmake_parse_arguments(ARG "" "" "SOURCES;BINDINGS" ${ARGN})
+  set(obj kf_${name})
 
-pybind11_add_module(kitchen_sinks MODULE
-  src/rff_features_bindings.cpp
-  src/rff_elemental_bindings.cpp
-  $<TARGET_OBJECTS:kf_kitchen_sinks>)
-set_target_properties(kitchen_sinks PROPERTIES OUTPUT_NAME "kitchen_sinks")
-target_link_libraries(kitchen_sinks PRIVATE kf_blas)
-
-# Apply C++ flags to the object libs (not to the module targets)
-foreach(obj ${_KF_ALL_OBJLIBS})
+  # Object library: compiled with optimization flags
+  add_library(${obj} OBJECT ${ARG_SOURCES})
+  target_link_libraries(${obj} PRIVATE kf_common kf_blas OpenMP::OpenMP_CXX)
   kf_apply_cxx_flags(${obj})
-endforeach()
 
-# ---- OpenMP (C++) ------------------------------------------------------------
-if (OpenMP_CXX_FOUND)
-  target_link_libraries(kernelmath PRIVATE OpenMP::OpenMP_CXX)
-  target_link_libraries(global_kernels PRIVATE OpenMP::OpenMP_CXX)
-  target_link_libraries(local_kernels PRIVATE OpenMP::OpenMP_CXX)
-  target_link_libraries(fchl19_repr PRIVATE OpenMP::OpenMP_CXX)
-  target_link_libraries(invdist_repr PRIVATE OpenMP::OpenMP_CXX)
-  # kitchen_sinks already links OpenMP via kf_kitchen_sinks object lib above
-  target_link_libraries(kitchen_sinks PRIVATE OpenMP::OpenMP_CXX)
-endif()
+  # Pybind11 module: links object library + BLAS + OpenMP
+  pybind11_add_module(${name} MODULE ${ARG_BINDINGS} $<TARGET_OBJECTS:${obj}>)
+  set_target_properties(${name} PROPERTIES OUTPUT_NAME "${name}")
+  target_link_libraries(${name} PRIVATE kf_blas OpenMP::OpenMP_CXX)
 
-# Note: BLAS backend linking is handled via kf_blas interface library
-# (linked in kf_add_cpp_module and kitchen_sinks setup)
+  list(APPEND _KF_ALL_MODULES ${name})
+  set(_KF_ALL_MODULES "${_KF_ALL_MODULES}" PARENT_SCOPE)
+endfunction()
+
+# ---- C++ modules -------------------------------------------------------------
+kf_add_cpp_module(global_kernels
+  SOURCES  src/global_kernels.cpp
+  BINDINGS src/global_kernels_bindings.cpp)
+
+kf_add_cpp_module(local_kernels
+  SOURCES  src/local_kernels.cpp
+  BINDINGS src/local_kernels_bindings.cpp)
+
+kf_add_cpp_module(fchl19_repr
+  SOURCES  src/fchl19_repr.cpp
+  BINDINGS src/fchl19_repr_bindings.cpp)
+
+kf_add_cpp_module(invdist_repr
+  SOURCES  src/invdist_repr.cpp
+  BINDINGS src/invdist_repr_bindings.cpp)
+
+kf_add_cpp_module(kernelmath
+  SOURCES  src/math.cpp
+  BINDINGS src/math_bindings.cpp)
+
+kf_add_cpp_module(kitchen_sinks
+  SOURCES  src/rff_features.cpp src/rff_elemental.cpp
+  BINDINGS src/rff_features_bindings.cpp src/rff_elemental_bindings.cpp)
 
 # ---- Install ----------------------------------------------------------------
-install(TARGETS global_kernels local_kernels fchl19_repr invdist_repr kernelmath kitchen_sinks
+install(TARGETS ${_KF_ALL_MODULES}
   LIBRARY DESTINATION kernelforge   # Linux/macOS
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )
 install(FILES python/kernelforge/__init__.py DESTINATION kernelforge)
-
-# ---- Development targets -----------------------------------------------------
-# Collect all C++ source files
-file(GLOB_RECURSE KF_CXX_SOURCES
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h
-)
-
-# clang-format target
-find_program(CLANG_FORMAT_EXE NAMES clang-format)
-if(CLANG_FORMAT_EXE)
-  add_custom_target(format
-    COMMAND ${CLANG_FORMAT_EXE} -i ${KF_CXX_SOURCES}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMENT "Running clang-format on all C++ source files"
-    VERBATIM
-  )
-else()
-  add_custom_target(format
-    COMMAND ${CMAKE_COMMAND} -E echo "clang-format not found. Please install it to use this target."
-    COMMENT "clang-format not available"
-  )
-endif()
-
-# clang-tidy target
-find_program(CLANG_TIDY_EXE NAMES clang-tidy)
-if(CLANG_TIDY_EXE)
-  add_custom_target(tidy
-    COMMAND ${CLANG_TIDY_EXE} ${KF_CXX_SOURCES} --
-      -std=c++17
-      -I${CMAKE_CURRENT_SOURCE_DIR}/src
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMENT "Running clang-tidy on all C++ source files"
-    VERBATIM
-  )
-else()
-  add_custom_target(tidy
-    COMMAND ${CMAKE_COMMAND} -E echo "clang-tidy not found. Please install it to use this target."
-    COMMENT "clang-tidy not available"
-  )
-endif()

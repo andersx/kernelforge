@@ -39,33 +39,29 @@
     #endif
     #include <cblas.h>
 
-    // Forward-declare OpenBLAS threading helpers.  These are declared in
-    // OpenBLAS's own cblas.h, but CMake's BLAS::BLAS imported target does
-    // not propagate include directories, so the wrong (or missing) cblas.h
-    // may be found.  Declaring them here is harmless if cblas.h already
-    // provided them.
-    extern "C" {
-    int  openblas_get_num_threads(void);
-    void openblas_set_num_threads(int num_threads);
-    }
+// Forward-declare OpenBLAS threading helpers.  These are declared in
+// OpenBLAS's own cblas.h, but CMake's BLAS::BLAS imported target does
+// not propagate include directories, so the wrong (or missing) cblas.h
+// may be found.  Declaring them here is harmless if cblas.h already
+// provided them.
+extern "C" {
+int openblas_get_num_threads(void);
+void openblas_set_num_threads(int num_threads);
+}
 
-    // OpenBLAS does not export LAPACKE_dsfrk; declare the Fortran symbol directly.
-    // (MKL and Accelerate already declare dsfrk_ in their own headers.)
-    // blas_int.h has not been included yet, so use the concrete type directly:
-    //   LP64 -> int,  ILP64 -> long (int64_t on Linux x86_64)
-    extern "C" {
+// OpenBLAS does not export LAPACKE_dsfrk; declare the Fortran symbol directly.
+// (MKL and Accelerate already declare dsfrk_ in their own headers.)
+// blas_int.h has not been included yet, so use the concrete type directly:
+//   LP64 -> int,  ILP64 -> long (int64_t on Linux x86_64)
+extern "C" {
     #ifdef KF_BLAS_ILP64
-    void dsfrk_(const char *transr, const char *uplo, const char *trans,
-                const long *n, const long *k,
-                const double *alpha, const double *a, const long *lda,
-                const double *beta, double *c);
+void dsfrk_(const char *transr, const char *uplo, const char *trans, const long *n, const long *k,
+            const double *alpha, const double *a, const long *lda, const double *beta, double *c);
     #else
-    void dsfrk_(const char *transr, const char *uplo, const char *trans,
-                const int *n, const int *k,
-                const double *alpha, const double *a, const int *lda,
-                const double *beta, double *c);
+void dsfrk_(const char *transr, const char *uplo, const char *trans, const int *n, const int *k,
+            const double *alpha, const double *a, const int *lda, const double *beta, double *c);
     #endif
-    }
+}
 
 #endif
 
@@ -74,19 +70,29 @@
 
 // kf_blas_get_num_threads / kf_blas_set_num_threads:
 // Save and restore the BLAS internal thread count around #pragma omp parallel
-// regions to prevent oversubscription.  MKL auto-serializes when called from
-// an OMP region so no action is needed there; OpenBLAS does not.
+// regions to prevent oversubscription.
+//
+// On macOS (Accelerate): No threading control needed - Accelerate uses GCD.
+// On Linux with MKL: We DO need to control MKL threading when inside OMP parallel regions.
+// On Linux with OpenBLAS: We need to control OpenBLAS threading.
+//
+// Note: These functions are no-ops on macOS but functional on Linux for both MKL and OpenBLAS.
 inline int kf_blas_get_num_threads() {
-#if defined(__APPLE__) || defined(KF_USE_MKL)
-    return 1; // Accelerate uses GCD; MKL auto-serializes inside OMP
+#if defined(__APPLE__)
+    // Accelerate uses GCD; no manual threading control
+    return 1;
+#elif defined(KF_USE_MKL)
+    return mkl_get_max_threads();
 #else
     return openblas_get_num_threads();
 #endif
 }
 
 inline void kf_blas_set_num_threads(int n) {
-#if defined(__APPLE__) || defined(KF_USE_MKL)
-    (void)n; // no-op: Accelerate/MKL handled automatically
+#if defined(__APPLE__)
+    (void)n;  // no-op: Accelerate handled automatically
+#elif defined(KF_USE_MKL)
+    mkl_set_num_threads(n);
 #else
     openblas_set_num_threads(n);
 #endif
@@ -94,10 +100,8 @@ inline void kf_blas_set_num_threads(int n) {
 
 // kf_dsfrk: portable wrapper for LAPACK's DSFRK (RFP symmetric rank-k update).
 // Replaces LAPACKE_dsfrk which is not exported by all OpenBLAS builds.
-inline void kf_dsfrk(char transr, char uplo, char trans,
-                     blas_int n, blas_int k,
-                     double alpha, const double *a, blas_int lda,
-                     double beta, double *c) {
+inline void kf_dsfrk(char transr, char uplo, char trans, blas_int n, blas_int k, double alpha,
+                     const double *a, blas_int lda, double beta, double *c) {
 #if defined(KF_USE_MKL) && defined(KF_BLAS_ILP64)
     // MKL ILP64: MKL_INT is 'long long' but blas_int is int64_t = 'long' on Linux.
     // Both are 64-bit; cast to match MKL's declaration and suppress the type mismatch.
