@@ -859,7 +859,7 @@ def _make_ethanol_inputs(
     result: dict[str, Any] = {"X": X, "W": W, "b": b, "rep_size": rep_size, "n_atoms": n_atoms}
     if include_dX and dX is not None:
         result["dX"] = dX
-        result["ncoords"] = dX.shape[2]
+        result["ncoords"] = dX.shape[1]  # dX is (N, ncoords, rep_size)
 
     return result
 
