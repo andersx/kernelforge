@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -25,6 +26,11 @@ void rff_features_elemental(
         throw std::invalid_argument("rff_features_elemental: null pointer");
     if (nmol == 0 || max_atoms == 0 || rep_size == 0 || nelements == 0 || D == 0)
         throw std::invalid_argument("rff_features_elemental: zero dimension");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_gather = 0.0, t_dgemm = 0.0, t_cos = 0.0, t_scatter = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
 
     const double normalization = std::sqrt(2.0 / static_cast<double>(D));
 
@@ -63,6 +69,9 @@ void rff_features_elemental(
         // --- Step 2: Gather Xsort (total_e, rep_size) — OMP over molecules ---
         double *Xsort = aligned_alloc_64(total_e * rep_size);
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        double t0 = omp_get_wtime();
+#endif
 #pragma omp parallel for schedule(dynamic)
         for (std::size_t i = 0; i < nmol; ++i) {
             if (mol_count[i] == 0) continue;
@@ -79,12 +88,18 @@ void rff_features_elemental(
                 }
             }
         }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_gather += omp_get_wtime() - t0;
+#endif
 
         // --- Step 3: Ze = Xsort @ W[e]  (main thread, let BLAS use its own threads) ---
         double *Ze = aligned_alloc_64(total_e * D);
         const double *We = W + e * rep_size * D;
         const double *be = b + e * D;
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t0 = omp_get_wtime();
+#endif
         cblas_dgemm(
             CblasRowMajor,
             CblasNoTrans,
@@ -101,10 +116,16 @@ void rff_features_elemental(
             Ze,
             static_cast<int>(D)
         );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_dgemm += omp_get_wtime() - t0;
+#endif
 
         aligned_free_64(Xsort);
 
 // --- Step 4: Ze[row,d] = cos(Ze[row,d] + be[d]) * norm — OMP over rows ---
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t0 = omp_get_wtime();
+#endif
 #pragma omp parallel for schedule(static)
         for (std::size_t row = 0; row < total_e; ++row) {
             double *ze = Ze + row * D;
@@ -112,8 +133,14 @@ void rff_features_elemental(
                 ze[d] = std::cos(ze[d] + be[d]) * normalization;
             }
         }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_cos += omp_get_wtime() - t0;
+#endif
 
 // --- Step 5: Scatter-add Ze rows into LZ per molecule — OMP over molecules ---
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t0 = omp_get_wtime();
+#endif
 #pragma omp parallel for schedule(dynamic)
         for (std::size_t i = 0; i < nmol; ++i) {
             if (mol_count[i] == 0) continue;
@@ -128,9 +155,36 @@ void rff_features_elemental(
                 }
             }
         }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_scatter += omp_get_wtime() - t0;
+#endif
 
         aligned_free_64(Ze);
     }
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] rff_features_elemental(nmol=%zu, D=%zu, rep=%zu):\n"
+        "  Gather (step 2):  %8.4fs (%5.1f%%)\n"
+        "  DGEMM (step 3):   %8.4fs (%5.1f%%)\n"
+        "  Cos+norm (step 4):%8.4fs (%5.1f%%)\n"
+        "  Scatter (step 5): %8.4fs (%5.1f%%)\n"
+        "  Total:            %8.4fs (100.0%%)\n",
+        nmol,
+        D,
+        rep_size,
+        t_gather,
+        100.0 * t_gather / t_total,
+        t_dgemm,
+        100.0 * t_dgemm / t_total,
+        t_cos,
+        100.0 * t_cos / t_total,
+        t_scatter,
+        100.0 * t_scatter / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_gramian_elemental(
@@ -143,6 +197,11 @@ void rff_gramian_elemental(
     if (nmol == 0 || D == 0) throw std::invalid_argument("rff_gramian_elemental: zero dimension");
     if (chunk_size == 0) throw std::invalid_argument("rff_gramian_elemental: zero chunk_size");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_features = 0.0, t_dsyrk = 0.0, t_dgemv = 0.0, t_symmetrize = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
+
     // Accumulate directly into ZtZ/ZtY; clear_or_sum avoids memset.
     std::size_t chunk_idx = 0;
     for (std::size_t chunk_start = 0; chunk_start < nmol; chunk_start += chunk_size, ++chunk_idx) {
@@ -154,6 +213,9 @@ void rff_gramian_elemental(
         // zero accum on first chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        double t0 = omp_get_wtime();
+#endif
         rff_features_elemental(
             X + chunk_start * max_atoms * rep_size,
             Q + chunk_start * max_atoms,
@@ -167,6 +229,10 @@ void rff_gramian_elemental(
             D,
             LZ
         );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_features += omp_get_wtime() - t0;
+        t0 = omp_get_wtime();
+#endif
 
         // ZtZ += LZ^T @ LZ  (upper triangle via DSYRK)
         cblas_dsyrk(
@@ -182,6 +248,10 @@ void rff_gramian_elemental(
             ZtZ,
             static_cast<int>(D)
         );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_dsyrk += omp_get_wtime() - t0;
+        t0 = omp_get_wtime();
+#endif
 
         // ZtY += LZ^T @ Y_chunk
         cblas_dgemv(
@@ -198,17 +268,47 @@ void rff_gramian_elemental(
             ZtY,
             1
         );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_dgemv += omp_get_wtime() - t0;
+#endif
 
         aligned_free_64(LZ);
     }
 
 // Symmetrize: copy upper triangle to lower
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t0_sym = omp_get_wtime();
+#endif
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
             ZtZ[j * D + i] = ZtZ[i * D + j];
         }
     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    t_symmetrize += omp_get_wtime() - t0_sym;
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] rff_gramian_elemental(nmol=%zu, D=%zu, rep=%zu):\n"
+        "  rff_features (chunks): %8.4fs (%5.1f%%)\n"
+        "  DSYRK ZtZ:             %8.4fs (%5.1f%%)\n"
+        "  DGEMV ZtY:             %8.4fs (%5.1f%%)\n"
+        "  Symmetrize:            %8.4fs (%5.1f%%)\n"
+        "  Total:                 %8.4fs (100.0%%)\n",
+        nmol,
+        D,
+        rep_size,
+        t_features,
+        100.0 * t_features / t_total,
+        t_dsyrk,
+        100.0 * t_dsyrk / t_total,
+        t_dgemv,
+        100.0 * t_dgemv / t_total,
+        t_symmetrize,
+        100.0 * t_symmetrize / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_full_gramian_elemental(
@@ -370,6 +470,11 @@ void rff_gradient_elemental(
     if (nmol == 0 || max_atoms == 0 || rep_size == 0 || nelements == 0 || D == 0)
         throw std::invalid_argument("rff_gradient_elemental: zero dimension");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_dgemv_dZ = 0.0, t_gather_dX = 0.0, t_dgemm_Gtmp = 0.0, t_scale_acc = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
+
     const double normalization = -std::sqrt(2.0 / static_cast<double>(D));
     const double neg_norm = std::sqrt(2.0 / static_cast<double>(D));  // = -normalization
 
@@ -433,6 +538,9 @@ void rff_gradient_elemental(
                 const double *Xij = X + (i * max_atoms + j) * rep_size;
 
                 // dZ = be + We^T @ Xij
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                double tp = omp_get_wtime();
+#endif
                 std::memcpy(dZ.data(), be, D * sizeof(double));
                 cblas_dgemv(
                     CblasRowMajor,
@@ -448,6 +556,11 @@ void rff_gradient_elemental(
                     dZ.data(),
                     1
                 );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                t_dgemv_dZ += omp_get_wtime() - tp;
+                tp = omp_get_wtime();
+#endif
 
                 // Gather dX_atom (rep_size, ncols).
                 // dX[i, j, r, 0:natoms, 0:3] is natoms*3 = ncols contiguous doubles,
@@ -460,6 +573,11 @@ void rff_gradient_elemental(
                         ncols * sizeof(double)
                     );
                 }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                t_gather_dX += omp_get_wtime() - tp;
+                tp = omp_get_wtime();
+#endif
 
                 // G_tmp (D, ncols) = We^T @ dX_atom
                 // We is (rep_size, D) row-major → We^T is (D, rep_size); lda = D.
@@ -479,6 +597,11 @@ void rff_gradient_elemental(
                     G_tmp,
                     static_cast<int>(ncols)
                 );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                t_dgemm_Gtmp += omp_get_wtime() - tp;
+                tp = omp_get_wtime();
+#endif
 
                 // G[:, g_start[i]:+ncols] += sin(dZ[d]) * sqrt(2/D) * G_tmp[d,:]
                 for (std::size_t d = 0; d < D; ++d) {
@@ -490,6 +613,10 @@ void rff_gradient_elemental(
                         g_row[c] += factor * tmp_row[c];
                     }
                 }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                t_scale_acc += omp_get_wtime() - tp;
+#endif
             }
         }
 
@@ -497,6 +624,34 @@ void rff_gradient_elemental(
         aligned_free_64(G_tmp);
     }  // end omp parallel
     kf_blas_set_num_threads(blas_nt);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_wall = omp_get_wtime() - t_func_start;
+    const double t_sum = t_dgemv_dZ + t_gather_dX + t_dgemm_Gtmp + t_scale_acc;
+    const double t_denom = (t_sum > 0.0) ? t_sum : 1.0;
+    std::printf(
+        "[PROFILE] rff_gradient_elemental(nmol=%zu, D=%zu, rep=%zu):\n"
+        "  DGEMV dZ (be+We^T@X): %8.4fs (%5.1f%%)\n"
+        "  Gather dX_atom:       %8.4fs (%5.1f%%)\n"
+        "  DGEMM G_tmp (We^T@dX):%8.4fs (%5.1f%%)\n"
+        "  Scale+acc (sin*G_tmp):%8.4fs (%5.1f%%)\n"
+        "  Sum(thread-time):     %8.4fs (100.0%%)\n"
+        "  Wall-clock:           %8.4fs\n",
+        nmol,
+        D,
+        rep_size,
+        t_dgemv_dZ,
+        100.0 * t_dgemv_dZ / t_denom,
+        t_gather_dX,
+        100.0 * t_gather_dX / t_denom,
+        t_dgemm_Gtmp,
+        100.0 * t_dgemm_Gtmp / t_denom,
+        t_scale_acc,
+        100.0 * t_scale_acc / t_denom,
+        t_sum,
+        t_wall
+    );
+#endif
 }
 
 void rff_full_elemental(
@@ -555,6 +710,11 @@ void rff_gradient_gramian_elemental(
     if (chunk_size == 0)
         throw std::invalid_argument("rff_gradient_gramian_elemental: zero chunk_size");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_gradient = 0.0, t_dsyrk = 0.0, t_dgemv = 0.0, t_symmetrize = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
+
     // Precompute cumulative atom offsets for F indexing
     std::vector<std::size_t> cum_atoms(nmol + 1);
     cum_atoms[0] = 0;
@@ -578,6 +738,9 @@ void rff_gradient_gramian_elemental(
         // zero accum on first non-empty chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        double t0 = omp_get_wtime();
+#endif
         rff_gradient_elemental(
             X + cs * max_atoms * rep_size,
             dX + cs * max_atoms * rep_size * max_atoms * 3,
@@ -593,6 +756,10 @@ void rff_gradient_gramian_elemental(
             ngrads_chunk,
             G
         );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_gradient += omp_get_wtime() - t0;
+        t0 = omp_get_wtime();
+#endif
 
         // GtG += G @ G^T (upper triangle)
         cblas_dsyrk(
@@ -608,6 +775,10 @@ void rff_gradient_gramian_elemental(
             GtG,
             static_cast<int>(D)
         );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_dsyrk += omp_get_wtime() - t0;
+        t0 = omp_get_wtime();
+#endif
 
         // GtF += G @ F_chunk
         cblas_dgemv(
@@ -624,18 +795,48 @@ void rff_gradient_gramian_elemental(
             GtF,
             1
         );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_dgemv += omp_get_wtime() - t0;
+#endif
 
         aligned_free_64(G);
         ++chunk_idx;
     }
 
 // Symmetrize
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t0_sym = omp_get_wtime();
+#endif
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
             GtG[j * D + i] = GtG[i * D + j];
         }
     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    t_symmetrize += omp_get_wtime() - t0_sym;
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] rff_gradient_gramian_elemental(nmol=%zu, D=%zu, rep=%zu):\n"
+        "  rff_gradient (chunks): %8.4fs (%5.1f%%)\n"
+        "  DSYRK GtG:             %8.4fs (%5.1f%%)\n"
+        "  DGEMV GtF:             %8.4fs (%5.1f%%)\n"
+        "  Symmetrize:            %8.4fs (%5.1f%%)\n"
+        "  Total:                 %8.4fs (100.0%%)\n",
+        nmol,
+        D,
+        rep_size,
+        t_gradient,
+        100.0 * t_gradient / t_total,
+        t_dsyrk,
+        100.0 * t_dsyrk / t_total,
+        t_dgemv,
+        100.0 * t_dgemv / t_total,
+        t_symmetrize,
+        100.0 * t_symmetrize / t_total,
+        t_total
+    );
+#endif
 }
 
 void rff_gramian_elemental_rfp(

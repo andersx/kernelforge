@@ -152,6 +152,7 @@ endif()
 
 # ---- Compiler optimization flags ---------------------------------------------
 option(KF_USE_NATIVE "Enable -march/-mcpu=native style flags" OFF)
+option(KERNELFORGE_ENABLE_PROFILING "Enable per-phase timing instrumentation" OFF)
 
 function(kf_apply_cxx_flags tgt)
   if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -183,6 +184,9 @@ function(kf_add_cpp_module name)
   add_library(${obj} OBJECT ${ARG_SOURCES})
   target_link_libraries(${obj} PRIVATE kf_common kf_blas OpenMP::OpenMP_CXX)
   kf_apply_cxx_flags(${obj})
+  if(KERNELFORGE_ENABLE_PROFILING)
+    target_compile_definitions(${obj} PRIVATE KERNELFORGE_ENABLE_PROFILING)
+  endif()
 
   # Pybind11 module: links object library + BLAS + OpenMP
   pybind11_add_module(${name} MODULE ${ARG_BINDINGS} $<TARGET_OBJECTS:${obj}>)

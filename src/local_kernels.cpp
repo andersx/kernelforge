@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
@@ -163,6 +164,11 @@ void kernel_gaussian(
     if (!kernel) throw std::invalid_argument("kernel_out is null");
     if (!(std::isfinite(sigma)) || sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_pack = 0.0, t_dgemm = 0.0, t_scatter = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
+
     // Zero K (full rectangular matrix)
     std::memset(kernel, 0, sizeof(double) * (size_t)nm1 * nm2);
 
@@ -177,6 +183,9 @@ void kernel_gaussian(
     const int B = 8192;
 
     for (int label : labels) {
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        double t0 = omp_get_wtime();
+#endif
         // Pack rows/cols for this label
         auto pk = pack_label_block_T(
             label,
@@ -219,6 +228,9 @@ void kernel_gaussian(
         // Reusable aligned scratch tile (B×B), written anew per dgemm call
         double *Cblk = aligned_alloc_64((size_t)B * B);
         if (!Cblk) throw std::bad_alloc();
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_pack += omp_get_wtime() - t0;
+#endif
 
         // ---- Tile over (rows, cols) ----
         for (int i0 = 0; i0 < R; i0 += B) {
@@ -232,6 +244,9 @@ void kernel_gaussian(
                 const int bj = j0 / B;
 
                 // Cblk(ib×jb) = -2 * Ai0(ib×rep) * Bj0(jb×rep)^T
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t0 = omp_get_wtime();
+#endif
                 cblas_dgemm(
                     CblasRowMajor,
                     CblasNoTrans,
@@ -248,6 +263,10 @@ void kernel_gaussian(
                     Cblk,
                     static_cast<blas_int>(jb)
                 );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t_dgemm += omp_get_wtime() - t0;
+                t0 = omp_get_wtime();
+#endif
 
                 // Accumulate this tile into K
 #pragma omp parallel for schedule(guided)
@@ -288,11 +307,35 @@ void kernel_gaussian(
                         kernel[(size_t)a * nm2 + b] += kab;
                     }
                 }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t_scatter += omp_get_wtime() - t0;
+#endif
             }  // j0
         }  // i0
 
         std::free(Cblk);
     }  // labels
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] kernel_gaussian(nm1=%d, nm2=%d, rep=%d):\n"
+        "  Pack/bucket:  %8.4fs (%5.1f%%)\n"
+        "  DGEMM:        %8.4fs (%5.1f%%)\n"
+        "  Exp+scatter:  %8.4fs (%5.1f%%)\n"
+        "  Total:        %8.4fs (100.0%%)\n",
+        nm1,
+        nm2,
+        rep_size,
+        t_pack,
+        100.0 * t_pack / t_total,
+        t_dgemm,
+        100.0 * t_dgemm / t_total,
+        t_scatter,
+        100.0 * t_scatter / t_total,
+        t_total
+    );
+#endif
 }
 
 //  ###################################
@@ -408,6 +451,12 @@ void kernel_gaussian_symm_rfp(
     if (!arf) throw std::invalid_argument("arf (RFP output) is null");
     if (!(std::isfinite(sigma)) || sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_pack = 0.0, t_dsyrk = 0.0, t_diag_scatter = 0.0, t_dgemm = 0.0,
+           t_offdiag_scatter = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
+
     // Zero the RFP vector
     const size_t nt = (size_t)nm * (nm + 1ull) / 2ull;
     std::memset(arf, 0, nt * sizeof(double));
@@ -423,6 +472,9 @@ void kernel_gaussian_symm_rfp(
     const int B = 8192;
 
     for (int label : labels) {
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        double t0 = omp_get_wtime();
+#endif
         PackedLabelSym pk = pack_label_block_sym_T(label, x, nm, max_atoms, rep_size, q, n);
         const int R = pk.R;
         if (R == 0) continue;
@@ -443,6 +495,9 @@ void kernel_gaussian_symm_rfp(
         // Scratch tile
         double *Cblk = aligned_alloc_64((size_t)B * B);
         if (!Cblk) throw std::bad_alloc();
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_pack += omp_get_wtime() - t0;
+#endif
 
         for (int i0 = 0; i0 < R; i0 += B) {
             const int ib = std::min(B, R - i0);
@@ -450,6 +505,9 @@ void kernel_gaussian_symm_rfp(
             const int bi = i0 / B;
 
             // ----- Diagonal tile: DSYRK → upper-tri in Cblk (LDC = ib) -----
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            t0 = omp_get_wtime();
+#endif
             cblas_dsyrk(
                 CblasRowMajor,
                 CblasUpper,
@@ -463,6 +521,10 @@ void kernel_gaussian_symm_rfp(
                 Cblk,
                 static_cast<blas_int>(ib)
             );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            t_dsyrk += omp_get_wtime() - t0;
+            t0 = omp_get_wtime();
+#endif
 
 #pragma omp parallel for schedule(guided)
             for (int a = 0; a < nm; ++a) {
@@ -495,6 +557,9 @@ void kernel_gaussian_symm_rfp(
                     arf[idx] += kab;
                 }
             }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            t_diag_scatter += omp_get_wtime() - t0;
+#endif
 
             // ----- Off-diagonal rectangles: DGEMM (ib × jb) -----
             for (int j0 = i0 + B; j0 < R; j0 += B) {
@@ -502,6 +567,9 @@ void kernel_gaussian_symm_rfp(
                 const double *Aj0 = &pk.A[(size_t)j0 * rep_size];
                 const int bj = j0 / B;
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t0 = omp_get_wtime();
+#endif
                 cblas_dgemm(
                     CblasRowMajor,
                     CblasNoTrans,
@@ -518,6 +586,10 @@ void kernel_gaussian_symm_rfp(
                     Cblk,
                     static_cast<blas_int>(jb)
                 );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t_dgemm += omp_get_wtime() - t0;
+                t0 = omp_get_wtime();
+#endif
 
 #pragma omp parallel for schedule(guided)
                 for (int a = 0; a < nm; ++a) {
@@ -567,11 +639,40 @@ void kernel_gaussian_symm_rfp(
                         arf[idx] += kab;
                     }
                 }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t_offdiag_scatter += omp_get_wtime() - t0;
+#endif
             }  // j0
         }  // i0
 
         std::free(Cblk);
     }  // labels
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] kernel_gaussian_symm_rfp(nm=%d, rep=%d):\n"
+        "  Pack/bucket:      %8.4fs (%5.1f%%)\n"
+        "  DSYRK (diag):    %8.4fs (%5.1f%%)\n"
+        "  Diag scatter:    %8.4fs (%5.1f%%)\n"
+        "  DGEMM (offdiag): %8.4fs (%5.1f%%)\n"
+        "  Offdiag scatter: %8.4fs (%5.1f%%)\n"
+        "  Total:           %8.4fs (100.0%%)\n",
+        nm,
+        rep_size,
+        t_pack,
+        100.0 * t_pack / t_total,
+        t_dsyrk,
+        100.0 * t_dsyrk / t_total,
+        t_diag_scatter,
+        100.0 * t_diag_scatter / t_total,
+        t_dgemm,
+        100.0 * t_dgemm / t_total,
+        t_offdiag_scatter,
+        100.0 * t_offdiag_scatter / t_total,
+        t_total
+    );
+#endif
 }
 
 //  ###########################################
@@ -588,6 +689,12 @@ void kernel_gaussian_symm(
 ) {
     if (!kernel) throw std::invalid_argument("kernel_out is null");
     if (!(std::isfinite(sigma)) || sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_pack = 0.0, t_dsyrk = 0.0, t_diag_scatter = 0.0, t_dgemm = 0.0,
+           t_offdiag_scatter = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
 
 // Zero once (full matrix; cheap and simple). If you only ever write the lower
 // triangle, you can halve this by zeroing rows up to i inclusive.
@@ -606,6 +713,9 @@ void kernel_gaussian_symm(
     const int B = 8192;
 
     for (int label : labels) {
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        double t0 = omp_get_wtime();
+#endif
         PackedLabelSym pk = pack_label_block_sym_T(label, x, nm, max_atoms, rep_size, q, n);
         const int R = pk.R;
         if (R == 0) continue;
@@ -626,6 +736,9 @@ void kernel_gaussian_symm(
         // Aligned scratch tile (reused for all tiles of this label)
         double *Cblk = aligned_alloc_64((size_t)B * B);
         if (!Cblk) throw std::bad_alloc();
+#ifdef KERNELFORGE_ENABLE_PROFILING
+        t_pack += omp_get_wtime() - t0;
+#endif
 
         for (int i0 = 0; i0 < R; i0 += B) {
             const int ib = std::min(B, R - i0);
@@ -633,6 +746,9 @@ void kernel_gaussian_symm(
             const int bi = i0 / B;
 
             // Diagonal tile: DSYRK produces upper-tri in Cblk with LDC=ib
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            t0 = omp_get_wtime();
+#endif
             cblas_dsyrk(
                 CblasRowMajor,
                 CblasUpper,
@@ -646,6 +762,10 @@ void kernel_gaussian_symm(
                 Cblk,
                 static_cast<blas_int>(ib)
             );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            t_dsyrk += omp_get_wtime() - t0;
+            t0 = omp_get_wtime();
+#endif
 
 #pragma omp parallel for schedule(guided)
             for (int a = 0; a < nm; ++a) {
@@ -677,6 +797,9 @@ void kernel_gaussian_symm(
                     if (b != a) kernel[(size_t)b * nm + a] += kab;
                 }
             }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+            t_diag_scatter += omp_get_wtime() - t0;
+#endif
 
             // Off-diagonal rectangles: DGEMM to Cblk (LDC=jb)
             for (int j0 = i0 + B; j0 < R; j0 += B) {
@@ -684,6 +807,9 @@ void kernel_gaussian_symm(
                 const double *Aj0 = &pk.A[(size_t)j0 * rep_size];
                 const int bj = j0 / B;
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t0 = omp_get_wtime();
+#endif
                 cblas_dgemm(
                     CblasRowMajor,
                     CblasNoTrans,
@@ -700,6 +826,10 @@ void kernel_gaussian_symm(
                     Cblk,
                     static_cast<blas_int>(jb)
                 );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t_dgemm += omp_get_wtime() - t0;
+                t0 = omp_get_wtime();
+#endif
 
 #pragma omp parallel for schedule(guided)
                 for (int a = 0; a < nm; ++a) {
@@ -748,11 +878,40 @@ void kernel_gaussian_symm(
                         if (b != a) kernel[(size_t)b * nm + a] += kab;
                     }
                 }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                t_offdiag_scatter += omp_get_wtime() - t0;
+#endif
             }  // j0
         }  // i0
 
         std::free(Cblk);
     }  // labels
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] kernel_gaussian_symm(nm=%d, rep=%d):\n"
+        "  Pack/bucket:      %8.4fs (%5.1f%%)\n"
+        "  DSYRK (diag):    %8.4fs (%5.1f%%)\n"
+        "  Diag scatter:    %8.4fs (%5.1f%%)\n"
+        "  DGEMM (offdiag): %8.4fs (%5.1f%%)\n"
+        "  Offdiag scatter: %8.4fs (%5.1f%%)\n"
+        "  Total:           %8.4fs (100.0%%)\n",
+        nm,
+        rep_size,
+        t_pack,
+        100.0 * t_pack / t_total,
+        t_dsyrk,
+        100.0 * t_dsyrk / t_total,
+        t_diag_scatter,
+        100.0 * t_diag_scatter / t_total,
+        t_dgemm,
+        100.0 * t_dgemm / t_total,
+        t_offdiag_scatter,
+        100.0 * t_offdiag_scatter / t_total,
+        t_total
+    );
+#endif
 }
 
 // helper: flat indices (row-major, last dim fastest)
@@ -860,6 +1019,10 @@ void kernel_gaussian_jacobian(
     // Parallelize over b: each thread owns a disjoint column block
     // Serialise BLAS inside OMP to prevent oversubscription.
     // ------------------------------------------------------------
+    double t_build_D = 0.0, t_dgemm_jac = 0.0, t_scatter = 0.0;
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_func_start = omp_get_wtime();
+#endif
     const int blas_nt = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
 #pragma omp parallel default(none) \
@@ -882,7 +1045,10 @@ void kernel_gaussian_jacobian(
                ncols_b,            \
                inv_2sigma2,        \
                inv_sigma2,         \
-               ncols_max)
+               ncols_max,          \
+               t_build_D,          \
+               t_dgemm_jac,        \
+               t_scatter)
     {
         // Thread-local scratch: D is (T x rep_size), H is (T x ncols_max).
         double *D = aligned_alloc_64((size_t)BATCH_T * rep_size);   // (T x rep_size)
@@ -915,6 +1081,9 @@ void kernel_gaussian_jacobian(
 
                     // 1) Build D (T x rep_size): row t = alpha_t * (x1[a,j1] - x2[b,j2]).
                     //    Writing D[t*rep+k] is sequential for each t — no cache thrash.
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                    double tp = omp_get_wtime();
+#endif
                     for (int t = 0; t < T; ++t) {
                         const int a = aj1_list[t0 + t].first;
                         const int j1 = aj1_list[t0 + t].second;
@@ -931,6 +1100,11 @@ void kernel_gaussian_jacobian(
                         for (int k = 0; k < rep_size; ++k)
                             Drow[k] *= alpha_t;
                     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_build_D += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // 2) H(T x ncols) = D(T x rep) @ A(rep x ncols)
                     //    A is stored as (rep x lda_rowmaj) row-major; we use ncols columns.
@@ -951,6 +1125,11 @@ void kernel_gaussian_jacobian(
                         H,
                         static_cast<blas_int>(ncols_max)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dgemm_jac += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // 3) Scatter-add: H[t, 0:ncols] -> kernel_out[a, out_offset:out_offset+ncols].
                     //    Both reads (H row) and writes (kout) are sequential.
@@ -961,6 +1140,10 @@ void kernel_gaussian_jacobian(
                         for (int r = 0; r < ncols; ++r)
                             kout[r] += hrow[r];
                     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_scatter += omp_get_wtime() - tp;
+#endif
                 }  // tiles
             }  // j2
         }  // omp for
@@ -969,6 +1152,27 @@ void kernel_gaussian_jacobian(
         aligned_free_64(H);
     }  // omp parallel
     kf_blas_set_num_threads(blas_nt);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] kernel_gaussian_jacobian(nm1=%d, nm2=%d, rep=%d):\n"
+        "  Build D (exp+scale):   %8.4fs (%5.1f%%)\n"
+        "  DGEMM (H = D @ A):    %8.4fs (%5.1f%%)\n"
+        "  Scatter-add to kernel: %8.4fs (%5.1f%%)\n"
+        "  Total:                 %8.4fs (100.0%%)\n",
+        nm1,
+        nm2,
+        rep_size,
+        t_build_D,
+        100.0 * t_build_D / t_total,
+        t_dgemm_jac,
+        100.0 * t_dgemm_jac / t_total,
+        t_scatter,
+        100.0 * t_scatter / t_total,
+        t_total
+    );
+#endif
 }
 
 // ###################################
@@ -1052,6 +1256,10 @@ void kernel_gaussian_jacobian_t(
 
     // Parallelize over a: each thread owns a disjoint row block of kernel_out.
     // Serialise BLAS inside OMP to prevent oversubscription.
+    double t_build_D_jt = 0.0, t_dgemm_jt = 0.0, t_scatter_jt = 0.0;
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_func_start = omp_get_wtime();
+#endif
     const int blas_nt = kf_blas_get_num_threads();
     kf_blas_set_num_threads(1);
 #pragma omp parallel default(none) \
@@ -1074,7 +1282,10 @@ void kernel_gaussian_jacobian_t(
                nrows_a,            \
                inv_2sigma2,        \
                inv_sigma2,         \
-               nrows_max)
+               nrows_max,          \
+               t_build_D_jt,       \
+               t_dgemm_jt,         \
+               t_scatter_jt)
     {
         // Thread-local scratch: D is (T x rep_size), H is (T x nrows_max).
         double *D = aligned_alloc_64((size_t)BATCH_T * rep_size);
@@ -1105,6 +1316,9 @@ void kernel_gaussian_jacobian_t(
                     const int T = (int)std::min<size_t>(BATCH_T, bj2_list.size() - t0);
 
                     // 1) Build D (T x rep_size): row t = alpha_t * (x1[a,j1] - x2[b,j2]).
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                    double tp = omp_get_wtime();
+#endif
                     for (int t = 0; t < T; ++t) {
                         const int b = bj2_list[t0 + t].first;
                         const int j2 = bj2_list[t0 + t].second;
@@ -1121,6 +1335,11 @@ void kernel_gaussian_jacobian_t(
                         for (int k = 0; k < rep_size; ++k)
                             Drow[k] *= alpha_t;
                     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_build_D_jt += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // 2) H(T x nrows) = D(T x rep) @ A1(rep x nrows)
                     //    A1 is (rep x lda_rowmaj) row-major; we use nrows columns.
@@ -1140,6 +1359,11 @@ void kernel_gaussian_jacobian_t(
                         H,
                         static_cast<blas_int>(nrows_max)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dgemm_jt += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // 3) Scatter-add H rows into kernel_out.
                     //    kernel_out is (naq1, nm2) row-major.
@@ -1153,6 +1377,10 @@ void kernel_gaussian_jacobian_t(
                         for (int r = 0; r < nrows; ++r)
                             kernel_out[(size_t)(out_offset + r) * nm2 + b] += hrow[r];
                     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_scatter_jt += omp_get_wtime() - tp;
+#endif
                 }  // tiles
             }  // j1
         }  // omp for
@@ -1161,6 +1389,27 @@ void kernel_gaussian_jacobian_t(
         aligned_free_64(H);
     }  // omp parallel
     kf_blas_set_num_threads(blas_nt);
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_total = omp_get_wtime() - t_func_start;
+    std::printf(
+        "[PROFILE] kernel_gaussian_jacobian_t(nm1=%d, nm2=%d, rep=%d):\n"
+        "  Build D (exp+scale):   %8.4fs (%5.1f%%)\n"
+        "  DGEMM (H = D @ A1):   %8.4fs (%5.1f%%)\n"
+        "  Scatter-add to kernel: %8.4fs (%5.1f%%)\n"
+        "  Total:                 %8.4fs (100.0%%)\n",
+        nm1,
+        nm2,
+        rep_size,
+        t_build_D_jt,
+        100.0 * t_build_D_jt / t_total,
+        t_dgemm_jt,
+        100.0 * t_dgemm_jt / t_total,
+        t_scatter_jt,
+        100.0 * t_scatter_jt / t_total,
+        t_total
+    );
+#endif
 }
 
 // #########################
@@ -1250,6 +1499,11 @@ void kernel_gaussian_hessian(
     // For safety, alloc 512 (well above any realistic Ethanol case).
     constexpr int M_MAX = 512;
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_diff_ssum = 0.0, t_dgemv_W = 0.0, t_dgemv_V = 0.0, t_dger = 0.0, t_dgemm_static = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
+
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
 #endif
@@ -1314,6 +1568,9 @@ void kernel_gaussian_hessian(
                     const double *x1_t = &x1[((size_t)a * max_atoms1 + i1) * rep_size];
                     const double *SD1 = &dx1[base_dx1(a, i1, nm1, max_atoms1, rep_size)];
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                    double tp = omp_get_wtime();
+#endif
                     double l2 = 0.0;
                     for (int k = 0; k < rep_size; ++k) {
                         const double diff = x1_t[k] - x2_bi2[k];
@@ -1337,6 +1594,11 @@ void kernel_gaussian_hessian(
                         for (int j = 0; j < ncols_a; ++j)
                             srow[j] += expdiag * sdrow[j];
                     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_diff_ssum += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // W = D_row @ SD2^T : shape (ncols_b,)
                     // SD2 is (rep x lda2) row-major
@@ -1354,6 +1616,11 @@ void kernel_gaussian_hessian(
                         W_row,
                         static_cast<blas_int>(1)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dgemv_W += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // V = -SD1^T @ D_row : shape (ncols_a,)
                     // SD1 is (rep x lda1) row-major; Trans GEMV: output[j] = sum_k SD1[k,j]*D[k]
@@ -1371,6 +1638,11 @@ void kernel_gaussian_hessian(
                         V_row,
                         static_cast<blas_int>(1)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dgemv_V += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // rank-1: Kab += V ⊗ W  (dger, rows=ncols_a x cols=ncols_b)
                     cblas_dger(
@@ -1385,10 +1657,17 @@ void kernel_gaussian_hessian(
                         Kab,
                         static_cast<blas_int>(naq2)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dger += omp_get_wtime() - tp;
+#endif
                 }  // i1
 
                 // ---- static term: Kab += S_sum^T @ SD2  (ncols_a x ncols_b) ----
                 // S_sum is (rep x ncols_a) row-major with stride ncols_a; SD2 is (rep x lda2)
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                double tp_static = omp_get_wtime();
+#endif
                 cblas_dgemm(
                     CblasRowMajor,
                     CblasTrans,
@@ -1405,6 +1684,10 @@ void kernel_gaussian_hessian(
                     Kab,
                     static_cast<blas_int>(naq2)
                 );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                t_dgemm_static += omp_get_wtime() - tp_static;
+#endif
             }  // i2
         }  // a
 
@@ -1414,6 +1697,37 @@ void kernel_gaussian_hessian(
         aligned_free_64(S_sum);
     }  // b
     (void)M_MAX;
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_wall = omp_get_wtime() - t_func_start;
+    const double t_sum = t_diff_ssum + t_dgemv_W + t_dgemv_V + t_dger + t_dgemm_static;
+    const double t_denom = (t_sum > 0.0) ? t_sum : 1.0;
+    std::printf(
+        "[PROFILE] kernel_gaussian_hessian(nm1=%d, nm2=%d, rep=%d):\n"
+        "  Diff+exp+S_sum:         %8.4fs (%5.1f%%)\n"
+        "  DGEMV W (D@SD2^T):      %8.4fs (%5.1f%%)\n"
+        "  DGEMV V (-SD1^T@D):     %8.4fs (%5.1f%%)\n"
+        "  DGER rank-1:            %8.4fs (%5.1f%%)\n"
+        "  DGEMM static (S^T@SD2): %8.4fs (%5.1f%%)\n"
+        "  Sum(thread-time):       %8.4fs (100.0%%)\n"
+        "  Wall-clock:             %8.4fs\n",
+        nm1,
+        nm2,
+        rep_size,
+        t_diff_ssum,
+        100.0 * t_diff_ssum / t_denom,
+        t_dgemv_W,
+        100.0 * t_dgemv_W / t_denom,
+        t_dgemv_V,
+        100.0 * t_dgemv_V / t_denom,
+        t_dger,
+        100.0 * t_dger / t_denom,
+        t_dgemm_static,
+        100.0 * t_dgemm_static / t_denom,
+        t_sum,
+        t_wall
+    );
+#endif
 }
 
 void kernel_gaussian_hessian_symm(
@@ -1470,6 +1784,11 @@ void kernel_gaussian_hessian_symm(
     }
 
     const int ncols_max = 3 * max_atoms;
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    double t_diff_ssum = 0.0, t_dgemv_W = 0.0, t_dgemv_V = 0.0, t_dger = 0.0, t_dgemm_static = 0.0;
+    const double t_func_start = omp_get_wtime();
+#endif
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
@@ -1535,6 +1854,9 @@ void kernel_gaussian_hessian_symm(
                     const double *x_ai1 = &x[idx_x(a, i1, 0, nm, max_atoms, rep_size)];
                     const double *SD_a = &dx[base_dx(a, i1, nm, max_atoms, rep_size)];
 
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                    double tp = omp_get_wtime();
+#endif
                     double l2 = 0.0;
                     for (int k = 0; k < rep_size; ++k) {
                         const double diff = x_ai1[k] - xbv[k];
@@ -1557,6 +1879,11 @@ void kernel_gaussian_hessian_symm(
                         for (int j = 0; j < ncols_a; ++j)
                             srow[j] += expdiag * sdrow[j];
                     }
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_diff_ssum += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // W = SD_b^T @ D_row  (ncols_b vector)
                     // SD_b is (rep x lda_b) row-major
@@ -1574,6 +1901,11 @@ void kernel_gaussian_hessian_symm(
                         W_row,
                         static_cast<blas_int>(1)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dgemv_W += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // V = -SD_a^T @ D_row  (ncols_a vector)
                     // SD_a is (rep x lda_a) row-major; Trans GEMV: output[j] = sum_k SD_a[k,j]*D[k]
@@ -1591,6 +1923,11 @@ void kernel_gaussian_hessian_symm(
                         V_row,
                         static_cast<blas_int>(1)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dgemv_V += omp_get_wtime() - tp;
+                    tp = omp_get_wtime();
+#endif
 
                     // rank-1: Cdst += W ⊗ V  (dger, lda = ncols_a for diag block, naq otherwise)
                     cblas_dger(
@@ -1605,9 +1942,16 @@ void kernel_gaussian_hessian_symm(
                         Cdst,
                         static_cast<blas_int>(a == b ? ncols_a : naq)
                     );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                    t_dger += omp_get_wtime() - tp;
+#endif
                 }  // i1
 
                 // ---- static term: Cdst += SD_b^T @ S_sum ----
+#ifdef KERNELFORGE_ENABLE_PROFILING
+                double tp_static = omp_get_wtime();
+#endif
                 cblas_dgemm(
                     CblasRowMajor,
                     CblasTrans,
@@ -1624,6 +1968,10 @@ void kernel_gaussian_hessian_symm(
                     Cdst,
                     static_cast<blas_int>(a == b ? ncols_a : naq)
                 );
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    #pragma omp atomic
+                t_dgemm_static += omp_get_wtime() - tp_static;
+#endif
             }  // j2
 
             // Scatter diagonal block's lower triangle only
@@ -1650,6 +1998,36 @@ void kernel_gaussian_hessian_symm(
         aligned_free_64(S_sum);
         aligned_free_64(xbv);
     }  // b
+
+#ifdef KERNELFORGE_ENABLE_PROFILING
+    const double t_wall = omp_get_wtime() - t_func_start;
+    const double t_sum = t_diff_ssum + t_dgemv_W + t_dgemv_V + t_dger + t_dgemm_static;
+    const double t_denom = (t_sum > 0.0) ? t_sum : 1.0;
+    std::printf(
+        "[PROFILE] kernel_gaussian_hessian_symm(nm=%d, rep=%d):\n"
+        "  Diff+exp+S_sum:          %8.4fs (%5.1f%%)\n"
+        "  DGEMV W (SD_b^T @ D):    %8.4fs (%5.1f%%)\n"
+        "  DGEMV V (-SD_a^T @ D):   %8.4fs (%5.1f%%)\n"
+        "  DGER rank-1 (W x V):     %8.4fs (%5.1f%%)\n"
+        "  DGEMM static (SD_b^T@S): %8.4fs (%5.1f%%)\n"
+        "  Sum(thread-time):        %8.4fs (100.0%%)\n"
+        "  Wall-clock:              %8.4fs\n",
+        nm,
+        rep_size,
+        t_diff_ssum,
+        100.0 * t_diff_ssum / t_denom,
+        t_dgemv_W,
+        100.0 * t_dgemv_W / t_denom,
+        t_dgemv_V,
+        100.0 * t_dgemv_V / t_denom,
+        t_dger,
+        100.0 * t_dger / t_denom,
+        t_dgemm_static,
+        100.0 * t_dgemm_static / t_denom,
+        t_sum,
+        t_wall
+    );
+#endif
 }
 
 // Symmetric Hessian kernel in RFP (Rectangular Full Packed) format.
