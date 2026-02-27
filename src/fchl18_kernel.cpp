@@ -19,6 +19,21 @@ namespace fchl18 {
 // Helper math functions (ported from ffchl_module.f90)
 // =============================================================================
 
+// Fast integer power: x^n for small non-negative integer n.
+static inline double ipow(double x, int n) {
+    double r = 1.0;
+    for (; n > 0; --n) r *= x;
+    return r;
+}
+
+// Generalised power: uses ipow when exponent is a small integer, std::pow otherwise.
+static inline double fast_pow(double x, double p) {
+    const int ip = static_cast<int>(p);
+    if (static_cast<double>(ip) == p && ip >= 0 && ip <= 16)
+        return ipow(x, ip);
+    return std::pow(x, p);
+}
+
 // Cosine-based cutoff damping function.
 // Returns 1 below rl=cut_start*cut_distance, 0 above cut_distance,
 // and a smooth quintic interpolant in between.
@@ -47,79 +62,9 @@ static double get_angular_norm2(double t_width) {
     return std::sqrt(ang_norm2 * pi) * 2.0;
 }
 
-// Compute cosine of angle at vertex b, formed by vectors (a-b) and (c-b).
-static inline double calc_cos_angle(
-    const double *a, const double *b, const double *c
-) {
-    double v1[3] = {a[0] - b[0], a[1] - b[1], a[2] - b[2]};
-    double v2[3] = {c[0] - b[0], c[1] - b[1], c[2] - b[2]};
-
-    const double n1 = std::sqrt(v1[0]*v1[0] + v1[1]*v1[1] + v1[2]*v1[2]);
-    const double n2 = std::sqrt(v2[0]*v2[0] + v2[1]*v2[1] + v2[2]*v2[2]);
-
-    if (n1 < 1e-14 || n2 < 1e-14) return 0.0;
-
-    v1[0] /= n1; v1[1] /= n1; v1[2] /= n1;
-    v2[0] /= n2; v2[1] /= n2; v2[2] /= n2;
-
-    double c_ang = v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2];
-    if (c_ang >  1.0) c_ang =  1.0;
-    if (c_ang < -1.0) c_ang = -1.0;
-    return c_ang;
-}
-
-// Compute angle at vertex b.
-static inline double calc_angle(
-    const double *a, const double *b, const double *c
-) {
-    return std::acos(calc_cos_angle(a, b, c));
-}
-
-// ATM three-body weight for triplet (centre=pos[0], j-th neighbour, k-th neighbour).
-// ksi3 = cut_j*cut_k*cut_jk * (1 + 3*cos_i*cos_j*cos_k) / (di*dj*dk)^power
-static inline double calc_ksi3(
-    // Full (5, max_size) atom data — passed as a flat pointer, channel-major.
-    // pos_chan[c * max_size + idx] = data for channel c, index idx.
-    const double *pos_chan, int max_size,
-    int j_idx, int k_idx,
-    double power, double cut_start, double cut_distance
-) {
-    // Cartesian positions:  centre = channel2/3/4 of index 0
-    //                        j     = channel2/3/4 of index j_idx
-    //                        k     = channel2/3/4 of index k_idx
-    const double *centre = pos_chan + 2 * max_size;  // channels 2,3,4 start here
-    const double  cx = centre[0], cy = centre[max_size], cz = centre[2 * max_size];
-    const double  jx = centre[j_idx], jy = centre[max_size + j_idx], jz = centre[2*max_size + j_idx];
-    const double  kx = centre[k_idx], ky = centre[max_size + k_idx], kz = centre[2*max_size + k_idx];
-
-    const double c[3] = {cx, cy, cz};
-    const double vj[3] = {jx, jy, jz};
-    const double vk[3] = {kx, ky, kz};
-
-    const double cos_i = calc_cos_angle(vk, c,  vj);   // angle at centre
-    const double cos_j = calc_cos_angle(vj, vk, c );   // angle at k-atom
-    const double cos_k = calc_cos_angle(c,  vj, vk);   // angle at j-atom
-
-    // distances: dk = dist(centre, j), dj = dist(centre, k), di = dist(j, k)
-    const double dk = pos_chan[j_idx];   // channel 0
-    const double dj = pos_chan[k_idx];
-
-    const double dxjk = vj[0] - vk[0];
-    const double dyjk = vj[1] - vk[1];
-    const double dzjk = vj[2] - vk[2];
-    const double di = std::sqrt(dxjk*dxjk + dyjk*dyjk + dzjk*dzjk);
-
-    if (di < 1e-14 || dj < 1e-14 || dk < 1e-14) return 0.0;
-
-    const double cut = cut_function(dk, cut_start, cut_distance)
-                     * cut_function(dj, cut_start, cut_distance)
-                     * cut_function(di, cut_start, cut_distance);
-
-    const double didj = di * dj;
-    const double didjdk = didj * dk;
-    const double denom = std::pow(didjdk, power);
-
-    return cut * (1.0 + 3.0 * cos_i * cos_j * cos_k) / denom;
+// clamp to [-1, 1]
+static inline double clamp11(double x) {
+    return x < -1.0 ? -1.0 : (x > 1.0 ? 1.0 : x);
 }
 
 // =============================================================================
@@ -138,21 +83,24 @@ static void compute_ksi(
     for (int k = 1; k < n_neigh; ++k) {   // k=0 is self, skip
         const double r = atom_chan[k];     // channel 0
         if (r < 1e-14) continue;
-        ksi[k] = cut_function(r, cut_start, cut_distance) / std::pow(r, power);
+        ksi[k] = cut_function(r, cut_start, cut_distance) / fast_pow(r, power);
     }
 }
 
 // Compute three-body Fourier terms for one atom.
 //
-// Output: cosp/sinp with layout (pmax, order, n_neigh) — but we only care about
-// which element-type (pj/pk) and which fourier index (m) and which neighbour.
-// We return flat vectors indexed as [p * order * max_size + m * max_size + neigh].
-// pmax = max nuclear charge seen across the dataset (passed in).
+// Optimised: precomputes unit vectors and distances for all neighbours once,
+// so the inner triplet loop uses only dot products (no per-triplet sqrt).
+// The angle at the centre (theta) is computed once per triplet and shared
+// between the ksi3 weight and the Fourier cos/sin terms (no redundant acos).
+//
+// Output: cosp/sinp with layout (pmax, order, max_size) flat.
 static void compute_threebody_fourier(
     const double *atom_chan,   // (5, max_size) slice for one atom
     int max_size, int n_neigh,
     double three_body_power, double cut_start, double cut_distance,
     int order, int pmax,
+    const std::vector<int> &z_to_idx,  // Z -> compact index (size 256)
     std::vector<double> &cosp, // (pmax, order, max_size) flat
     std::vector<double> &sinp  // (pmax, order, max_size) flat
 ) {
@@ -167,35 +115,92 @@ static void compute_threebody_fourier(
              + neigh;
     };
 
-    for (int j = 1; j < n_neigh; ++j) {       // j: first neighbour
-        for (int k = j + 1; k < n_neigh; ++k) { // k: second neighbour (k>j)
+    // Channel pointers
+    const double *dist_chan = atom_chan;                    // channel 0: distances
+    const double *z_chan    = atom_chan + max_size;          // channel 1: nuclear charges
+    const double *xc        = atom_chan + 2 * max_size;     // channel 2: dx
+    const double *yc        = atom_chan + 3 * max_size;     // channel 3: dy
+    const double *zc        = atom_chan + 4 * max_size;     // channel 4: dz
 
-            const double ksi3 = calc_ksi3(atom_chan, max_size, j, k,
-                                           three_body_power, cut_start, cut_distance);
+    // --- Precompute unit vectors and cutoff values for each neighbour ---
+    // unit_[xyz][k]: unit vector from centre to neighbour k (already displacement, dist stored)
+    // cut[k]: cut_function(dist_k)
+    std::vector<double> ux(n_neigh), uy(n_neigh), uz(n_neigh), cut_k(n_neigh);
+    for (int k = 1; k < n_neigh; ++k) {
+        const double r = dist_chan[k];
+        cut_k[k] = cut_function(r, cut_start, cut_distance);
+        const double inv_r = (r > 1e-14) ? 1.0 / r : 0.0;
+        ux[k] = xc[k] * inv_r;
+        uy[k] = yc[k] * inv_r;
+        uz[k] = zc[k] * inv_r;
+    }
+
+    for (int j = 1; j < n_neigh; ++j) {
+        const double dj = dist_chan[j];   // dist(centre, j)
+        if (dj < 1e-14) continue;
+        const double cutj = cut_k[j];
+        if (cutj == 0.0) continue;
+
+        for (int k = j + 1; k < n_neigh; ++k) {
+            const double dk = dist_chan[k];   // dist(centre, k)
+            if (dk < 1e-14) continue;
+            const double cutk = cut_k[k];
+            if (cutk == 0.0) continue;
+
+            // Distance between neighbours j and k
+            const double dxjk = xc[j] - xc[k];
+            const double dyjk = yc[j] - yc[k];
+            const double dzjk = zc[j] - zc[k];
+            const double di2  = dxjk*dxjk + dyjk*dyjk + dzjk*dzjk;
+            const double di   = std::sqrt(di2);
+            if (di < 1e-14) continue;
+
+            const double cut_jk = cut_function(di, cut_start, cut_distance);
+            if (cut_jk == 0.0) continue;
+
+            // All three cosines use precomputed unit vectors — no sqrt needed
+            // cos_i = angle at centre between j and k: dot(unit_j, unit_k)
+            const double cos_i = clamp11(ux[j]*ux[k] + uy[j]*uy[k] + uz[j]*uz[k]);
+
+            // cos_j = angle at j between k and centre: dot(unit_k_from_j, unit_centre_from_j)
+            // unit_k_from_j = (xc[k]-xc[j], ...) / di
+            const double inv_di = 1.0 / di;
+            const double ukj_x = -dxjk * inv_di, ukj_y = -dyjk * inv_di, ukj_z = -dzjk * inv_di;
+            // unit_centre_from_j = -unit_j (centre is at origin, j is at xc[j])
+            const double cos_j = clamp11(ukj_x * (-ux[j]) + ukj_y * (-uy[j]) + ukj_z * (-uz[j]));
+
+            // cos_k = angle at k between j and centre: dot(unit_j_from_k, unit_centre_from_k)
+            const double ujk_x =  dxjk * inv_di, ujk_y =  dyjk * inv_di, ujk_z =  dzjk * inv_di;
+            const double cos_k = clamp11(ujk_x * (-ux[k]) + ujk_y * (-uy[k]) + ujk_z * (-uz[k]));
+
+            const double atm = 1.0 + 3.0 * cos_i * cos_j * cos_k;
+            if (atm == 0.0) continue;
+
+            const double dijk  = di * dj * dk;
+            const double denom = fast_pow(dijk, three_body_power);
+            const double cut   = cutj * cutk * cut_jk;
+            const double ksi3  = cut * atm / denom;
             if (ksi3 == 0.0) continue;
 
-            // angle at the centre atom, between neighbours j and k
-            const double *centre = atom_chan + 2 * max_size;
-            const double c[3]  = {centre[0], centre[max_size], centre[2*max_size]};
-            const double vj[3] = {centre[j], centre[max_size+j], centre[2*max_size+j]};
-            const double vk[3] = {centre[k], centre[max_size+k], centre[2*max_size+k]};
-            const double theta = calc_angle(vj, c, vk);
+            // theta = angle at centre (same as cos_i, just one acos)
+            const double theta = std::acos(cos_i);
 
-            // element indices (0-based for array, but nuclear charge is 1-based)
-            const int pj = static_cast<int>(atom_chan[1 * max_size + k]) - 1;  // Z of k-th neighbour
-            const int pk = static_cast<int>(atom_chan[1 * max_size + j]) - 1;  // Z of j-th neighbour
-            if (pj < 0 || pj >= pmax) continue;
-            if (pk < 0 || pk >= pmax) continue;
+            const int zk = static_cast<int>(z_chan[k]);
+            const int zj = static_cast<int>(z_chan[j]);
+            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) continue;
+            const int pj = z_to_idx[zk];  // compact index for Z of k-th neighbour
+            const int pk = z_to_idx[zj];  // compact index for Z of j-th neighbour
+            if (pj < 0 || pk < 0) continue;
 
             for (int m = 0; m < order; ++m) {
-                const double mf = static_cast<double>(m + 1);  // 1-indexed in Fortran
-                const double cos_m = (std::cos(mf * theta) - std::cos((theta + pi) * mf)) * ksi3;
-                const double sin_m = (std::sin(mf * theta) - std::sin((theta + pi) * mf)) * ksi3;
+                const double mf    = static_cast<double>(m + 1);
+                const double mth   = mf * theta;
+                const double mthpi = mf * (theta + pi);
+                const double cos_m = (std::cos(mth) - std::cos(mthpi)) * ksi3;
+                const double sin_m = (std::sin(mth) - std::sin(mthpi)) * ksi3;
 
-                // Fortran: fourier(1,pj,m,j) and fourier(1,pk,m,k) both get cos_m
                 cosp[idx(pj, m, j)] += cos_m;
                 sinp[idx(pj, m, j)] += sin_m;
-
                 cosp[idx(pk, m, k)] += cos_m;
                 sinp[idx(pk, m, k)] += sin_m;
             }
@@ -209,6 +214,7 @@ static void compute_threebody_fourier(
 // Ported from scalar_noalchemy in ffchl_module.f90.
 // Only neighbours with matching nuclear charge contribute.
 // =============================================================================
+// s_prefactor[m] = g1 * exp(-(t_width*(m+1))^2/2), precomputed once per kernel call.
 static double scalar_noalchemy(
     // Atom i data: (5, max_size_1) channel-major
     const double *x1_chan, int max_size1, int n1,
@@ -221,8 +227,8 @@ static double scalar_noalchemy(
     const std::vector<double> &cos2, // (pmax, order, max_size2)
     const std::vector<double> &sin2,
     // Kernel hyperparameters
-    double t_width, double d_width, int order, int pmax,
-    double ang_norm2,
+    double d_width, int order, int pmax,
+    const double *s_prefactor,  // (order) precomputed Fourier prefactors
     double distance_scale, double angular_scale
 ) {
     // Early exit: central atoms must have the same nuclear charge
@@ -230,29 +236,11 @@ static double scalar_noalchemy(
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
     if (Z1 != Z2) return 0.0;
 
-    // Pre-computed constants
-    const double pi = 4.0 * std::atan(1.0);
-    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
-    // For the no-alchemy path we only use fourier_order=1 (the original had a sum
-    // over m but the non-alchemy path in the Fortran uses only m=1 cached in cos1c/cos2c).
-    // We generalise to arbitrary order here.
     const double inv_width    = -1.0 / (4.0 * d_width * d_width);
     const double maxgausdist2 = (8.0 * d_width) * (8.0 * d_width);
 
     // Scalar product starts at 1 (self-contribution)
     double aadist = 1.0;
-
-    const int order_use = std::min(order, 1); // noalchemy path originally uses order=1
-    (void)order_use; // suppress unused warning — we use 'order' directly below
-
-    // Fourier prefactors: s[m] = g1 * exp(-(t_width*(m+1))^2 / 2)
-    // For the no-alchemy path the original Fortran computes only m=1 (fourier_order=1
-    // for the cached cos1c/cos2c). We honour the full 'order' here.
-    std::vector<double> s(order);
-    for (int m = 0; m < order; ++m) {
-        const double mf = static_cast<double>(m + 1);
-        s[m] = g1 * std::exp(-(t_width * mf) * (t_width * mf) / 2.0);
-    }
 
     // Sum over neighbour pairs (i from atom1, j from atom2) with same Z
     auto cos1_idx = [&](int p, int m, int neigh) -> std::size_t {
@@ -290,7 +278,7 @@ static double scalar_noalchemy(
                     ang_m += cos1[cos1_idx(p, m, i)] * cos2[cos2_idx(p, m, j)]
                            + sin1[cos1_idx(p, m, i)] * sin2[cos2_idx(p, m, j)];
                 }
-                angular += ang_m * s[m];
+                angular += ang_m * s_prefactor[m];
             }
 
             aadist += d * (ksi1[i] * ksi2[j] * distance_scale
@@ -313,42 +301,52 @@ struct AtomData {
 
 // Precompute all per-atom data for an entire set of molecules.
 // Returns a flat vector indexed [mol * max_size + atom].
+// Parallelised over the flat (mol, atom) space for fine-grained load balancing.
 static std::vector<AtomData> precompute_atom_data(
     const std::vector<double> &x,  // (nm, max_size, 5, max_size) row-major
     const std::vector<int>    &n,  // (nm) atom counts
     const std::vector<int>    &nn, // (nm * max_size) neighbour counts
     int nm, int max_size,
     double two_body_power, double cut_start, double cut_distance,
-    double three_body_power, int order, int pmax
+    double three_body_power, int order, int pmax,
+    const std::vector<int>    &z_to_idx  // compact element map (size 256)
 ) {
     std::vector<AtomData> data(static_cast<std::size_t>(nm) * max_size);
 
-    // Access helper: x[(mol, atom, chan, neigh)] in (nm, max_size, 5, max_size) layout
-    // = x[mol*max_size*5*max_size + atom*5*max_size + chan*max_size + neigh]
+    // Build a flat list of (mol, atom) pairs for all real atoms so that OpenMP
+    // gets one task per atom instead of one task per molecule — much better load
+    // balance when molecules have different sizes.
+    std::vector<std::pair<int,int>> atom_list;
+    atom_list.reserve(static_cast<std::size_t>(nm) * max_size);
+    for (int a = 0; a < nm; ++a)
+        for (int i = 0; i < n[a]; ++i)
+            atom_list.emplace_back(a, i);
+    const int total_atoms = static_cast<int>(atom_list.size());
+
     const std::size_t mol_stride  = static_cast<std::size_t>(max_size) * 5 * max_size;
     const std::size_t atom_stride = static_cast<std::size_t>(5) * max_size;
 
-#pragma omp parallel for schedule(dynamic)
-    for (int a = 0; a < nm; ++a) {
-        const int na = n[a];
-        for (int i = 0; i < na; ++i) {
-            AtomData &ad = data[static_cast<std::size_t>(a) * max_size + i];
-            const int n_neigh = nn[static_cast<std::size_t>(a) * max_size + i];
-            ad.n_neigh = n_neigh;
+#pragma omp parallel for schedule(dynamic, 4)
+    for (int t = 0; t < total_atoms; ++t) {
+        const int a = atom_list[t].first;
+        const int i = atom_list[t].second;
 
-            const double *atom_chan = x.data()
-                + static_cast<std::size_t>(a) * mol_stride
-                + static_cast<std::size_t>(i) * atom_stride;
+        AtomData &ad = data[static_cast<std::size_t>(a) * max_size + i];
+        const int n_neigh = nn[static_cast<std::size_t>(a) * max_size + i];
+        ad.n_neigh = n_neigh;
 
-            compute_ksi(atom_chan, max_size, n_neigh,
-                        two_body_power, cut_start, cut_distance,
-                        ad.ksi);
+        const double *atom_chan = x.data()
+            + static_cast<std::size_t>(a) * mol_stride
+            + static_cast<std::size_t>(i) * atom_stride;
 
-            compute_threebody_fourier(atom_chan, max_size, n_neigh,
-                                      three_body_power, cut_start, cut_distance,
-                                      order, pmax,
-                                      ad.cosp, ad.sinp);
-        }
+        compute_ksi(atom_chan, max_size, n_neigh,
+                    two_body_power, cut_start, cut_distance,
+                    ad.ksi);
+
+        compute_threebody_fourier(atom_chan, max_size, n_neigh,
+                                  three_body_power, cut_start, cut_distance,
+                                  order, pmax, z_to_idx,
+                                  ad.cosp, ad.sinp);
     }
     return data;
 }
@@ -368,63 +366,86 @@ static std::vector<double> compute_self_scalars(
     const std::size_t mol_stride  = static_cast<std::size_t>(max_size) * 5 * max_size;
     const std::size_t atom_stride = static_cast<std::size_t>(5) * max_size;
 
+    // Precompute Fourier prefactors once (not per scalar_noalchemy call)
+    const double pi = 4.0 * std::atan(1.0);
+    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
+    std::vector<double> s_prefactor(order);
+    for (int m = 0; m < order; ++m) {
+        const double mf = static_cast<double>(m + 1);
+        s_prefactor[m] = g1 * std::exp(-(t_width * mf) * (t_width * mf) / 2.0);
+    }
+
+    // Build flat atom list for fine-grained parallelism (same trick as precompute_atom_data)
+    std::vector<std::pair<int,int>> atom_list;
+    atom_list.reserve(static_cast<std::size_t>(nm) * max_size);
+    for (int a = 0; a < nm; ++a)
+        for (int i = 0; i < n[a]; ++i)
+            atom_list.emplace_back(a, i);
+    const int total_atoms = static_cast<int>(atom_list.size());
+
     std::vector<double> ss(static_cast<std::size_t>(nm) * max_size, 0.0);
 
-#pragma omp parallel for schedule(dynamic)
-    for (int a = 0; a < nm; ++a) {
-        const int na = n[a];
-        for (int i = 0; i < na; ++i) {
-            const AtomData &adi = ad[static_cast<std::size_t>(a) * max_size + i];
-            const double *atom_chan = x.data()
-                + static_cast<std::size_t>(a) * mol_stride
-                + static_cast<std::size_t>(i) * atom_stride;
+#pragma omp parallel for schedule(dynamic, 4)
+    for (int t = 0; t < total_atoms; ++t) {
+        const int a = atom_list[t].first;
+        const int i = atom_list[t].second;
+        const AtomData &adi = ad[static_cast<std::size_t>(a) * max_size + i];
+        const double *atom_chan = x.data()
+            + static_cast<std::size_t>(a) * mol_stride
+            + static_cast<std::size_t>(i) * atom_stride;
 
-            ss[static_cast<std::size_t>(a) * max_size + i] = scalar_noalchemy(
-                atom_chan, max_size, adi.n_neigh,
-                adi.ksi.data(),
-                adi.cosp, adi.sinp,
-                atom_chan, max_size, adi.n_neigh,
-                adi.ksi.data(),
-                adi.cosp, adi.sinp,
-                t_width, d_width, order, pmax, ang_norm2,
-                distance_scale, angular_scale
-            );
-        }
+        ss[static_cast<std::size_t>(a) * max_size + i] = scalar_noalchemy(
+            atom_chan, max_size, adi.n_neigh,
+            adi.ksi.data(),
+            adi.cosp, adi.sinp,
+            atom_chan, max_size, adi.n_neigh,
+            adi.ksi.data(),
+            adi.cosp, adi.sinp,
+            d_width, order, pmax, s_prefactor.data(),
+            distance_scale, angular_scale
+        );
     }
     return ss;
 }
 
 // =============================================================================
-// Determine pmax: maximum nuclear charge across all atoms in both sets
+// Build a compact element map: Z -> compact index (0-based).
+// Returns the number of distinct elements (new pmax).
+// Also fills z_to_idx[Z] = compact_idx for Z in [0, 255]; -1 if not present.
+// Only scans real neighbour slots (up to nn[a,i] per atom) to avoid UB from
+// casting the 1e100 padding value in channel 1 to int.
 // =============================================================================
-static int get_pmax(
-    const std::vector<double> &x1, const std::vector<int> &n1, int nm1, int max_size1,
-    const std::vector<double> &x2, const std::vector<int> &n2, int nm2, int max_size2
+static int build_element_map(
+    const std::vector<double> &x1, const std::vector<int> &n1,
+    const std::vector<int>    &nn1, int nm1, int max_size1,
+    const std::vector<double> &x2, const std::vector<int> &n2,
+    const std::vector<int>    &nn2, int nm2, int max_size2,
+    std::vector<int>          &z_to_idx  // size 256, output
 ) {
-    int pmax = 0;
-    const std::size_t mol1 = static_cast<std::size_t>(max_size1) * 5 * max_size1;
-    const std::size_t at1  = static_cast<std::size_t>(5) * max_size1;
-    for (int a = 0; a < nm1; ++a) {
-        for (int i = 0; i < n1[a]; ++i) {
-            const double *chan = x1.data() + a * mol1 + i * at1;
-            for (int k = 0; k < max_size1; ++k) {
-                const int z = static_cast<int>(chan[max_size1 + k]);
-                if (z > pmax) pmax = z;
+    z_to_idx.assign(256, -1);
+    std::vector<int> present;  // Z values seen so far
+
+    auto scan = [&](const std::vector<double> &x, const std::vector<int> &nv,
+                    const std::vector<int> &nn, int nm, int ms) {
+        const std::size_t mol_s  = static_cast<std::size_t>(ms) * 5 * ms;
+        const std::size_t atom_s = static_cast<std::size_t>(5) * ms;
+        for (int a = 0; a < nm; ++a) {
+            for (int i = 0; i < nv[a]; ++i) {
+                const double *chan = x.data() + a * mol_s + i * atom_s;
+                const int n_neigh  = nn[static_cast<std::size_t>(a) * ms + i];
+                for (int k = 0; k < n_neigh; ++k) {
+                    const int z = static_cast<int>(chan[ms + k]);  // channel 1
+                    if (z > 0 && z < 256 && z_to_idx[z] < 0) {
+                        z_to_idx[z] = static_cast<int>(present.size());
+                        present.push_back(z);
+                    }
+                }
             }
         }
-    }
-    const std::size_t mol2 = static_cast<std::size_t>(max_size2) * 5 * max_size2;
-    const std::size_t at2  = static_cast<std::size_t>(5) * max_size2;
-    for (int b = 0; b < nm2; ++b) {
-        for (int j = 0; j < n2[b]; ++j) {
-            const double *chan = x2.data() + b * mol2 + j * at2;
-            for (int k = 0; k < max_size2; ++k) {
-                const int z = static_cast<int>(chan[max_size2 + k]);
-                if (z > pmax) pmax = z;
-            }
-        }
-    }
-    return pmax;
+    };
+    scan(x1, n1, nn1, nm1, max_size1);
+    scan(x2, n2, nn2, nm2, max_size2);
+    return static_cast<int>(present.size());  // compact pmax
 }
 
 // =============================================================================
@@ -458,7 +479,12 @@ void kernel_gaussian(
     const double true_angular_scale  = three_body_scaling / std::sqrt(8.0);
 
     const double ang_norm2 = get_angular_norm2(three_body_width);
-    const int    pmax      = get_pmax(x1, n1, nm1, max_size1, x2, n2, nm2, max_size2);
+
+    // Build compact element map: only distinct Z values seen in real neighbour slots.
+    // This reduces pmax from max(Z) to the number of distinct elements (e.g. 4 for H/C/N/O).
+    std::vector<int> z_to_idx;
+    const int pmax = build_element_map(x1, n1, nn1, nm1, max_size1,
+                                       x2, n2, nn2, nm2, max_size2, z_to_idx);
 
     if (pmax == 0) {
         std::memset(kernel_out, 0, sizeof(double) * nm1 * nm2);
@@ -468,10 +494,10 @@ void kernel_gaussian(
     // Precompute per-atom data
     auto ad1 = precompute_atom_data(x1, n1, nn1, nm1, max_size1,
                                     two_body_power, cut_start, cut_distance,
-                                    three_body_power, fourier_order, pmax);
+                                    three_body_power, fourier_order, pmax, z_to_idx);
     auto ad2 = precompute_atom_data(x2, n2, nn2, nm2, max_size2,
                                     two_body_power, cut_start, cut_distance,
-                                    three_body_power, fourier_order, pmax);
+                                    three_body_power, fourier_order, pmax, z_to_idx);
 
     // Self-scalars
     auto ss1 = compute_self_scalars(x1, n1, ad1, nm1, max_size1,
@@ -487,6 +513,15 @@ void kernel_gaussian(
     std::memset(kernel_out, 0, sizeof(double) * nm1 * nm2);
 
     const double inv_sigma2 = -1.0 / (sigma * sigma);
+
+    // Precompute Fourier prefactors once for the entire kernel call
+    const double pi = 4.0 * std::atan(1.0);
+    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
+    std::vector<double> s_prefactor(fourier_order);
+    for (int m = 0; m < fourier_order; ++m) {
+        const double mf = static_cast<double>(m + 1);
+        s_prefactor[m] = g1 * std::exp(-(three_body_width * mf) * (three_body_width * mf) / 2.0);
+    }
 
     const std::size_t mol1 = static_cast<std::size_t>(max_size1) * 5 * max_size1;
     const std::size_t at1  = static_cast<std::size_t>(5) * max_size1;
@@ -521,8 +556,7 @@ void kernel_gaussian(
                         adi.ksi.data(), adi.cosp, adi.sinp,
                         x2_chan, max_size2, adj.n_neigh,
                         adj.ksi.data(), adj.cosp, adj.sinp,
-                        three_body_width, two_body_width,
-                        fourier_order, pmax, ang_norm2,
+                        two_body_width, fourier_order, pmax, s_prefactor.data(),
                         true_distance_scale, true_angular_scale
                     );
 
@@ -562,7 +596,10 @@ void kernel_gaussian_symm(
     const double true_angular_scale  = three_body_scaling / std::sqrt(8.0);
 
     const double ang_norm2 = get_angular_norm2(three_body_width);
-    const int    pmax      = get_pmax(x, n, nm, max_size, x, n, nm, max_size);
+
+    std::vector<int> z_to_idx;
+    const int pmax = build_element_map(x, n, nn, nm, max_size,
+                                       x, n, nn, nm, max_size, z_to_idx);
 
     if (pmax == 0) {
         std::memset(kernel_out, 0, sizeof(double) * nm * nm);
@@ -571,7 +608,7 @@ void kernel_gaussian_symm(
 
     auto ad = precompute_atom_data(x, n, nn, nm, max_size,
                                    two_body_power, cut_start, cut_distance,
-                                   three_body_power, fourier_order, pmax);
+                                   three_body_power, fourier_order, pmax, z_to_idx);
 
     auto ss = compute_self_scalars(x, n, ad, nm, max_size,
                                    fourier_order, pmax,
@@ -583,48 +620,66 @@ void kernel_gaussian_symm(
 
     const double inv_sigma2 = -1.0 / (sigma * sigma);
 
+    // Precompute Fourier prefactors once for the entire kernel call
+    const double pi = 4.0 * std::atan(1.0);
+    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
+    std::vector<double> s_prefactor(fourier_order);
+    for (int m = 0; m < fourier_order; ++m) {
+        const double mf = static_cast<double>(m + 1);
+        s_prefactor[m] = g1 * std::exp(-(three_body_width * mf) * (three_body_width * mf) / 2.0);
+    }
+
     const std::size_t mol_s = static_cast<std::size_t>(max_size) * 5 * max_size;
     const std::size_t at_s  = static_cast<std::size_t>(5) * max_size;
 
-#pragma omp parallel for schedule(dynamic)
-    for (int a = 0; a < nm; ++a) {
+    // Build flat list of all upper-triangle (a, b) pairs for load-balanced parallelism.
+    // Previously parallelised over 'a' only: the last thread gets work proportional to
+    // just 1 pair while the first gets nm pairs — terrible balance for large nm.
+    std::vector<std::pair<int,int>> pairs;
+    pairs.reserve(static_cast<std::size_t>(nm) * (nm + 1) / 2);
+    for (int a = 0; a < nm; ++a)
+        for (int b = a; b < nm; ++b)
+            pairs.emplace_back(a, b);
+    const int npairs = static_cast<int>(pairs.size());
+
+#pragma omp parallel for schedule(dynamic, 4)
+    for (int p = 0; p < npairs; ++p) {
+        const int a  = pairs[p].first;
+        const int b  = pairs[p].second;
         const int na = n[a];
-        for (int b = a; b < nm; ++b) {
-            const int nb = n[b];
-            double kab = 0.0;
+        const int nb = n[b];
+        double kab = 0.0;
 
-            for (int i = 0; i < na; ++i) {
-                const AtomData &adi = ad[static_cast<std::size_t>(a) * max_size + i];
-                const double *xa_chan = x.data() + a * mol_s + i * at_s;
-                const int Zi = static_cast<int>(xa_chan[max_size]);
+        for (int i = 0; i < na; ++i) {
+            const AtomData &adi = ad[static_cast<std::size_t>(a) * max_size + i];
+            const double *xa_chan = x.data() + a * mol_s + i * at_s;
+            const int Zi = static_cast<int>(xa_chan[max_size]);
 
-                const double sii = ss[static_cast<std::size_t>(a) * max_size + i];
+            const double sii = ss[static_cast<std::size_t>(a) * max_size + i];
 
-                for (int j = 0; j < nb; ++j) {
-                    const AtomData &adj = ad[static_cast<std::size_t>(b) * max_size + j];
-                    const double *xb_chan = x.data() + b * mol_s + j * at_s;
-                    const int Zj = static_cast<int>(xb_chan[max_size]);
-                    if (Zi != Zj) continue;
+            for (int j = 0; j < nb; ++j) {
+                const AtomData &adj = ad[static_cast<std::size_t>(b) * max_size + j];
+                const double *xb_chan = x.data() + b * mol_s + j * at_s;
+                const int Zj = static_cast<int>(xb_chan[max_size]);
+                if (Zi != Zj) continue;
 
-                    const double sjj = ss[static_cast<std::size_t>(b) * max_size + j];
+                const double sjj = ss[static_cast<std::size_t>(b) * max_size + j];
 
-                    const double s12 = scalar_noalchemy(
-                        xa_chan, max_size, adi.n_neigh,
-                        adi.ksi.data(), adi.cosp, adi.sinp,
-                        xb_chan, max_size, adj.n_neigh,
-                        adj.ksi.data(), adj.cosp, adj.sinp,
-                        three_body_width, two_body_width,
-                        fourier_order, pmax, ang_norm2,
-                        true_distance_scale, true_angular_scale
-                    );
+                const double s12 = scalar_noalchemy(
+                    xa_chan, max_size, adi.n_neigh,
+                    adi.ksi.data(), adi.cosp, adi.sinp,
+                    xb_chan, max_size, adj.n_neigh,
+                    adj.ksi.data(), adj.cosp, adj.sinp,
+                    two_body_width, fourier_order, pmax, s_prefactor.data(),
+                    true_distance_scale, true_angular_scale
+                );
 
-                    kab += std::exp((sii + sjj - 2.0 * s12) * inv_sigma2);
-                }
+                kab += std::exp((sii + sjj - 2.0 * s12) * inv_sigma2);
             }
-
-            kernel_out[static_cast<std::size_t>(a) * nm + b] = kab;
-            kernel_out[static_cast<std::size_t>(b) * nm + a] = kab;
         }
+
+        kernel_out[static_cast<std::size_t>(a) * nm + b] = kab;
+        kernel_out[static_cast<std::size_t>(b) * nm + a] = kab;
     }
 }
 

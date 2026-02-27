@@ -11,6 +11,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 from kernelforge import global_kernels, invdist_repr
+import kernelforge.fchl18_kernel as fchl18_kernel
+import kernelforge.fchl18_repr as fchl18_repr
 from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 from kernelforge.kernelmath import get_blas_info
 from kernelforge.kitchen_sinks import (
@@ -1213,6 +1215,91 @@ def benchmark_rff_full_gramian_elemental_rfp() -> tuple[float, str]:
     return elapsed, f"rff::rff_full_gramian_elemental_rfp (N={n_mols}, D={D}, QM7b-like)"
 
 
+_FCHL18_KERNEL_ARGS = dict(
+    two_body_width=0.1,
+    two_body_scaling=2.0,
+    two_body_power=6.0,
+    three_body_width=3.0,
+    three_body_scaling=2.0,
+    three_body_power=3.0,
+    cut_start=0.5,
+    cut_distance=1e6,
+    fourier_order=2,
+)
+
+
+@cache
+def _prepare_fchl18_qm7b(n: int) -> dict[str, Any]:
+    """Generate FCHL18 representations for the first n QM7b molecules (cached)."""
+    data = load_qm7b_raw_data()
+    coords_list = list(data["R"][:n])
+    z_list = [zi.astype(np.int32) for zi in data["z"][:n]]
+    x, na, nn = fchl18_repr.generate(
+        coords_list,
+        z_list,
+        max_size=23,
+        cut_distance=_FCHL18_KERNEL_ARGS["cut_distance"],
+    )
+    return {"x": x, "na": na, "nn": nn}
+
+
+def benchmark_fchl18_kernel_gaussian_symm_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_symm on QM7b (N=1000)."""
+    n = 1000
+    d = _prepare_fchl18_qm7b(n)
+    x, na, nn = d["x"], d["na"], d["nn"]
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_symm(
+        x,
+        na,
+        nn,
+        sigma=2.5,
+        two_body_width=_FCHL18_KERNEL_ARGS["two_body_width"],
+        two_body_scaling=_FCHL18_KERNEL_ARGS["two_body_scaling"],
+        two_body_power=_FCHL18_KERNEL_ARGS["two_body_power"],
+        three_body_width=_FCHL18_KERNEL_ARGS["three_body_width"],
+        three_body_scaling=_FCHL18_KERNEL_ARGS["three_body_scaling"],
+        three_body_power=_FCHL18_KERNEL_ARGS["three_body_power"],
+        cut_start=_FCHL18_KERNEL_ARGS["cut_start"],
+        cut_distance=_FCHL18_KERNEL_ARGS["cut_distance"],
+        fourier_order=int(_FCHL18_KERNEL_ARGS["fourier_order"]),
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_symm (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian (asymmetric) on QM7b (N=1000 x 1000)."""
+    n = 1000
+    d = _prepare_fchl18_qm7b(n)
+    x, na, nn = d["x"], d["na"], d["nn"]
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian(
+        x,
+        x,
+        na,
+        na,
+        nn,
+        nn,
+        sigma=2.5,
+        two_body_width=_FCHL18_KERNEL_ARGS["two_body_width"],
+        two_body_scaling=_FCHL18_KERNEL_ARGS["two_body_scaling"],
+        two_body_power=_FCHL18_KERNEL_ARGS["two_body_power"],
+        three_body_width=_FCHL18_KERNEL_ARGS["three_body_width"],
+        three_body_scaling=_FCHL18_KERNEL_ARGS["three_body_scaling"],
+        three_body_power=_FCHL18_KERNEL_ARGS["three_body_power"],
+        cut_start=_FCHL18_KERNEL_ARGS["cut_start"],
+        cut_distance=_FCHL18_KERNEL_ARGS["cut_distance"],
+        fourier_order=int(_FCHL18_KERNEL_ARGS["fourier_order"]),
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian (QM7b, N={n}x{n})"
+
+
 BENCHMARKS = {
     "ethanol_fchl19_repr": benchmark_ethanol_fchl19_representations,
     "ethanol_fchl19_grad": benchmark_ethanol_fchl19_gradients,
@@ -1261,6 +1348,8 @@ BENCHMARKS = {
     "rff_gramian_elemental_rfp": benchmark_rff_gramian_elemental_rfp,
     "rff_gradient_gramian_elemental_rfp": benchmark_rff_gradient_gramian_elemental_rfp,
     "rff_full_gramian_elemental_rfp": benchmark_rff_full_gramian_elemental_rfp,
+    "fchl18_kernel_gaussian_symm_qm7b": benchmark_fchl18_kernel_gaussian_symm_qm7b,
+    "fchl18_kernel_gaussian_qm7b": benchmark_fchl18_kernel_gaussian_qm7b,
 }
 
 # Named benchmark suites
@@ -1323,6 +1412,11 @@ SUITES = {
         "rff_full_gramian_elemental_rfp",
     ],
 }
+
+SUITES["fchl18"] = [
+    "fchl18_kernel_gaussian_symm_qm7b",
+    "fchl18_kernel_gaussian_qm7b",
+]
 
 SUITES["all"] = []
 for suite_name, suite_benchmarks in SUITES.items():
