@@ -63,6 +63,12 @@ CMAKE_BUILD_TYPE = "Release"
 [tool.uv.extra-build-dependencies]
 kernelforge = ["scikit_build_core", "setuptools-scm>=8.0"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require external datasets (deselect with '-m not integration')",
+]
+
 [tool.setuptools_scm]
 # Use git tags with 'v' prefix (e.g., v0.1.14)
 version_scheme = "python-simplified-semver"
