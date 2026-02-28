@@ -29,7 +29,7 @@ KERNEL_ARGS = dict(
 )
 
 
-@pytest.mark.integration
+@pytest.mark.slow
 def test_krr_fchl18_qm7b():
     """KRR on QM7b energies with FCHL18: MAE should be close to 2 kcal/mol (100 molecules)."""
 
@@ -109,6 +109,7 @@ def test_krr_fchl18_qm7b():
     # ------------------------------------------------------------------
     # Verify symmetric kernel matches asymmetric self-kernel
     # ------------------------------------------------------------------
+    t_start = time.time()
     K_asym = kernel_mod.kernel_gaussian(
         x_train,
         x_train,
@@ -119,6 +120,8 @@ def test_krr_fchl18_qm7b():
         sigma=sigma,
         **KERNEL_ARGS,
     )
+    t_end = time.time()
+    print(f"Asymmetric self-kernel computed in {t_end - t_start:.2f} seconds")
     assert K_asym.shape == (n_train, n_train)
     assert not np.any(np.isnan(K_asym)), "Asymmetric kernel contains NaN"
     np.testing.assert_allclose(
