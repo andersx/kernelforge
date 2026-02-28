@@ -73,6 +73,7 @@ fallback_version = "0.0.0.dev0"
 line-length = 100
 target-version = "py310"
 src = ["python/"]
+extend-exclude = ["examples/"]
 
 [tool.ruff.lint]
 select = [
@@ -114,5 +115,3 @@ ignore = [
 "python/kernelforge/cli.py" = [
     "T201",   # Print statements (CLI tool)
 ]
-
-
