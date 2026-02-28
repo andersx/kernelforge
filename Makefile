@@ -33,16 +33,16 @@ environment:
 
 check: format lint typecheck
 
+lint: lint-python
+
+lint-python:
+	uv run ruff check python/ tests/
+
 format: format-python format-cpp
 
 format-python:
 	uv run ruff format python/ tests/
 	uv run ruff check --select I --fix python/ tests/
-
-lint: lint-python
-
-lint-python:
-	uv run ruff check python/ tests/
 
 format-cpp:
 	clang-format -i src/*.cpp src/*.hpp src/*.h
