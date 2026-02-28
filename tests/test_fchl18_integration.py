@@ -33,7 +33,7 @@ KERNEL_ARGS = dict(
 def test_krr_fchl18_qm7b():
     """KRR on QM7b energies with FCHL18: MAE should be close to 2 kcal/mol (100 molecules)."""
 
-    n_points = 1000
+    n_points = 2000
     max_size = 23  # largest QM7b molecule has 23 atoms
     sigma = 2.5
     llambda = 1e-8
