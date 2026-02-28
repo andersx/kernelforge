@@ -13,20 +13,17 @@ namespace kf {
 namespace fchl18 {
 
 void generate_fchl18(
-    const std::vector<double> &coords,    // (n_atoms * 3) row-major
-    const std::vector<int>    &nuclear_z, // (n_atoms)
-    int                        max_size,
-    double                     cut_distance,
-    std::vector<double>       &x,         // (max_size * 5 * max_size) row-major OUT
-    std::vector<int>          &n_neighbors // (max_size) OUT
+    const std::vector<double> &coords,  // (n_atoms * 3) row-major
+    const std::vector<int> &nuclear_z,  // (n_atoms)
+    int max_size, double cut_distance,
+    std::vector<double> &x,        // (max_size * 5 * max_size) row-major OUT
+    std::vector<int> &n_neighbors  // (max_size) OUT
 ) {
     const int n_atoms = static_cast<int>(nuclear_z.size());
 
     if (n_atoms == 0) throw std::invalid_argument("n_atoms must be > 0");
-    if (max_size < n_atoms)
-        throw std::invalid_argument("max_size must be >= n_atoms");
-    if (cut_distance <= 0.0)
-        throw std::invalid_argument("cut_distance must be > 0");
+    if (max_size < n_atoms) throw std::invalid_argument("max_size must be >= n_atoms");
+    if (cut_distance <= 0.0) throw std::invalid_argument("cut_distance must be > 0");
     if (static_cast<int>(coords.size()) != n_atoms * 3)
         throw std::invalid_argument("coords size mismatch");
 
@@ -40,9 +37,8 @@ void generate_fchl18(
     const int stride_chan = max_size;
 
     auto xidx = [&](int atom, int chan, int neigh) -> std::size_t {
-        return static_cast<std::size_t>(atom) * stride_atom
-             + static_cast<std::size_t>(chan)  * stride_chan
-             + neigh;
+        return static_cast<std::size_t>(atom) * stride_atom +
+               static_cast<std::size_t>(chan) * stride_chan + neigh;
     };
 
     // For each centre atom i, find all atoms j within cut_distance, sort by distance
@@ -59,17 +55,20 @@ void generate_fchl18(
             const double dx = coords[3 * j + 0] - xi;
             const double dy = coords[3 * j + 1] - yi;
             const double dz = coords[3 * j + 2] - zi;
-            const double r  = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const double r = std::sqrt(dx * dx + dy * dy + dz * dz);
             if (r < cut_distance) {
                 nbrs.emplace_back(r, j);
             }
         }
 
         // Sort by distance
-        std::sort(nbrs.begin(), nbrs.end(),
-                  [](const std::pair<double,int> &a, const std::pair<double,int> &b){
-                      return a.first < b.first;
-                  });
+        std::sort(
+            nbrs.begin(),
+            nbrs.end(),
+            [](const std::pair<double, int> &a, const std::pair<double, int> &b) {
+                return a.first < b.first;
+            }
+        );
 
         const int nn = static_cast<int>(nbrs.size());
         // Clamp to max_size neighbours
@@ -77,8 +76,8 @@ void generate_fchl18(
         n_neighbors[i] = nn_use;
 
         for (int k = 0; k < nn_use; ++k) {
-            const double r  = nbrs[k].first;
-            const int    j  = nbrs[k].second;
+            const double r = nbrs[k].first;
+            const int j = nbrs[k].second;
             const double dx = coords[3 * j + 0] - xi;
             const double dy = coords[3 * j + 1] - yi;
             const double dz = coords[3 * j + 2] - zi;

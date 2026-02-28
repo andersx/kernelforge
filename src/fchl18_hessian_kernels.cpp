@@ -10,15 +10,15 @@
 #include <vector>
 
 #ifdef _OPENMP
-#include <omp.h>
+    #include <omp.h>
 #endif
+
+#include "fchl18_kernel.hpp"
+#include "fchl18_kernel_common.hpp"
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
-#include "fchl18_kernel.hpp"
-#include "fchl18_kernel_common.hpp"
 
 namespace py = pybind11;
 
@@ -34,32 +34,15 @@ namespace py = pybind11;
 // Symmetry: H[row, col] == H[col, row].
 // ---------------------------------------------------------------------------
 py::array_t<double> kernel_gaussian_hessian_symm_py(
-    const py::list &coords_list,
-    const py::list &z_list,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm
 ) {
-    if (use_atm)
-        throw std::invalid_argument(
-            "kernel_gaussian_hessian_symm: use_atm=True is not yet supported.");
-    if (cut_start < 1.0)
-        throw std::invalid_argument(
-            "kernel_gaussian_hessian_symm: cutoff damping (cut_start < 1.0) is not yet supported.");
-
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
         throw std::invalid_argument("coords_list and z_list must have the same length");
-    if (nm == 0)
-        throw std::invalid_argument("kernel_gaussian_hessian_symm: empty molecule list");
+    if (nm == 0) throw std::invalid_argument("kernel_gaussian_hessian_symm: empty molecule list");
 
     // Parse molecules
     std::vector<kf::fchl18::MolData> mols(nm);
@@ -79,30 +62,40 @@ py::array_t<double> kernel_gaussian_hessian_symm_py(
     {
         py::gil_scoped_release release;
 
-        // Loop over lower triangle of molecule blocks: b <= a.
-        // Each (a,b) block is disjoint in output rows/cols, safe to parallelise.
-        #pragma omp parallel for collapse(2) schedule(dynamic)
+// Loop over lower triangle of molecule blocks: b <= a.
+// Each (a,b) block is disjoint in output rows/cols, safe to parallelise.
+#pragma omp parallel for collapse(2) schedule(dynamic)
         for (int a = 0; a < nm; ++a) {
             for (int b = 0; b < nm; ++b) {
                 if (b > a) continue;
 
                 const kf::fchl18::MolData &ma = mols[a];
                 const int na3A = ma.n_atoms * 3;
-                const int r0   = offset[a];
+                const int r0 = offset[a];
                 const kf::fchl18::MolData &mb = mols[b];
                 const int na3B = mb.n_atoms * 3;
-                const int c0   = offset[b];
+                const int c0 = offset[b];
 
                 // Compute hessian block H[a,b]: shape (na3A, na3B)
                 std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
                 kf::fchl18::kernel_gaussian_hessian(
-                    ma.coords, ma.z,
-                    mb.coords, mb.z,
-                    ma.n_atoms, mb.n_atoms,
+                    ma.coords,
+                    ma.z,
+                    mb.coords,
+                    mb.z,
+                    ma.n_atoms,
+                    mb.n_atoms,
                     sigma,
-                    two_body_scaling, two_body_width, two_body_power,
-                    three_body_scaling, three_body_width, three_body_power,
-                    cut_start, cut_distance, fourier_order, use_atm,
+                    two_body_scaling,
+                    two_body_width,
+                    two_body_power,
+                    three_body_scaling,
+                    three_body_width,
+                    three_body_power,
+                    cut_start,
+                    cut_distance,
+                    fourier_order,
+                    use_atm,
                     block.data()
                 );
 
@@ -116,8 +109,8 @@ py::array_t<double> kernel_gaussian_hessian_symm_py(
                             if (amu == bnu) {
                                 v = block[static_cast<std::size_t>(amu) * na3B + bnu];
                             } else {
-                                v = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu]
-                                         + block[static_cast<std::size_t>(bnu) * na3B + amu]);
+                                v = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu] +
+                                           block[static_cast<std::size_t>(bnu) * na3B + amu]);
                             }
                             H_ptr[(r0 + amu) * D + (c0 + bnu)] = v;
                             H_ptr[(c0 + bnu) * D + (r0 + amu)] = v;

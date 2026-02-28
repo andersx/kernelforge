@@ -46,7 +46,6 @@ L2 = 1e-4  # FCHL18 Hessian kernel is only numerically PSD; ~1e-4 is needed for 
 MAX_SIZE = 9  # ethanol has 9 atoms
 
 # Hessian kernel hyperparameters.
-# cut_start=1.0 and use_atm=False are required (not yet supported otherwise).
 KERNEL_ARGS: dict = dict(
     two_body_width=0.1,
     two_body_scaling=2.5,
@@ -54,10 +53,10 @@ KERNEL_ARGS: dict = dict(
     three_body_width=3.0,
     three_body_scaling=1.5,
     three_body_power=3.0,
-    cut_start=1.0,  # must be >= 1.0 for kernel_gaussian_hessian
+    cut_start=1.0,
     cut_distance=1e6,
     fourier_order=1,
-    use_atm=False,  # must be False for kernel_gaussian_hessian
+    use_atm=False,
 )
 
 

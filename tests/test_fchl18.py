@@ -10,9 +10,8 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-import kernelforge.fchl18_repr as repr_mod
 import kernelforge.fchl18_kernel as kernel_mod
-
+import kernelforge.fchl18_repr as repr_mod
 
 # =============================================================================
 # Reference (pure-Python) FCHL18 implementation

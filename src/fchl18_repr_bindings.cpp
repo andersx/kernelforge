@@ -26,10 +26,7 @@ namespace py = pybind11;
 //   n_neighbors : (nm, max_size)                int32
 // ---------------------------------------------------------------------------
 static py::tuple generate_fchl18_batch_py(
-    const py::list &coords_list,
-    const py::list &nuclear_z_list,
-    int    max_size,
-    double cut_distance
+    const py::list &coords_list, const py::list &nuclear_z_list, int max_size, double cut_distance
 ) {
     const int nm = static_cast<int>(coords_list.size());
     if (nm == 0) throw std::invalid_argument("coords_list must not be empty");
@@ -45,9 +42,9 @@ static py::tuple generate_fchl18_batch_py(
     py::array_t<int32_t> n_atoms_out({(py::ssize_t)nm});
     py::array_t<int32_t> n_neighbors_out({(py::ssize_t)nm, (py::ssize_t)max_size});
 
-    auto x_buf   = x_out.mutable_unchecked<4>();
-    auto na_buf  = n_atoms_out.mutable_unchecked<1>();
-    auto nn_buf  = n_neighbors_out.mutable_unchecked<2>();
+    auto x_buf = x_out.mutable_unchecked<4>();
+    auto na_buf = n_atoms_out.mutable_unchecked<1>();
+    auto nn_buf = n_neighbors_out.mutable_unchecked<2>();
 
     // Initialise x to 1e100 (padding value)
     {
@@ -61,8 +58,9 @@ static py::tuple generate_fchl18_batch_py(
 
     for (int a = 0; a < nm; ++a) {
         // Parse coords: (n_a, 3) or (3*n_a,)
-        auto coords_arr = py::cast<py::array>(coords_list[a])
-                              .cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
+        auto coords_arr =
+            py::cast<py::array>(coords_list[a])
+                .cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
         std::size_t n_atoms_a = 0;
         std::vector<double> coords_v;
 
@@ -73,9 +71,9 @@ static py::tuple generate_fchl18_batch_py(
             coords_v.resize(n_atoms_a * 3);
             auto r = coords_arr.unchecked<2>();
             for (std::size_t i = 0; i < n_atoms_a; ++i) {
-                coords_v[3*i+0] = r(i, 0);
-                coords_v[3*i+1] = r(i, 1);
-                coords_v[3*i+2] = r(i, 2);
+                coords_v[3 * i + 0] = r(i, 0);
+                coords_v[3 * i + 1] = r(i, 1);
+                coords_v[3 * i + 2] = r(i, 2);
             }
         } else if (coords_arr.ndim() == 1) {
             if (coords_arr.shape(0) % 3 != 0)
@@ -94,8 +92,9 @@ static py::tuple generate_fchl18_batch_py(
         auto z_arr = py::cast<py::array>(nuclear_z_list[a])
                          .cast<py::array_t<int, py::array::c_style | py::array::forcecast>>();
         if (z_arr.ndim() != 1 || static_cast<std::size_t>(z_arr.shape(0)) != n_atoms_a)
-            throw std::invalid_argument("nuclear_z length must equal n_atoms for molecule "
-                                        + std::to_string(a));
+            throw std::invalid_argument(
+                "nuclear_z length must equal n_atoms for molecule " + std::to_string(a)
+            );
         auto zr = z_arr.unchecked<1>();
         std::vector<int> z_v(zr.data(0), zr.data(0) + n_atoms_a);
 
@@ -103,23 +102,19 @@ static py::tuple generate_fchl18_batch_py(
 
         // Call C++ core
         std::vector<double> x_mol;
-        std::vector<int>    nn_mol;
+        std::vector<int> nn_mol;
         {
             py::gil_scoped_release release;
-            kf::fchl18::generate_fchl18(
-                coords_v, z_v, max_size, cut_distance, x_mol, nn_mol
-            );
+            kf::fchl18::generate_fchl18(coords_v, z_v, max_size, cut_distance, x_mol, nn_mol);
         }
 
         // Copy x_mol (max_size, 5, max_size) into x_out[a, :, :, :]
         for (int i = 0; i < max_size; ++i)
             for (int c = 0; c < 5; ++c)
                 for (int k = 0; k < max_size; ++k)
-                    x_buf(a, i, c, k) = x_mol[
-                        static_cast<std::size_t>(i) * 5 * max_size
-                      + static_cast<std::size_t>(c) * max_size
-                      + k
-                    ];
+                    x_buf(a, i, c, k) = x_mol
+                        [static_cast<std::size_t>(i) * 5 * max_size +
+                         static_cast<std::size_t>(c) * max_size + k];
 
         // Copy n_neighbors
         for (int i = 0; i < max_size; ++i)

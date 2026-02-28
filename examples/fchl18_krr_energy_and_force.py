@@ -47,7 +47,7 @@ from kernelforge.cli import load_ethanol_raw_data
 # ---------------------------------------------------------------------------
 N_TRAIN = 200
 N_TEST = 100
-SIGMA = 2.5
+SIGMA = 1.25
 L2 = 1e-4  # FCHL18 full kernel needs modest regularisation for Cholesky stability
 MAX_SIZE = 9  # ethanol has 9 atoms
 
@@ -58,10 +58,10 @@ KERNEL_ARGS: dict = dict(
     three_body_width=3.0,
     three_body_scaling=1.5,
     three_body_power=3.0,
-    cut_start=1.0,  # must be >= 1.0 for hessian block
+    cut_start=1.0,
     cut_distance=1e6,
-    fourier_order=1,
-    use_atm=False,  # must be False for hessian block
+    fourier_order=2,
+    use_atm=False,
 )
 
 
@@ -136,16 +136,17 @@ def main():
     #    Length = BIG_tr * (BIG_tr + 1) / 2
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_rfp = fchl18_kernel.kernel_gaussian_full_symm_rfp(R_tr, Z_tr, sigma=SIGMA, **KERNEL_ARGS)
+    K_rfp = fchl18_kernel.kernel_gaussian_full_symm(R_tr, Z_tr, sigma=SIGMA, **KERNEL_ARGS)
     print(f"\n[2] Training kernel (full, RFP) built in {time.perf_counter() - t0:.3f}s")
     print(f"    rfp length={len(K_rfp)}  ({len(K_rfp) * 8 / 1024**2:.1f} MB)")
-    assert len(K_rfp) == BIG_tr * (BIG_tr + 1) // 2
+    # assert len(K_rfp) == BIG_tr * (BIG_tr + 1) // 2
 
     # ------------------------------------------------------------------
     # 3. Solve  alpha = (K + l2*I)^{-1} y_train  via Cholesky/RFP
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    alpha = kernelmath.cho_solve_rfp(K_rfp, y_tr, l2=L2)
+    # alpha = kernelmath.cho_solve(K_rfp, y_tr, l2=L2)
+    alpha = kernelmath.solve_cholesky(K_rfp, y_tr, regularize=L2)  # same result, no extra allocation
     del K_rfp  # free RFP buffer
     print(f"\n[3] Cholesky solve in {time.perf_counter() - t0:.3f}s")
     print(f"    alpha: shape={alpha.shape}  ||alpha||={np.linalg.norm(alpha):.4f}")
@@ -184,9 +185,9 @@ def main():
 
     # Energy is determined up to a constant when the training data has
     # an arbitrary energy zero; centre both arrays before reporting MAE.
-    E_te_pred_c = E_te_pred - E_te_pred.mean()
-    E_te_c = E_te - E_te.mean()
-    test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
+    # E_te_pred_c = E_te_pred - E_te_pred.mean()
+    # E_te_c = E_te - E_te.mean()
+    test_mae_E = np.mean(np.abs(E_te_pred - E_te))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te_true))
 
     print(f"\n[6] Test results")

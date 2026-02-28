@@ -198,11 +198,13 @@ static py::tuple generate_fchl_acsf_rep_and_grad_py(
         for (std::size_t j = 0; j < rep_size; ++j)
             R(i, j) = rep[i * rep_size + j];
 
-    py::array_t<double> grad_arr(py::array::ShapeContainer{
-        (py::ssize_t)natoms,
-        (py::ssize_t)rep_size,
-        (py::ssize_t)(3 * natoms)
-    });
+    py::array_t<double> grad_arr(
+        py::array::ShapeContainer{
+            (py::ssize_t)natoms,
+            (py::ssize_t)rep_size,
+            (py::ssize_t)(3 * natoms)
+        }
+    );
     auto G = grad_arr.mutable_unchecked<3>();
     std::size_t idx = 0;
     for (std::size_t i = 0; i < natoms; ++i)

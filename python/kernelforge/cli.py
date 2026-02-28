@@ -10,9 +10,9 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from kernelforge import global_kernels, invdist_repr
 import kernelforge.fchl18_kernel as fchl18_kernel
 import kernelforge.fchl18_repr as fchl18_repr
+from kernelforge import global_kernels, invdist_repr
 from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
 from kernelforge.kernelmath import get_blas_info
 from kernelforge.kitchen_sinks import (

@@ -250,29 +250,60 @@ def test_hessian_symmetry():
     )
 
 
-def test_hessian_raises_use_atm():
-    """use_atm=True must raise ValueError."""
+def test_hessian_use_atm_water_vs_water():
+    """use_atm=True: analytical Hessian matches double-central-difference of scalar kernel."""
     args = dict(KERNEL_ARGS, use_atm=True)
-    with pytest.raises((ValueError, RuntimeError, Exception)):
-        _analytical_hessian(
-            [WATER_COORDS],
-            [WATER_Z],
-            [WATER_COORDS],
-            [WATER_Z],
-            args,
-            SIGMA,
-        )
+    _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, args, SIGMA, eps=1e-4)
 
 
-def test_hessian_raises_cutoff():
-    """cut_start < 1.0 must raise ValueError."""
-    args = dict(KERNEL_ARGS, cut_start=0.5)
-    with pytest.raises((ValueError, RuntimeError, Exception)):
-        _analytical_hessian(
-            [WATER_COORDS],
-            [WATER_Z],
-            [WATER_COORDS],
-            [WATER_Z],
-            args,
-            SIGMA,
-        )
+def test_hessian_use_atm_water_vs_ammonia():
+    """use_atm=True, mixed pair: analytical Hessian matches numerical."""
+    args = dict(KERNEL_ARGS, use_atm=True)
+    _check_hessian(WATER_COORDS, WATER_Z, AMMONIA_COORDS, AMMONIA_Z, args, SIGMA, eps=1e-4)
+
+
+def test_hessian_use_atm_differs_from_no_atm():
+    """use_atm=True gives a different result than use_atm=False (ATM is actually active)."""
+    args_atm = dict(KERNEL_ARGS, use_atm=True)
+    args_no = dict(KERNEL_ARGS, use_atm=False)
+    H_atm = _analytical_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], args_atm, SIGMA
+    )
+    H_no = _analytical_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], args_no, SIGMA
+    )
+    assert not np.allclose(H_atm, H_no, rtol=1e-6, atol=1e-8), (
+        "use_atm=True and use_atm=False produced identical Hessians — ATM has no effect"
+    )
+
+
+def test_hessian_active_cutoff_matches_numerical():
+    """Active cutoff (cut_start=0.5, cut_distance=2.0): analytical Hessian matches numerical.
+
+    cut_start=0.5, cut_distance=2.0 puts the smooth transition region from 1.0 to 2.0 Å,
+    which spans the H-H and N-H intra-molecular distances, so the cutoff derivatives
+    are non-trivial.
+    """
+    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    _check_hessian(WATER_COORDS, WATER_Z, AMMONIA_COORDS, AMMONIA_Z, args, SIGMA, eps=1e-4)
+
+
+def test_hessian_active_cutoff_differs_from_no_cutoff():
+    """Active cutoff gives a different result than the infinite-cutoff baseline."""
+    args_cut = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    args_no_cut = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=1e6)
+    H_cut = _analytical_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], args_cut, SIGMA
+    )
+    H_no_cut = _analytical_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], args_no_cut, SIGMA
+    )
+    assert not np.allclose(H_cut, H_no_cut, rtol=1e-6, atol=1e-8), (
+        "Active cutoff and infinite cutoff produced identical Hessians — cutoff has no effect"
+    )
+
+
+def test_hessian_use_atm_and_cutoff_matches_numerical():
+    """Combination of use_atm=True and active cutoff: analytical Hessian matches numerical."""
+    args = dict(KERNEL_ARGS, use_atm=True, cut_start=0.5, cut_distance=2.0)
+    _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, args, SIGMA, eps=1e-4)

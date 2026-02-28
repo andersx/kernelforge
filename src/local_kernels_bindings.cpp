@@ -535,9 +535,11 @@ static py::array_t<double> fgdml_kernel_symm_py(
 ) {
     // ---- shape checks ----
     if (x1.ndim() != 3 || dx1.ndim() != 4 || q1.ndim() != 2 || n1.ndim() != 1) {
-        throw std::invalid_argument("Expected: x1(nm1,max_atoms1,rep),  "
-                                    "dx1(nm1,max_atoms1,rep,3*max_atoms1), "
-                                    "q1(nm1,max_atoms1), n1(nm1).");
+        throw std::invalid_argument(
+            "Expected: x1(nm1,max_atoms1,rep),  "
+            "dx1(nm1,max_atoms1,rep,3*max_atoms1), "
+            "q1(nm1,max_atoms1), n1(nm1)."
+        );
     }
 
     const int nm1 = static_cast<int>(x1.shape(0));
@@ -680,9 +682,11 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
 ) {
     // ---- shape checks ----
     if (x1.ndim() != 3 || dx1.ndim() != 4 || q1.ndim() != 2 || n1.ndim() != 1) {
-        throw std::invalid_argument("Expected: x1(nm,max_atoms,rep), "
-                                    "dx1(nm,max_atoms,rep,3*max_atoms), "
-                                    "q1(nm,max_atoms), n1(nm).");
+        throw std::invalid_argument(
+            "Expected: x1(nm,max_atoms,rep), "
+            "dx1(nm,max_atoms,rep,3*max_atoms), "
+            "q1(nm,max_atoms), n1(nm)."
+        );
     }
 
     const int nm = static_cast<int>(x1.shape(0));

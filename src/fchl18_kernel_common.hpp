@@ -23,9 +23,9 @@ namespace fchl18 {
 // MolData: parsed representation of a single molecule
 // ---------------------------------------------------------------------------
 struct MolData {
-    int                 n_atoms;  // number of atoms
-    std::vector<double> coords;   // flat (n_atoms * 3), row-major
-    std::vector<int>    z;        // nuclear charges (n_atoms)
+    int n_atoms;                 // number of atoms
+    std::vector<double> coords;  // flat (n_atoms * 3), row-major
+    std::vector<int> z;          // nuclear charges (n_atoms)
 };
 
 // ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ struct MolData {
 // z_obj : (n_atoms,)   int32  array — nuclear charges
 // ---------------------------------------------------------------------------
 inline MolData parse_mol(const py::object &c_obj, const py::object &z_obj) {
-    auto c = py::array_t<double,  py::array::c_style | py::array::forcecast>::ensure(c_obj);
+    auto c = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(c_obj);
     auto z = py::array_t<int32_t, py::array::c_style | py::array::forcecast>::ensure(z_obj);
     if (!c || c.ndim() != 2 || c.shape(1) != 3)
         throw std::invalid_argument("each coords array must have shape (n_atoms, 3)");
@@ -49,9 +49,9 @@ inline MolData parse_mol(const py::object &c_obj, const py::object &z_obj) {
     auto cr = c.unchecked<2>();
     auto zr = z.unchecked<1>();
     for (int i = 0; i < na; ++i) {
-        md.coords[i*3+0] = cr(i, 0);
-        md.coords[i*3+1] = cr(i, 1);
-        md.coords[i*3+2] = cr(i, 2);
+        md.coords[i * 3 + 0] = cr(i, 0);
+        md.coords[i * 3 + 1] = cr(i, 1);
+        md.coords[i * 3 + 2] = cr(i, 2);
         md.z[i] = static_cast<int>(zr(i));
     }
     return md;

@@ -22,42 +22,27 @@ namespace fchl18 {
 void kernel_gaussian(
     const std::vector<double> &x1,  // (nm1, max_size1, 5, max_size1)
     const std::vector<double> &x2,  // (nm2, max_size2, 5, max_size2)
-    const std::vector<int>    &n1,  // (nm1)
-    const std::vector<int>    &n2,  // (nm2)
-    const std::vector<int>    &nn1, // (nm1 * max_size1)
-    const std::vector<int>    &nn2, // (nm2 * max_size2)
-    int nm1, int nm2, int max_size1, int max_size2,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm,     // if false: replace ATM factor with 1.0
+    const std::vector<int> &n1,     // (nm1)
+    const std::vector<int> &n2,     // (nm2)
+    const std::vector<int> &nn1,    // (nm1 * max_size1)
+    const std::vector<int> &nn2,    // (nm2 * max_size2)
+    int nm1, int nm2, int max_size1, int max_size2, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order,
+    bool use_atm,       // if false: replace ATM factor with 1.0
     double *kernel_out  // (nm1, nm2) row-major OUT
 );
 
 // Symmetric variant: K[a, b] = K[b, a].
 void kernel_gaussian_symm(
-    const std::vector<double> &x,   // (nm, max_size, 5, max_size)
-    const std::vector<int>    &n,   // (nm)
-    const std::vector<int>    &nn,  // (nm * max_size)
-    int nm, int max_size,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm,     // if false: replace ATM factor with 1.0
+    const std::vector<double> &x,  // (nm, max_size, 5, max_size)
+    const std::vector<int> &n,     // (nm)
+    const std::vector<int> &nn,    // (nm * max_size)
+    int nm, int max_size, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order,
+    bool use_atm,       // if false: replace ATM factor with 1.0
     double *kernel_out  // (nm, nm) row-major OUT
 );
 
@@ -77,22 +62,14 @@ void kernel_gaussian_symm(
 //            grad_out[alpha * 3 * nm2 + mu * nm2 + b] = dK[A,b]/dR_A[alpha,mu]
 void kernel_gaussian_gradient(
     const std::vector<double> &coords_A,  // (n_atoms_A * 3)
-    const std::vector<int>    &z_A,       // (n_atoms_A)
+    const std::vector<int> &z_A,          // (n_atoms_A)
     const std::vector<double> &x2,        // (nm2, max_size2, 5, max_size2)
-    const std::vector<int>    &n2,        // (nm2)
-    const std::vector<int>    &nn2,       // (nm2 * max_size2)
-    int n_atoms_A, int nm2, int max_size2,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm,
+    const std::vector<int> &n2,           // (nm2)
+    const std::vector<int> &nn2,          // (nm2 * max_size2)
+    int n_atoms_A, int nm2, int max_size2, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
     double *grad_out  // (n_atoms_A, 3, nm2) row-major OUT
 );
 
@@ -102,27 +79,14 @@ void kernel_gaussian_gradient(
 // H[α*3+μ, β*3+ν] = d²K[A,B] / dR_A[α,μ] dR_B[β,ν]
 //
 // hess_out: (n_atoms_A*3, n_atoms_B*3) row-major output.
-//
-// Restrictions (raises std::invalid_argument if violated):
-//   - use_atm must be false
-//   - cut_start must be >= 1.0 (cutoff inactive, i.e. cut_function == 1 everywhere)
 void kernel_gaussian_hessian(
     const std::vector<double> &coords_A,  // (n_atoms_A * 3)
-    const std::vector<int>    &z_A,       // (n_atoms_A)
+    const std::vector<int> &z_A,          // (n_atoms_A)
     const std::vector<double> &coords_B,  // (n_atoms_B * 3)
-    const std::vector<int>    &z_B,       // (n_atoms_B)
-    int n_atoms_A, int n_atoms_B,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm,
+    const std::vector<int> &z_B,          // (n_atoms_B)
+    int n_atoms_A, int n_atoms_B, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
     double *hess_out  // (n_atoms_A*3, n_atoms_B*3) row-major OUT
 );
 

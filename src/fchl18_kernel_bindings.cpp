@@ -5,7 +5,7 @@
 
 // OpenMP
 #ifdef _OPENMP
-#include <omp.h>
+    #include <omp.h>
 #endif
 
 // RFP index helper
@@ -21,10 +21,10 @@
 #include "fchl18_kernel_common.hpp"
 
 // New kernel implementations
-#include "fchl18_scalar_kernels.hpp"
-#include "fchl18_jacobian_kernels.hpp"
-#include "fchl18_hessian_kernels.hpp"
 #include "fchl18_full_kernels.hpp"
+#include "fchl18_hessian_kernels.hpp"
+#include "fchl18_jacobian_kernels.hpp"
+#include "fchl18_scalar_kernels.hpp"
 
 namespace py = pybind11;
 
@@ -37,7 +37,8 @@ static std::vector<int> as_int_vector_2d(
     const std::size_t n = static_cast<std::size_t>(arr.size());
     std::vector<int> out(n);
     const int32_t *src = arr.data();
-    for (std::size_t i = 0; i < n; ++i) out[i] = static_cast<int>(src[i]);
+    for (std::size_t i = 0; i < n; ++i)
+        out[i] = static_cast<int>(src[i]);
     return out;
 }
 
@@ -47,7 +48,8 @@ static std::vector<int> as_int_vector_1d(
     const std::size_t n = static_cast<std::size_t>(arr.size());
     std::vector<int> out(n);
     const int32_t *src = arr.data();
-    for (std::size_t i = 0; i < n; ++i) out[i] = static_cast<int>(src[i]);
+    for (std::size_t i = 0; i < n; ++i)
+        out[i] = static_cast<int>(src[i]);
     return out;
 }
 
@@ -66,52 +68,59 @@ static std::vector<double> as_double_vector(
 // nn1, nn2  : (nm, max_size) int32 — neighbour counts per atom
 // ---------------------------------------------------------------------------
 static py::array_t<double> kernel_gaussian_py(
-    const py::array_t<double,  py::array::c_style | py::array::forcecast> &x1,
-    const py::array_t<double,  py::array::c_style | py::array::forcecast> &x2,
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &x1,
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &x2,
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &n1,
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &n2,
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn1,
-    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn2,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn2, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm
 ) {
     if (x1.ndim() != 4) throw std::invalid_argument("x1 must be 4-D");
     if (x2.ndim() != 4) throw std::invalid_argument("x2 must be 4-D");
     if (x1.shape(2) != 5) throw std::invalid_argument("x1 dim 2 must be 5");
     if (x2.shape(2) != 5) throw std::invalid_argument("x2 dim 2 must be 5");
 
-    const int nm1       = static_cast<int>(x1.shape(0));
+    const int nm1 = static_cast<int>(x1.shape(0));
     const int max_size1 = static_cast<int>(x1.shape(1));
-    const int nm2       = static_cast<int>(x2.shape(0));
+    const int nm2 = static_cast<int>(x2.shape(0));
     const int max_size2 = static_cast<int>(x2.shape(1));
 
-    auto x1_v   = as_double_vector(x1);
-    auto x2_v   = as_double_vector(x2);
-    auto n1_v   = as_int_vector_1d(n1);
-    auto n2_v   = as_int_vector_1d(n2);
-    auto nn1_v  = as_int_vector_2d(nn1);
-    auto nn2_v  = as_int_vector_2d(nn2);
+    auto x1_v = as_double_vector(x1);
+    auto x2_v = as_double_vector(x2);
+    auto n1_v = as_int_vector_1d(n1);
+    auto n2_v = as_int_vector_1d(n2);
+    auto nn1_v = as_int_vector_2d(nn1);
+    auto nn2_v = as_int_vector_2d(nn2);
 
     py::array_t<double> K({(py::ssize_t)nm1, (py::ssize_t)nm2});
 
     {
         py::gil_scoped_release release;
         kf::fchl18::kernel_gaussian(
-            x1_v, x2_v, n1_v, n2_v, nn1_v, nn2_v,
-            nm1, nm2, max_size1, max_size2,
+            x1_v,
+            x2_v,
+            n1_v,
+            n2_v,
+            nn1_v,
+            nn2_v,
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
             sigma,
-            two_body_scaling, two_body_width, two_body_power,
-            three_body_scaling, three_body_width, three_body_power,
-            cut_start, cut_distance, fourier_order, use_atm,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
             K.mutable_data()
         );
     }
@@ -123,29 +132,21 @@ static py::array_t<double> kernel_gaussian_py(
 // kernel_gaussian_symm: symmetric (nm, nm) kernel matrix
 // ---------------------------------------------------------------------------
 static py::array_t<double> kernel_gaussian_symm_py(
-    const py::array_t<double,  py::array::c_style | py::array::forcecast> &x,
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &x,
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &n,
-    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm
 ) {
     if (x.ndim() != 4) throw std::invalid_argument("x must be 4-D");
     if (x.shape(2) != 5) throw std::invalid_argument("x dim 2 must be 5");
 
-    const int nm       = static_cast<int>(x.shape(0));
+    const int nm = static_cast<int>(x.shape(0));
     const int max_size = static_cast<int>(x.shape(1));
 
-    auto x_v  = as_double_vector(x);
-    auto n_v  = as_int_vector_1d(n);
+    auto x_v = as_double_vector(x);
+    auto n_v = as_int_vector_1d(n);
     auto nn_v = as_int_vector_2d(nn);
 
     py::array_t<double> K({(py::ssize_t)nm, (py::ssize_t)nm});
@@ -153,12 +154,22 @@ static py::array_t<double> kernel_gaussian_symm_py(
     {
         py::gil_scoped_release release;
         kf::fchl18::kernel_gaussian_symm(
-            x_v, n_v, nn_v,
-            nm, max_size,
+            x_v,
+            n_v,
+            nn_v,
+            nm,
+            max_size,
             sigma,
-            two_body_scaling, two_body_width, two_body_power,
-            three_body_scaling, three_body_width, three_body_power,
-            cut_start, cut_distance, fourier_order, use_atm,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
             K.mutable_data()
         );
     }
@@ -178,35 +189,25 @@ static py::array_t<double> kernel_gaussian_symm_py(
 // Returns ndarray shape (n_atoms_A, 3, nm2), float64
 // ---------------------------------------------------------------------------
 static py::array_t<double> kernel_gaussian_gradient_py(
-    const py::array_t<double,  py::array::c_style | py::array::forcecast> &coords_A,
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &coords_A,
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &z_A,
-    const py::array_t<double,  py::array::c_style | py::array::forcecast> &x2,
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &x2,
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &n2,
-    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn2,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn2, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm
 ) {
     // Validate coords_A
     if (coords_A.ndim() != 2 || coords_A.shape(1) != 3)
         throw std::invalid_argument("coords_A must have shape (n_atoms_A, 3)");
     if (z_A.ndim() != 1 || z_A.shape(0) != coords_A.shape(0))
         throw std::invalid_argument("z_A must have shape (n_atoms_A,)");
-    if (x2.ndim() != 4)
-        throw std::invalid_argument("x2 must be 4-D");
-    if (x2.shape(2) != 5)
-        throw std::invalid_argument("x2 dim 2 must be 5");
+    if (x2.ndim() != 4) throw std::invalid_argument("x2 must be 4-D");
+    if (x2.shape(2) != 5) throw std::invalid_argument("x2 dim 2 must be 5");
 
     const int n_atoms_A = static_cast<int>(coords_A.shape(0));
-    const int nm2       = static_cast<int>(x2.shape(0));
+    const int nm2 = static_cast<int>(x2.shape(0));
     const int max_size2 = static_cast<int>(x2.shape(1));
 
     // Convert coords_A to flat vector (n_atoms_A * 3)
@@ -214,9 +215,9 @@ static py::array_t<double> kernel_gaussian_gradient_py(
     {
         auto r = coords_A.unchecked<2>();
         for (int i = 0; i < n_atoms_A; ++i) {
-            coords_v[i*3+0] = r(i, 0);
-            coords_v[i*3+1] = r(i, 1);
-            coords_v[i*3+2] = r(i, 2);
+            coords_v[i * 3 + 0] = r(i, 0);
+            coords_v[i * 3 + 1] = r(i, 1);
+            coords_v[i * 3 + 2] = r(i, 2);
         }
     }
 
@@ -228,23 +229,34 @@ static py::array_t<double> kernel_gaussian_gradient_py(
             z_v[i] = static_cast<int>(r(i));
     }
 
-    auto x2_v  = as_double_vector(x2);
-    auto n2_v  = as_int_vector_1d(n2);
+    auto x2_v = as_double_vector(x2);
+    auto n2_v = as_int_vector_1d(n2);
     auto nn2_v = as_int_vector_2d(nn2);
 
-    py::array_t<double> grad(
-        {(py::ssize_t)n_atoms_A, (py::ssize_t)3, (py::ssize_t)nm2});
+    py::array_t<double> grad({(py::ssize_t)n_atoms_A, (py::ssize_t)3, (py::ssize_t)nm2});
 
     {
         py::gil_scoped_release release;
         kf::fchl18::kernel_gaussian_gradient(
-            coords_v, z_v,
-            x2_v, n2_v, nn2_v,
-            n_atoms_A, nm2, max_size2,
+            coords_v,
+            z_v,
+            x2_v,
+            n2_v,
+            nn2_v,
+            n_atoms_A,
+            nm2,
+            max_size2,
             sigma,
-            two_body_scaling, two_body_width, two_body_power,
-            three_body_scaling, three_body_width, three_body_power,
-            cut_start, cut_distance, fourier_order, use_atm,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
             grad.mutable_data()
         );
     }
@@ -263,29 +275,11 @@ static py::array_t<double> kernel_gaussian_gradient_py(
 // Returns ndarray shape (D_A, D_B) where D_i = sum_mol n_atoms_i * 3.
 // ---------------------------------------------------------------------------
 static py::array_t<double> kernel_gaussian_hessian_py(
-    const py::list &coords_A_list,
-    const py::list &z_A_list,
-    const py::list &coords_B_list,
-    const py::list &z_B_list,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
+    const py::list &z_B_list, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm
 ) {
-    if (use_atm)
-        throw std::invalid_argument(
-            "kernel_gaussian_hessian: use_atm=True is not yet supported.");
-    if (cut_start < 1.0)
-        throw std::invalid_argument(
-            "kernel_gaussian_hessian: cutoff damping (cut_start < 1.0) is not yet supported.");
-
     const int nm_A = static_cast<int>(coords_A_list.size());
     const int nm_B = static_cast<int>(coords_B_list.size());
 
@@ -321,26 +315,36 @@ static py::array_t<double> kernel_gaussian_hessian_py(
     {
         py::gil_scoped_release release;
 
-        #pragma omp parallel for collapse(2) schedule(dynamic)
+#pragma omp parallel for collapse(2) schedule(dynamic)
         for (int a = 0; a < nm_A; ++a) {
             for (int b = 0; b < nm_B; ++b) {
                 const kf::fchl18::MolData &ma = mols_A[a];
                 const int na3A = ma.n_atoms * 3;
-                const int r0   = row_offset[a];
+                const int r0 = row_offset[a];
                 const kf::fchl18::MolData &mb = mols_B[b];
                 const int na3B = mb.n_atoms * 3;
-                const int c0   = col_offset[b];
+                const int c0 = col_offset[b];
 
                 std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
 
                 kf::fchl18::kernel_gaussian_hessian(
-                    ma.coords, ma.z,
-                    mb.coords, mb.z,
-                    ma.n_atoms, mb.n_atoms,
+                    ma.coords,
+                    ma.z,
+                    mb.coords,
+                    mb.z,
+                    ma.n_atoms,
+                    mb.n_atoms,
                     sigma,
-                    two_body_scaling, two_body_width, two_body_power,
-                    three_body_scaling, three_body_width, three_body_power,
-                    cut_start, cut_distance, fourier_order, use_atm,
+                    two_body_scaling,
+                    two_body_width,
+                    two_body_power,
+                    three_body_scaling,
+                    three_body_width,
+                    three_body_power,
+                    cut_start,
+                    cut_distance,
+                    fourier_order,
+                    use_atm,
                     block.data()
                 );
 
@@ -364,27 +368,11 @@ static py::array_t<double> kernel_gaussian_hessian_py(
 //   Symmetric force-force kernel in RFP (Rectangular Full Packed) format.
 // ---------------------------------------------------------------------------
 static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
-    const py::list &coords_list,
-    const py::list &z_list,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm
 ) {
-    if (use_atm)
-        throw std::invalid_argument(
-            "kernel_gaussian_hessian_symm_rfp: use_atm=True is not yet supported.");
-    if (cut_start < 1.0)
-        throw std::invalid_argument(
-            "kernel_gaussian_hessian_symm_rfp: cutoff damping (cut_start < 1.0) is not yet supported.");
-
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
         throw std::invalid_argument("coords_list and z_list must have the same length");
@@ -397,7 +385,7 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
     std::vector<int> offset(nm + 1, 0);
     for (int a = 0; a < nm; ++a)
         offset[a + 1] = offset[a] + mols[a].n_atoms * 3;
-    const std::size_t BIG = static_cast<std::size_t>(offset[nm]); // N*D
+    const std::size_t BIG = static_cast<std::size_t>(offset[nm]);  // N*D
 
     // Allocate RFP output (upper triangle packed, length = BIG*(BIG+1)/2)
     const std::size_t rfp_len = BIG * (BIG + 1) / 2;
@@ -407,27 +395,37 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
     {
         py::gil_scoped_release release;
 
-        #pragma omp parallel for collapse(2) schedule(dynamic)
+#pragma omp parallel for collapse(2) schedule(dynamic)
         for (int a = 0; a < nm; ++a) {
             for (int b = 0; b < nm; ++b) {
                 if (b > a) continue;
 
                 const kf::fchl18::MolData &ma = mols[a];
                 const int na3A = ma.n_atoms * 3;
-                const int r0   = offset[a];
+                const int r0 = offset[a];
                 const kf::fchl18::MolData &mb = mols[b];
                 const int na3B = mb.n_atoms * 3;
-                const int c0   = offset[b];
+                const int c0 = offset[b];
 
                 std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
                 kf::fchl18::kernel_gaussian_hessian(
-                    ma.coords, ma.z,
-                    mb.coords, mb.z,
-                    ma.n_atoms, mb.n_atoms,
+                    ma.coords,
+                    ma.z,
+                    mb.coords,
+                    mb.z,
+                    ma.n_atoms,
+                    mb.n_atoms,
                     sigma,
-                    two_body_scaling, two_body_width, two_body_power,
-                    three_body_scaling, three_body_width, three_body_power,
-                    cut_start, cut_distance, fourier_order, use_atm,
+                    two_body_scaling,
+                    two_body_width,
+                    two_body_power,
+                    three_body_scaling,
+                    three_body_width,
+                    three_body_power,
+                    cut_start,
+                    cut_distance,
+                    fourier_order,
+                    use_atm,
                     block.data()
                 );
 
@@ -442,8 +440,8 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
                             if (amu == bnu) {
                                 val = block[static_cast<std::size_t>(amu) * na3B + bnu];
                             } else {
-                                val = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu]
-                                           + block[static_cast<std::size_t>(bnu) * na3B + amu]);
+                                val = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu] +
+                                             block[static_cast<std::size_t>(bnu) * na3B + amu]);
                             }
                             rfp_ptr[kf::rfp_index_upper_N(BIG, col, row)] = val;
                         }
@@ -471,34 +469,27 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
 //   Shape: (N_test, N_train * D)
 // ---------------------------------------------------------------------------
 static py::array_t<double> kernel_gaussian_jacobian_t_py(
-    const py::list &coords_train_list,
-    const py::list &z_train_list,
-    const py::array_t<double,  py::array::c_style | py::array::forcecast> &x_test,
+    const py::list &coords_train_list, const py::list &z_train_list,
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &x_test,
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &n_test,
-    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn_test,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn_test, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm
 ) {
     const int N_train = static_cast<int>(coords_train_list.size());
     if (static_cast<int>(z_train_list.size()) != N_train)
         throw std::invalid_argument("coords_train_list and z_train_list must have the same length");
     if (x_test.ndim() != 4 || x_test.shape(2) != 5)
-        throw std::invalid_argument("x_test must be 4-D with shape (N_test, max_size, 5, max_size)");
+        throw std::invalid_argument(
+            "x_test must be 4-D with shape (N_test, max_size, 5, max_size)"
+        );
 
-    const int N_test    = static_cast<int>(x_test.shape(0));
-    const int max_size  = static_cast<int>(x_test.shape(1));
+    const int N_test = static_cast<int>(x_test.shape(0));
+    const int max_size = static_cast<int>(x_test.shape(1));
 
-    auto x_te_flat  = as_double_vector(x_test);
-    auto n_te_flat  = as_int_vector_1d(n_test);
+    auto x_te_flat = as_double_vector(x_test);
+    auto n_te_flat = as_int_vector_1d(n_test);
     auto nn_te_flat = as_int_vector_2d(nn_test);
 
     // Parse training molecules using shared helper
@@ -506,8 +497,7 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
     for (int j = 0; j < N_train; ++j)
         train_mols[j] = kf::fchl18::parse_mol(coords_train_list[j], z_train_list[j]);
 
-    if (N_train == 0)
-        throw std::invalid_argument("kernel_gaussian_jacobian_t: empty training set");
+    if (N_train == 0) throw std::invalid_argument("kernel_gaussian_jacobian_t: empty training set");
 
     // Compute per-training-mol column offsets (supports variable atom counts).
     std::vector<int> col_offset(N_train + 1, 0);
@@ -522,9 +512,9 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
     {
         py::gil_scoped_release release;
 
-        // Parallelise over training molecules j.
-        // Each j writes to disjoint columns [col_offset[j], col_offset[j+1]).
-        #pragma omp parallel for schedule(dynamic)
+// Parallelise over training molecules j.
+// Each j writes to disjoint columns [col_offset[j], col_offset[j+1]).
+#pragma omp parallel for schedule(dynamic)
         for (int j = 0; j < N_train; ++j) {
             const kf::fchl18::MolData &mj = train_mols[j];
             const int na_j = mj.n_atoms;
@@ -534,13 +524,25 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
             std::vector<double> grad_j(static_cast<std::size_t>(na_j) * 3 * N_test, 0.0);
 
             kf::fchl18::kernel_gaussian_gradient(
-                mj.coords, mj.z,
-                x_te_flat, n_te_flat, nn_te_flat,
-                na_j, N_test, max_size,
+                mj.coords,
+                mj.z,
+                x_te_flat,
+                n_te_flat,
+                nn_te_flat,
+                na_j,
+                N_test,
+                max_size,
                 sigma,
-                two_body_scaling, two_body_width, two_body_power,
-                three_body_scaling, three_body_width, three_body_power,
-                cut_start, cut_distance, fourier_order, use_atm,
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
                 grad_j.data()
             );
 
@@ -594,16 +596,16 @@ ndarray, shape (nm1, nm2), float64
         py::arg("nn1"),
         py::arg("nn2"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 0.5,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 2,
-        py::arg("use_atm")            = true,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 2,
+        py::arg("use_atm") = true,
         kg_doc
     );
 
@@ -614,16 +616,16 @@ ndarray, shape (nm1, nm2), float64
         py::arg("n"),
         py::arg("nn"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 0.5,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 2,
-        py::arg("use_atm")            = true,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 2,
+        py::arg("use_atm") = true,
         "Compute the symmetric FCHL18 Gaussian kernel matrix K[a, b] = K[b, a]."
     );
 
@@ -636,16 +638,16 @@ ndarray, shape (nm1, nm2), float64
         py::arg("n2"),
         py::arg("nn2"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 0.5,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 2,
-        py::arg("use_atm")            = true,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 2,
+        py::arg("use_atm") = true,
         "Compute dK[A,b]/dR_A[alpha,mu]. Returns shape (n_atoms_A, 3, nm2)."
     );
 
@@ -657,16 +659,16 @@ ndarray, shape (nm1, nm2), float64
         py::arg("coords_B_list"),
         py::arg("z_B_list"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 1.0,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 1,
-        py::arg("use_atm")            = false,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
         "Compute d²K[A,B]/dR_A dR_B. Returns shape (D_A, D_B)."
     );
 
@@ -676,16 +678,16 @@ ndarray, shape (nm1, nm2), float64
         py::arg("coords_list"),
         py::arg("z_list"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 1.0,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 1,
-        py::arg("use_atm")            = false,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
         "Compute symmetric Hessian kernel in RFP format. Output length N*D*(N*D+1)//2."
     );
 
@@ -698,16 +700,16 @@ ndarray, shape (nm1, nm2), float64
         py::arg("n_test"),
         py::arg("nn_test"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 0.5,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 2,
-        py::arg("use_atm")            = true,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 2,
+        py::arg("use_atm") = true,
         R"pbdoc(
 Compute the FCHL18 Jacobian-transpose kernel for energy prediction from force coefficients.
 
@@ -748,16 +750,16 @@ ndarray, shape (N_test, D_total), float64
         py::arg("coords_list"),
         py::arg("z_list"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 0.5,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 2,
-        py::arg("use_atm")            = true,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 2,
+        py::arg("use_atm") = true,
         R"pbdoc(
 Compute the symmetric FCHL18 scalar kernel in RFP (Rectangular Full Packed) format.
 
@@ -788,16 +790,16 @@ ndarray, shape (N*(N+1)//2,), float64
         py::arg("n2"),
         py::arg("nn2"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 0.5,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 2,
-        py::arg("use_atm")            = true,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 2,
+        py::arg("use_atm") = true,
         R"pbdoc(
 Compute the FCHL18 Jacobian kernel dK/dR_A.
 
@@ -829,16 +831,16 @@ ndarray, shape (D_A, N_B), float64
         py::arg("coords_list"),
         py::arg("z_list"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 1.0,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 1,
-        py::arg("use_atm")            = false,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
         R"pbdoc(
 Compute the symmetric FCHL18 Hessian kernel (full matrix).
 
@@ -850,8 +852,8 @@ Parameters
 coords_list : list of ndarray, each shape (n_atoms_i, 3), float64
 z_list : list of ndarray, each shape (n_atoms_i,), int32
 sigma : float
-cut_start : float, default 1.0 (must be >= 1.0)
-use_atm : bool, default False (must be False)
+cut_start : float, default 1.0
+use_atm : bool, default False
 
 Returns
 -------
@@ -868,16 +870,16 @@ ndarray, shape (D, D), float64
         py::arg("coords_B_list"),
         py::arg("z_B_list"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 1.0,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 1,
-        py::arg("use_atm")            = false,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
         R"pbdoc(
 Compute the full combined energy+force FCHL18 kernel (asymmetric).
 
@@ -894,8 +896,8 @@ Parameters
 coords_A_list, z_A_list : N_A query molecules (raw coords + charges)
 coords_B_list, z_B_list : N_B training molecules
 sigma : float
-cut_start : float, default 1.0 (must be >= 1.0)
-use_atm : bool, default False (must be False)
+cut_start : float, default 1.0
+use_atm : bool, default False
 
 Returns
 -------
@@ -909,16 +911,16 @@ ndarray, shape (N_A+D_A_total, N_B+D_B_total), float64
         py::arg("coords_list"),
         py::arg("z_list"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 1.0,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 1,
-        py::arg("use_atm")            = false,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
         R"pbdoc(
 Compute the full combined energy+force FCHL18 kernel (symmetric training set).
 
@@ -928,8 +930,8 @@ Parameters
 ----------
 coords_list, z_list : N training molecules
 sigma : float
-cut_start : float, default 1.0 (must be >= 1.0)
-use_atm : bool, default False (must be False)
+cut_start : float, default 1.0
+use_atm : bool, default False
 
 Returns
 -------
@@ -943,16 +945,16 @@ ndarray, shape (N+D, N+D), float64
         py::arg("coords_list"),
         py::arg("z_list"),
         py::arg("sigma"),
-        py::arg("two_body_scaling")   = 2.0,
-        py::arg("two_body_width")     = 0.1,
-        py::arg("two_body_power")     = 6.0,
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
         py::arg("three_body_scaling") = 2.0,
-        py::arg("three_body_width")   = 3.0,
-        py::arg("three_body_power")   = 3.0,
-        py::arg("cut_start")          = 1.0,
-        py::arg("cut_distance")       = 1e6,
-        py::arg("fourier_order")      = 1,
-        py::arg("use_atm")            = false,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
         R"pbdoc(
 Compute the full combined energy+force FCHL18 kernel (symmetric, RFP format).
 
@@ -963,8 +965,8 @@ Parameters
 ----------
 coords_list, z_list : N training molecules
 sigma : float
-cut_start : float, default 1.0 (must be >= 1.0)
-use_atm : bool, default False (must be False)
+cut_start : float, default 1.0
+use_atm : bool, default False
 
 Returns
 -------

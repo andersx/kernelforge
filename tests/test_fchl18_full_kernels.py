@@ -344,29 +344,47 @@ def test_full_symm_rfp_single_mol():
     np.testing.assert_allclose(K_unpacked, K_full, rtol=1e-12, atol=1e-14)
 
 
-def test_full_raises_use_atm():
-    """use_atm=True must raise for all full kernel variants."""
+def test_full_use_atm_runs_and_finite():
+    """use_atm=True: all full kernel variants run without error and produce finite values."""
     args = dict(KERNEL_ARGS, use_atm=True)
-    coords = [WATER_COORDS]
-    zs = [WATER_Z]
+    coords = [WATER_COORDS, AMMONIA_COORDS]
+    zs = [WATER_Z, AMMONIA_Z]
 
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_full(coords, zs, coords, zs, sigma=SIGMA, **args)
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_full_symm(coords, zs, sigma=SIGMA, **args)
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_full_symm_rfp(coords, zs, sigma=SIGMA, **args)
+    K = kernel_mod.kernel_gaussian_full(coords, zs, coords, zs, sigma=SIGMA, **args)
+    assert np.all(np.isfinite(K)), "kernel_gaussian_full(use_atm=True) has non-finite values"
+
+    K_sym = kernel_mod.kernel_gaussian_full_symm(coords, zs, sigma=SIGMA, **args)
+    assert np.all(np.isfinite(K_sym)), (
+        "kernel_gaussian_full_symm(use_atm=True) has non-finite values"
+    )
+    np.testing.assert_array_equal(
+        K_sym, K_sym.T, err_msg="kernel_gaussian_full_symm(use_atm=True) not symmetric"
+    )
+
+    rfp = kernel_mod.kernel_gaussian_full_symm_rfp(coords, zs, sigma=SIGMA, **args)
+    assert np.all(np.isfinite(rfp)), (
+        "kernel_gaussian_full_symm_rfp(use_atm=True) has non-finite values"
+    )
 
 
-def test_full_raises_cutoff():
-    """cut_start < 1.0 must raise for all full kernel variants."""
-    args = dict(KERNEL_ARGS, cut_start=0.5)
-    coords = [WATER_COORDS]
-    zs = [WATER_Z]
+def test_full_active_cutoff_runs_and_finite():
+    """Active cutoff (cut_start=0.5, cut_distance=2.0): all variants run and produce finite values."""
+    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    coords = [WATER_COORDS, AMMONIA_COORDS]
+    zs = [WATER_Z, AMMONIA_Z]
 
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_full(coords, zs, coords, zs, sigma=SIGMA, **args)
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_full_symm(coords, zs, sigma=SIGMA, **args)
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_full_symm_rfp(coords, zs, sigma=SIGMA, **args)
+    K = kernel_mod.kernel_gaussian_full(coords, zs, coords, zs, sigma=SIGMA, **args)
+    assert np.all(np.isfinite(K)), "kernel_gaussian_full(active cutoff) has non-finite values"
+
+    K_sym = kernel_mod.kernel_gaussian_full_symm(coords, zs, sigma=SIGMA, **args)
+    assert np.all(np.isfinite(K_sym)), (
+        "kernel_gaussian_full_symm(active cutoff) has non-finite values"
+    )
+    np.testing.assert_array_equal(
+        K_sym, K_sym.T, err_msg="kernel_gaussian_full_symm(active cutoff) not symmetric"
+    )
+
+    rfp = kernel_mod.kernel_gaussian_full_symm_rfp(coords, zs, sigma=SIGMA, **args)
+    assert np.all(np.isfinite(rfp)), (
+        "kernel_gaussian_full_symm_rfp(active cutoff) has non-finite values"
+    )

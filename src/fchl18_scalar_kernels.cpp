@@ -10,17 +10,17 @@
 #include <vector>
 
 #ifdef _OPENMP
-#include <omp.h>
+    #include <omp.h>
 #endif
-
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
 #include "fchl18_kernel.hpp"
 #include "fchl18_kernel_common.hpp"
 #include "fchl18_repr.hpp"
 #include "rfp_utils.hpp"
+
+#include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 namespace py = pybind11;
 
@@ -33,25 +33,15 @@ namespace py = pybind11;
 // Returns ndarray shape (N*(N+1)//2,), upper-triangle RFP (TRANSR='N', UPLO='U').
 // ---------------------------------------------------------------------------
 py::array_t<double> kernel_gaussian_symm_rfp_py(
-    const py::list &coords_list,
-    const py::list &z_list,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm
 ) {
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
         throw std::invalid_argument("coords_list and z_list must have the same length");
-    if (nm == 0)
-        throw std::invalid_argument("kernel_gaussian_symm_rfp: empty molecule list");
+    if (nm == 0) throw std::invalid_argument("kernel_gaussian_symm_rfp: empty molecule list");
 
     // Parse all molecules
     std::vector<kf::fchl18::MolData> mols(nm);
@@ -69,21 +59,27 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
     //   nn_all : (nm, max_size)
     const std::size_t repr_stride = static_cast<std::size_t>(max_size) * 5 * max_size;
     std::vector<double> x_all(static_cast<std::size_t>(nm) * repr_stride, 1e100);
-    std::vector<int>    n_all(nm, 0);
-    std::vector<int>    nn_all(static_cast<std::size_t>(nm) * max_size, 0);
+    std::vector<int> n_all(nm, 0);
+    std::vector<int> nn_all(static_cast<std::size_t>(nm) * max_size, 0);
 
     for (int a = 0; a < nm; ++a) {
         std::vector<double> x_mol;
-        std::vector<int>    nn_mol;
+        std::vector<int> nn_mol;
         kf::fchl18::generate_fchl18(
-            mols[a].coords, mols[a].z,
-            max_size, cut_distance,
-            x_mol, nn_mol
+            mols[a].coords,
+            mols[a].z,
+            max_size,
+            cut_distance,
+            x_mol,
+            nn_mol
         );
         n_all[a] = mols[a].n_atoms;
         // Copy into stacked arrays
-        std::copy(x_mol.begin(), x_mol.end(),
-                  x_all.begin() + static_cast<std::ptrdiff_t>(a) * repr_stride);
+        std::copy(
+            x_mol.begin(),
+            x_mol.end(),
+            x_all.begin() + static_cast<std::ptrdiff_t>(a) * repr_stride
+        );
         for (int i = 0; i < max_size; ++i)
             nn_all[static_cast<std::size_t>(a) * max_size + i] = nn_mol[i];
     }
@@ -96,12 +92,22 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
         py::gil_scoped_release release;
 
         kf::fchl18::kernel_gaussian_symm(
-            x_all, n_all, nn_all,
-            nm, max_size,
+            x_all,
+            n_all,
+            nn_all,
+            nm,
+            max_size,
             sigma,
-            two_body_scaling, two_body_width, two_body_power,
-            three_body_scaling, three_body_width, three_body_power,
-            cut_start, cut_distance, fourier_order, use_atm,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
             K_full.data()
         );
     }

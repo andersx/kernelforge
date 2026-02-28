@@ -164,15 +164,43 @@ def test_hessian_symm_matches_rfp():
     )
 
 
-def test_hessian_symm_raises_use_atm():
-    """use_atm=True must raise an exception."""
+def test_hessian_symm_use_atm_is_symmetric():
+    """use_atm=True: kernel_gaussian_hessian_symm output is still exactly symmetric."""
     args = dict(KERNEL_ARGS, use_atm=True)
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_hessian_symm([WATER_COORDS], [WATER_Z], sigma=SIGMA, **args)
+    H = kernel_mod.kernel_gaussian_hessian_symm(
+        [WATER_COORDS, AMMONIA_COORDS], [WATER_Z, AMMONIA_Z], sigma=SIGMA, **args
+    )
+    np.testing.assert_array_equal(H, H.T, err_msg="use_atm=True: hessian_symm not symmetric")
 
 
-def test_hessian_symm_raises_cutoff():
-    """cut_start < 1.0 must raise an exception."""
-    args = dict(KERNEL_ARGS, cut_start=0.5)
-    with pytest.raises(Exception):
-        kernel_mod.kernel_gaussian_hessian_symm([WATER_COORDS], [WATER_Z], sigma=SIGMA, **args)
+def test_hessian_symm_use_atm_matches_asymm():
+    """use_atm=True: hessian_symm == kernel_gaussian_hessian(mols, mols)."""
+    args = dict(KERNEL_ARGS, use_atm=True)
+    mols = [WATER_COORDS, AMMONIA_COORDS]
+    zs = [WATER_Z, AMMONIA_Z]
+    H_sym = kernel_mod.kernel_gaussian_hessian_symm(mols, zs, sigma=SIGMA, **args)
+    H_asy = kernel_mod.kernel_gaussian_hessian(mols, zs, mols, zs, sigma=SIGMA, **args)
+    np.testing.assert_allclose(
+        H_sym, H_asy, rtol=1e-10, atol=1e-12, err_msg="use_atm=True: hessian_symm != hessian_asymm"
+    )
+
+
+def test_hessian_symm_active_cutoff_is_symmetric():
+    """Active cutoff (cut_start=0.5, cut_distance=2.0): output is still symmetric."""
+    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    H = kernel_mod.kernel_gaussian_hessian_symm(
+        [WATER_COORDS, AMMONIA_COORDS], [WATER_Z, AMMONIA_Z], sigma=SIGMA, **args
+    )
+    np.testing.assert_array_equal(H, H.T, err_msg="active cutoff: hessian_symm not symmetric")
+
+
+def test_hessian_symm_active_cutoff_matches_asymm():
+    """Active cutoff: hessian_symm == kernel_gaussian_hessian(mols, mols)."""
+    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    mols = [WATER_COORDS, AMMONIA_COORDS]
+    zs = [WATER_Z, AMMONIA_Z]
+    H_sym = kernel_mod.kernel_gaussian_hessian_symm(mols, zs, sigma=SIGMA, **args)
+    H_asy = kernel_mod.kernel_gaussian_hessian(mols, zs, mols, zs, sigma=SIGMA, **args)
+    np.testing.assert_allclose(
+        H_sym, H_asy, rtol=1e-10, atol=1e-12, err_msg="active cutoff: hessian_symm != hessian_asymm"
+    )

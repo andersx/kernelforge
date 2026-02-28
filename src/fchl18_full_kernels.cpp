@@ -24,17 +24,17 @@
 #include <vector>
 
 #ifdef _OPENMP
-#include <omp.h>
+    #include <omp.h>
 #endif
-
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
 #include "fchl18_kernel.hpp"
 #include "fchl18_kernel_common.hpp"
 #include "fchl18_repr.hpp"
 #include "rfp_utils.hpp"
+
+#include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 namespace py = pybind11;
 
@@ -43,35 +43,35 @@ namespace py = pybind11;
 // Returns x_all, n_all, nn_all ready for kernel_gaussian_symm / kernel_gaussian.
 // ---------------------------------------------------------------------------
 static void build_repr(
-    const std::vector<kf::fchl18::MolData> &mols,
-    int nm,
-    double cut_distance,
-    int &max_size_out,
-    std::vector<double> &x_all,
-    std::vector<int>    &n_all,
-    std::vector<int>    &nn_all
+    const std::vector<kf::fchl18::MolData> &mols, int nm, double cut_distance, int &max_size_out,
+    std::vector<double> &x_all, std::vector<int> &n_all, std::vector<int> &nn_all
 ) {
     max_size_out = 0;
     for (int a = 0; a < nm; ++a)
         max_size_out = std::max(max_size_out, mols[a].n_atoms);
 
-    const std::size_t repr_stride =
-        static_cast<std::size_t>(max_size_out) * 5 * max_size_out;
+    const std::size_t repr_stride = static_cast<std::size_t>(max_size_out) * 5 * max_size_out;
     x_all.assign(static_cast<std::size_t>(nm) * repr_stride, 1e100);
     n_all.resize(nm, 0);
     nn_all.resize(static_cast<std::size_t>(nm) * max_size_out, 0);
 
     for (int a = 0; a < nm; ++a) {
         std::vector<double> x_mol;
-        std::vector<int>    nn_mol;
+        std::vector<int> nn_mol;
         kf::fchl18::generate_fchl18(
-            mols[a].coords, mols[a].z,
-            max_size_out, cut_distance,
-            x_mol, nn_mol
+            mols[a].coords,
+            mols[a].z,
+            max_size_out,
+            cut_distance,
+            x_mol,
+            nn_mol
         );
         n_all[a] = mols[a].n_atoms;
-        std::copy(x_mol.begin(), x_mol.end(),
-                  x_all.begin() + static_cast<std::ptrdiff_t>(a) * repr_stride);
+        std::copy(
+            x_mol.begin(),
+            x_mol.end(),
+            x_all.begin() + static_cast<std::ptrdiff_t>(a) * repr_stride
+        );
         for (int i = 0; i < max_size_out; ++i)
             nn_all[static_cast<std::size_t>(a) * max_size_out + i] = nn_mol[i];
     }
@@ -88,29 +88,11 @@ static void build_repr(
 //   D_B_total = sum_j n_atoms_j_B * 3
 // ---------------------------------------------------------------------------
 py::array_t<double> kernel_gaussian_full_py(
-    const py::list &coords_A_list,
-    const py::list &z_A_list,
-    const py::list &coords_B_list,
-    const py::list &z_B_list,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
+    const py::list &z_B_list, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm
 ) {
-    if (use_atm)
-        throw std::invalid_argument(
-            "kernel_gaussian_full: use_atm=True is not yet supported.");
-    if (cut_start < 1.0)
-        throw std::invalid_argument(
-            "kernel_gaussian_full: cutoff damping (cut_start < 1.0) is not yet supported.");
-
     const int N_A = static_cast<int>(coords_A_list.size());
     const int N_B = static_cast<int>(coords_B_list.size());
     if (static_cast<int>(z_A_list.size()) != N_A)
@@ -148,7 +130,7 @@ py::array_t<double> kernel_gaussian_full_py(
     // Build representations for both sets
     int max_size_A, max_size_B;
     std::vector<double> x_A, x_B;
-    std::vector<int>    n_A_v, n_B_v, nn_A, nn_B;
+    std::vector<int> n_A_v, n_B_v, nn_A, nn_B;
     build_repr(mols_A, N_A, cut_distance, max_size_A, x_A, n_A_v, nn_A);
     build_repr(mols_B, N_B, cut_distance, max_size_B, x_B, n_B_v, nn_B);
 
@@ -160,12 +142,27 @@ py::array_t<double> kernel_gaussian_full_py(
         // full_cols. Write into a temp buffer then scatter.
         std::vector<double> K_scalar(N_A * N_B, 0.0);
         kf::fchl18::kernel_gaussian(
-            x_A, x_B, n_A_v, n_B_v, nn_A, nn_B,
-            N_A, N_B, max_size_A, max_size_B,
+            x_A,
+            x_B,
+            n_A_v,
+            n_B_v,
+            nn_A,
+            nn_B,
+            N_A,
+            N_B,
+            max_size_A,
+            max_size_B,
             sigma,
-            two_body_scaling, two_body_width, two_body_power,
-            three_body_scaling, three_body_width, three_body_power,
-            cut_start, cut_distance, fourier_order, use_atm,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
             K_scalar.data()
         );
 
@@ -177,23 +174,35 @@ py::array_t<double> kernel_gaussian_full_py(
             }
         }
 
-        // ---- Jacobian block (dK/dR_A): rows [N_A:, 0:N_B] ----
-        // For each A molecule i, call kernel_gaussian_gradient(A_i, repr_B).
-        // Result grad[alpha, mu, b] goes into K[N_A + row_offset[i] + alpha*3 + mu, b].
-        #pragma omp parallel for schedule(dynamic)
+// ---- Jacobian block (dK/dR_A): rows [N_A:, 0:N_B] ----
+// For each A molecule i, call kernel_gaussian_gradient(A_i, repr_B).
+// Result grad[alpha, mu, b] goes into K[N_A + row_offset[i] + alpha*3 + mu, b].
+#pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < N_A; ++i) {
             const kf::fchl18::MolData &mi = mols_A[i];
             const int na_i = mi.n_atoms;
             std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * N_B, 0.0);
 
             kf::fchl18::kernel_gaussian_gradient(
-                mi.coords, mi.z,
-                x_B, n_B_v, nn_B,
-                na_i, N_B, max_size_B,
+                mi.coords,
+                mi.z,
+                x_B,
+                n_B_v,
+                nn_B,
+                na_i,
+                N_B,
+                max_size_B,
                 sigma,
-                two_body_scaling, two_body_width, two_body_power,
-                three_body_scaling, three_body_width, three_body_power,
-                cut_start, cut_distance, fourier_order, use_atm,
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
                 grad.data()
             );
             // grad[alpha, mu, b] -> K[N_A + row_offset[i] + alpha*3+mu, b]
@@ -208,24 +217,36 @@ py::array_t<double> kernel_gaussian_full_py(
             }
         }
 
-        // ---- Jacobian-T block (dK/dR_B): rows [0:N_A, N_B:] ----
-        // For each B molecule j, call kernel_gaussian_gradient(B_j, repr_A).
-        // By K(A,B)=K(B,A): dK(A_i,B_j)/dR_B = dK(B_j,A_i)/dR_B = grad_j[beta,nu,i]
-        // -> K[i, N_B + col_offset[j] + beta*3+nu]
-        #pragma omp parallel for schedule(dynamic)
+// ---- Jacobian-T block (dK/dR_B): rows [0:N_A, N_B:] ----
+// For each B molecule j, call kernel_gaussian_gradient(B_j, repr_A).
+// By K(A,B)=K(B,A): dK(A_i,B_j)/dR_B = dK(B_j,A_i)/dR_B = grad_j[beta,nu,i]
+// -> K[i, N_B + col_offset[j] + beta*3+nu]
+#pragma omp parallel for schedule(dynamic)
         for (int j = 0; j < N_B; ++j) {
             const kf::fchl18::MolData &mj = mols_B[j];
             const int na_j = mj.n_atoms;
             std::vector<double> grad(static_cast<std::size_t>(na_j) * 3 * N_A, 0.0);
 
             kf::fchl18::kernel_gaussian_gradient(
-                mj.coords, mj.z,
-                x_A, n_A_v, nn_A,
-                na_j, N_A, max_size_A,
+                mj.coords,
+                mj.z,
+                x_A,
+                n_A_v,
+                nn_A,
+                na_j,
+                N_A,
+                max_size_A,
                 sigma,
-                two_body_scaling, two_body_width, two_body_power,
-                three_body_scaling, three_body_width, three_body_power,
-                cut_start, cut_distance, fourier_order, use_atm,
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
                 grad.data()
             );
             // grad[beta, nu, i] = dK(B_j, A_i)/dR_B[beta,nu]
@@ -242,9 +263,9 @@ py::array_t<double> kernel_gaussian_full_py(
             }
         }
 
-        // ---- Hessian block: rows [N_A:, N_B:] ----
-        // H[N_A+row_offset[i]+amu, N_B+col_offset[j]+bnu] = d²K(A_i,B_j)/dR_A dR_B
-        #pragma omp parallel for collapse(2) schedule(dynamic)
+// ---- Hessian block: rows [N_A:, N_B:] ----
+// H[N_A+row_offset[i]+amu, N_B+col_offset[j]+bnu] = d²K(A_i,B_j)/dR_A dR_B
+#pragma omp parallel for collapse(2) schedule(dynamic)
         for (int i = 0; i < N_A; ++i) {
             for (int j = 0; j < N_B; ++j) {
                 const kf::fchl18::MolData &mi = mols_A[i];
@@ -254,13 +275,23 @@ py::array_t<double> kernel_gaussian_full_py(
 
                 std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
                 kf::fchl18::kernel_gaussian_hessian(
-                    mi.coords, mi.z,
-                    mj.coords, mj.z,
-                    mi.n_atoms, mj.n_atoms,
+                    mi.coords,
+                    mi.z,
+                    mj.coords,
+                    mj.z,
+                    mi.n_atoms,
+                    mj.n_atoms,
                     sigma,
-                    two_body_scaling, two_body_width, two_body_power,
-                    three_body_scaling, three_body_width, three_body_power,
-                    cut_start, cut_distance, fourier_order, use_atm,
+                    two_body_scaling,
+                    two_body_width,
+                    two_body_power,
+                    three_body_scaling,
+                    three_body_width,
+                    three_body_power,
+                    cut_start,
+                    cut_distance,
+                    fourier_order,
+                    use_atm,
                     block.data()
                 );
 
@@ -288,32 +319,15 @@ py::array_t<double> kernel_gaussian_full_py(
 // Full matrix filled (lower triangle computed, upper mirrored).
 // ---------------------------------------------------------------------------
 py::array_t<double> kernel_gaussian_full_symm_py(
-    const py::list &coords_list,
-    const py::list &z_list,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm
 ) {
-    if (use_atm)
-        throw std::invalid_argument(
-            "kernel_gaussian_full_symm: use_atm=True is not yet supported.");
-    if (cut_start < 1.0)
-        throw std::invalid_argument(
-            "kernel_gaussian_full_symm: cutoff damping (cut_start < 1.0) is not yet supported.");
-
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
         throw std::invalid_argument("coords_list and z_list must have the same length");
-    if (nm == 0)
-        throw std::invalid_argument("kernel_gaussian_full_symm: empty molecule list");
+    if (nm == 0) throw std::invalid_argument("kernel_gaussian_full_symm: empty molecule list");
 
     std::vector<kf::fchl18::MolData> mols(nm);
     for (int a = 0; a < nm; ++a)
@@ -331,7 +345,7 @@ py::array_t<double> kernel_gaussian_full_symm_py(
 
     int max_size;
     std::vector<double> x_all;
-    std::vector<int>    n_all, nn_all;
+    std::vector<int> n_all, nn_all;
     build_repr(mols, nm, cut_distance, max_size, x_all, n_all, nn_all);
 
     {
@@ -340,12 +354,22 @@ py::array_t<double> kernel_gaussian_full_symm_py(
         // ---- Scalar block (symmetric): K[0:nm, 0:nm] ----
         std::vector<double> K_scalar(nm * nm, 0.0);
         kf::fchl18::kernel_gaussian_symm(
-            x_all, n_all, nn_all,
-            nm, max_size,
+            x_all,
+            n_all,
+            nn_all,
+            nm,
+            max_size,
             sigma,
-            two_body_scaling, two_body_width, two_body_power,
-            three_body_scaling, three_body_width, three_body_power,
-            cut_start, cut_distance, fourier_order, use_atm,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
             K_scalar.data()
         );
 
@@ -356,24 +380,36 @@ py::array_t<double> kernel_gaussian_full_symm_py(
             }
         }
 
-        // ---- Jacobian block (dK/dR_A): rows [nm:, 0:nm] and mirror [0:nm, nm:] ----
-        // For each mol i: grad[alpha,mu, j] = dK(mol_i, mol_j)/dR_i[alpha,mu]
-        // -> K[nm+offset[i]+alpha*3+mu, j]  (jac block)
-        // -> K[j, nm+offset[i]+alpha*3+mu]  (jac_t block, by symmetry = same value)
-        #pragma omp parallel for schedule(dynamic)
+// ---- Jacobian block (dK/dR_A): rows [nm:, 0:nm] and mirror [0:nm, nm:] ----
+// For each mol i: grad[alpha,mu, j] = dK(mol_i, mol_j)/dR_i[alpha,mu]
+// -> K[nm+offset[i]+alpha*3+mu, j]  (jac block)
+// -> K[j, nm+offset[i]+alpha*3+mu]  (jac_t block, by symmetry = same value)
+#pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < nm; ++i) {
             const kf::fchl18::MolData &mi = mols[i];
             const int na_i = mi.n_atoms;
             std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * nm, 0.0);
 
             kf::fchl18::kernel_gaussian_gradient(
-                mi.coords, mi.z,
-                x_all, n_all, nn_all,
-                na_i, nm, max_size,
+                mi.coords,
+                mi.z,
+                x_all,
+                n_all,
+                nn_all,
+                na_i,
+                nm,
+                max_size,
                 sigma,
-                two_body_scaling, two_body_width, two_body_power,
-                three_body_scaling, three_body_width, three_body_power,
-                cut_start, cut_distance, fourier_order, use_atm,
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
                 grad.data()
             );
 
@@ -390,9 +426,9 @@ py::array_t<double> kernel_gaussian_full_symm_py(
             }
         }
 
-        // ---- Hessian block: rows+cols [nm:, nm:], symmetric ----
-        // Only compute lower triangle b <= a, then mirror.
-        #pragma omp parallel for collapse(2) schedule(dynamic)
+// ---- Hessian block: rows+cols [nm:, nm:], symmetric ----
+// Only compute lower triangle b <= a, then mirror.
+#pragma omp parallel for collapse(2) schedule(dynamic)
         for (int a = 0; a < nm; ++a) {
             for (int b = 0; b < nm; ++b) {
                 if (b > a) continue;
@@ -404,13 +440,23 @@ py::array_t<double> kernel_gaussian_full_symm_py(
 
                 std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
                 kf::fchl18::kernel_gaussian_hessian(
-                    ma.coords, ma.z,
-                    mb.coords, mb.z,
-                    ma.n_atoms, mb.n_atoms,
+                    ma.coords,
+                    ma.z,
+                    mb.coords,
+                    mb.z,
+                    ma.n_atoms,
+                    mb.n_atoms,
                     sigma,
-                    two_body_scaling, two_body_width, two_body_power,
-                    three_body_scaling, three_body_width, three_body_power,
-                    cut_start, cut_distance, fourier_order, use_atm,
+                    two_body_scaling,
+                    two_body_width,
+                    two_body_power,
+                    three_body_scaling,
+                    three_body_width,
+                    three_body_power,
+                    cut_start,
+                    cut_distance,
+                    fourier_order,
+                    use_atm,
                     block.data()
                 );
 
@@ -422,8 +468,8 @@ py::array_t<double> kernel_gaussian_full_symm_py(
                             if (amu == bnu) {
                                 v = block[static_cast<std::size_t>(amu) * na3B + bnu];
                             } else {
-                                v = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu]
-                                         + block[static_cast<std::size_t>(bnu) * na3B + amu]);
+                                v = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu] +
+                                           block[static_cast<std::size_t>(bnu) * na3B + amu]);
                             }
                             const int row = nm + offset[a] + amu;
                             const int col = nm + offset[b] + bnu;
@@ -457,32 +503,15 @@ py::array_t<double> kernel_gaussian_full_symm_py(
 // Output length = BIG*(BIG+1)/2 where BIG = N + D.
 // ---------------------------------------------------------------------------
 py::array_t<double> kernel_gaussian_full_symm_rfp_py(
-    const py::list &coords_list,
-    const py::list &z_list,
-    double sigma,
-    double two_body_scaling,
-    double two_body_width,
-    double two_body_power,
-    double three_body_scaling,
-    double three_body_width,
-    double three_body_power,
-    double cut_start,
-    double cut_distance,
-    int    fourier_order,
-    bool   use_atm
+    const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm
 ) {
-    if (use_atm)
-        throw std::invalid_argument(
-            "kernel_gaussian_full_symm_rfp: use_atm=True is not yet supported.");
-    if (cut_start < 1.0)
-        throw std::invalid_argument(
-            "kernel_gaussian_full_symm_rfp: cutoff damping (cut_start < 1.0) is not yet supported.");
-
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
         throw std::invalid_argument("coords_list and z_list must have the same length");
-    if (nm == 0)
-        throw std::invalid_argument("kernel_gaussian_full_symm_rfp: empty molecule list");
+    if (nm == 0) throw std::invalid_argument("kernel_gaussian_full_symm_rfp: empty molecule list");
 
     std::vector<kf::fchl18::MolData> mols(nm);
     for (int a = 0; a < nm; ++a)
@@ -491,7 +520,7 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
     std::vector<int> offset(nm + 1, 0);
     for (int a = 0; a < nm; ++a)
         offset[a + 1] = offset[a] + mols[a].n_atoms * 3;
-    const int D   = offset[nm];
+    const int D = offset[nm];
     const std::size_t BIG = static_cast<std::size_t>(nm + D);
     const std::size_t rfp_len = BIG * (BIG + 1) / 2;
 
@@ -500,7 +529,7 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
 
     int max_size;
     std::vector<double> x_all;
-    std::vector<int>    n_all, nn_all;
+    std::vector<int> n_all, nn_all;
     build_repr(mols, nm, cut_distance, max_size, x_all, n_all, nn_all);
 
     {
@@ -512,12 +541,22 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
         // Only upper triangle RFP: rfp_index_upper_N(BIG, col=b, row=a) with b <= a.
         std::vector<double> K_scalar(nm * nm, 0.0);
         kf::fchl18::kernel_gaussian_symm(
-            x_all, n_all, nn_all,
-            nm, max_size,
+            x_all,
+            n_all,
+            nn_all,
+            nm,
+            max_size,
             sigma,
-            two_body_scaling, two_body_width, two_body_power,
-            three_body_scaling, three_body_width, three_body_power,
-            cut_start, cut_distance, fourier_order, use_atm,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
             K_scalar.data()
         );
 
@@ -528,29 +567,41 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
             }
         }
 
-        // ---- Jacobian block + Jacobian-T block ----
-        // For mol i: grad[alpha,mu,j] = dK(mol_i,mol_j)/dR_i[alpha,mu]
-        // Jac row:  BIG row = nm + offset[i] + alpha*3+mu,  BIG col = j
-        //   -> col <= row condition: j < nm + offset[i]+alpha*3+mu   always true (j < nm)
-        //   -> rfp_index_upper_N(BIG, col=j, row=nm+offset[i]+alpha*3+mu)
-        // Jac_t col: BIG row = j,  BIG col = nm + offset[i] + alpha*3+mu
-        //   -> col > row (jac_t is in upper triangle of block matrix, row=j < nm <= col)
-        //   -> rfp_index_upper_N(BIG, col=j, row=nm+...) — same index as jac by symmetry!
-        // So we write each entry once at rfp_index_upper_N(BIG, min(r,c), max(r,c)).
-        #pragma omp parallel for schedule(dynamic)
+// ---- Jacobian block + Jacobian-T block ----
+// For mol i: grad[alpha,mu,j] = dK(mol_i,mol_j)/dR_i[alpha,mu]
+// Jac row:  BIG row = nm + offset[i] + alpha*3+mu,  BIG col = j
+//   -> col <= row condition: j < nm + offset[i]+alpha*3+mu   always true (j < nm)
+//   -> rfp_index_upper_N(BIG, col=j, row=nm+offset[i]+alpha*3+mu)
+// Jac_t col: BIG row = j,  BIG col = nm + offset[i] + alpha*3+mu
+//   -> col > row (jac_t is in upper triangle of block matrix, row=j < nm <= col)
+//   -> rfp_index_upper_N(BIG, col=j, row=nm+...) — same index as jac by symmetry!
+// So we write each entry once at rfp_index_upper_N(BIG, min(r,c), max(r,c)).
+#pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < nm; ++i) {
             const kf::fchl18::MolData &mi = mols[i];
             const int na_i = mi.n_atoms;
             std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * nm, 0.0);
 
             kf::fchl18::kernel_gaussian_gradient(
-                mi.coords, mi.z,
-                x_all, n_all, nn_all,
-                na_i, nm, max_size,
+                mi.coords,
+                mi.z,
+                x_all,
+                n_all,
+                nn_all,
+                na_i,
+                nm,
+                max_size,
                 sigma,
-                two_body_scaling, two_body_width, two_body_power,
-                three_body_scaling, three_body_width, three_body_power,
-                cut_start, cut_distance, fourier_order, use_atm,
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
                 grad.data()
             );
 
@@ -563,20 +614,18 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
                             grad[static_cast<std::size_t>(alpha) * 3 * nm + mu * nm + j];
                         // jac:   (row=jac_row, col=j)   jac_row > j always
                         // jac_t: (row=j, col=jac_row)   same RFP position (col=j, row=jac_row)
-                        rfp[kf::rfp_index_upper_N(BIG,
-                                                   static_cast<std::size_t>(j),
-                                                   jac_row)] = v;
+                        rfp[kf::rfp_index_upper_N(BIG, static_cast<std::size_t>(j), jac_row)] = v;
                     }
                 }
             }
         }
 
-        // ---- Hessian block: rows+cols [nm:, nm:] ----
-        // Lower triangle b <= a, then symmetry gives the transpose.
-        // For off-diagonal: (row=nm+offset[a]+amu, col=nm+offset[b]+bnu), col <= row since b<=a.
-        //   rfp_index_upper_N(BIG, col, row)
-        // For diagonal (a==b): symmetrize element-wise.
-        #pragma omp parallel for collapse(2) schedule(dynamic)
+// ---- Hessian block: rows+cols [nm:, nm:] ----
+// Lower triangle b <= a, then symmetry gives the transpose.
+// For off-diagonal: (row=nm+offset[a]+amu, col=nm+offset[b]+bnu), col <= row since b<=a.
+//   rfp_index_upper_N(BIG, col, row)
+// For diagonal (a==b): symmetrize element-wise.
+#pragma omp parallel for collapse(2) schedule(dynamic)
         for (int a = 0; a < nm; ++a) {
             for (int b = 0; b < nm; ++b) {
                 if (b > a) continue;
@@ -588,13 +637,23 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
 
                 std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
                 kf::fchl18::kernel_gaussian_hessian(
-                    ma.coords, ma.z,
-                    mb.coords, mb.z,
-                    ma.n_atoms, mb.n_atoms,
+                    ma.coords,
+                    ma.z,
+                    mb.coords,
+                    mb.z,
+                    ma.n_atoms,
+                    mb.n_atoms,
                     sigma,
-                    two_body_scaling, two_body_width, two_body_power,
-                    three_body_scaling, three_body_width, three_body_power,
-                    cut_start, cut_distance, fourier_order, use_atm,
+                    two_body_scaling,
+                    two_body_width,
+                    two_body_power,
+                    three_body_scaling,
+                    three_body_width,
+                    three_body_power,
+                    cut_start,
+                    cut_distance,
+                    fourier_order,
+                    use_atm,
                     block.data()
                 );
 
@@ -608,8 +667,8 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
                             if (amu == bnu) {
                                 v = block[static_cast<std::size_t>(amu) * na3B + bnu];
                             } else {
-                                v = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu]
-                                         + block[static_cast<std::size_t>(bnu) * na3B + amu]);
+                                v = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu] +
+                                           block[static_cast<std::size_t>(bnu) * na3B + amu]);
                             }
                             rfp[kf::rfp_index_upper_N(BIG, col, row)] = v;
                         }
