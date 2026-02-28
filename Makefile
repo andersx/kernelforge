@@ -31,13 +31,18 @@ environment:
 	uv venv --python 3.14
 	uv pip install scikit-build-core pybind11
 
-check: format typecheck
+check: format lint typecheck
 
 format: format-python format-cpp
 
 format-python:
 	uv run ruff format python/ tests/
 	uv run ruff check --select I --fix python/ tests/
+
+lint: lint-python
+
+lint-python:
+	uv run ruff check python/ tests/
 
 format-cpp:
 	clang-format -i src/*.cpp src/*.hpp src/*.h

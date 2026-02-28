@@ -37,6 +37,7 @@ dev = [
     "ruff==0.15.2",
     "ty==0.0.18",
     "pre-commit>=3.6.0",
+    "qmllib",
 ]
 
 [project.scripts]

@@ -70,10 +70,10 @@ py::array_t<double> generate_fchl_acsf_py(
     Rs3_v.reserve(nRs3);
 
     for (int i = 1; i <= nRs2; ++i) {
-        Rs2_v.push_back(rcut * static_cast<double>(i) / static_cast<double>(nRs2 + 1));
+        Rs2_v.push_back(rcut * static_cast<double>(i) / static_cast<double>(nRs2));
     }
     for (int i = 1; i <= nRs3; ++i) {
-        Rs3_v.push_back(acut * static_cast<double>(i) / static_cast<double>(nRs3 + 1));
+        Rs3_v.push_back(acut * static_cast<double>(i) / static_cast<double>(nRs3));
     }
     Ts_v.reserve(2 * nFourier);
     for (int i = 0; i < 2 * nFourier; ++i) {
@@ -121,7 +121,7 @@ py::array_t<double> generate_fchl_acsf_py(
     return out;
 }
 
-// Build basis arrays like in your Python: linspace(0,rcut,1+n)[1:]
+// Build basis arrays matching qmllib: linspace(0,rcut,1+n)[1:] = rcut*i/n for i in 1..n
 static void build_basis_from_sizes(
     int nRs2, int nRs3, int nFourier, double rcut, double acut, std::vector<double> &Rs2,
     std::vector<double> &Rs3, std::vector<double> &Ts
@@ -133,9 +133,9 @@ static void build_basis_from_sizes(
     Rs3.reserve(nRs3);
     Ts.reserve(2 * nFourier);
     for (int i = 1; i <= nRs2; ++i)
-        Rs2.push_back(rcut * double(i) / double(nRs2 + 1));
+        Rs2.push_back(rcut * double(i) / double(nRs2));
     for (int i = 1; i <= nRs3; ++i)
-        Rs3.push_back(acut * double(i) / double(nRs3 + 1));
+        Rs3.push_back(acut * double(i) / double(nRs3));
     const int nT = std::max(2 * nFourier, 2);  // ensure even >=2
     for (int i = 0; i < nT; ++i) {
         double x = (nT == 1 ? 0.0 : (double(i) / double(nT - 1)));
