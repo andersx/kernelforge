@@ -15,11 +15,11 @@ Kernel usage
   Training kernel :  kernel_gaussian_symm_rfp   — scalar, symmetric, RFP packed
   Training error  :  kernel_gaussian_symm        — scalar, symmetric, full matrix
   Predict energies:  kernel_gaussian              — scalar, asymmetric
-  Predict forces  :  kernel_gaussian_jacobian     — Jacobian, asymmetric
+  Predict forces  :  kernel_gaussian_jacobian_t   — Jacobian-transpose, asymmetric
                      shape (N_test*naq, N_train)  where naq = n_atoms*3
 
-The Jacobian kernel K_jac[i*naq+d, j] = dK(x_test_i, x_train_j)/d(coord_d_i),
-so K_jac @ alpha gives the gradient of the KRR energy prediction w.r.t. the
+The Jacobian-transpose kernel K_jact[i*naq+d, j] = dK(x_test_i, x_train_j)/d(coord_d_i),
+so K_jact @ alpha gives the gradient of the KRR energy prediction w.r.t. the
 test-set atomic coordinates (= predicted forces up to a sign convention).
 
 Dataset: ethanol MD17, FCHL19 representation.
@@ -34,7 +34,7 @@ from kernelforge.cli import load_ethanol_raw_data
 from kernelforge.fchl19_repr import generate_fchl_acsf_and_gradients
 from kernelforge.local_kernels import (
     kernel_gaussian,
-    kernel_gaussian_jacobian,
+    kernel_gaussian_jacobian_t,
     kernel_gaussian_symm,
     kernel_gaussian_symm_rfp,
 )
@@ -70,7 +70,7 @@ def load_data(n_train: int, n_test: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n_total, n_atoms, rep_size)
-    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, n_atoms, 3)
+    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, 3*n_atoms)
     Q = np.tile(z, (n_total, 1))  # (n_total, n_atoms) int32
     N = np.full(n_total, n_atoms, dtype=np.int32)  # (n_total,)
     naq = n_atoms * 3  # number of atomic coordinates = 27 for ethanol
@@ -158,15 +158,15 @@ def main():
     print(f"\n[5] Energy prediction kernel built in {time.perf_counter() - t0:.4f}s")
 
     # ------------------------------------------------------------------
-    # 6. Test prediction — forces via Jacobian kernel
-    #    K_jac shape: (N_test*naq, N_train)
-    #    F_pred[i, d] = sum_j K_jac[i*naq+d, j] * alpha[j]
+    # 6. Test prediction — forces via Jacobian-transpose kernel
+    #    K_jact shape: (N_test*naq, N_train)
+    #    K_jact @ alpha = dE_pred/dR_test;  forces = -dE/dR
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_te_jac = kernel_gaussian_jacobian(  # (N_test*naq, N_train)
+    K_te_jac = kernel_gaussian_jacobian_t(  # (N_test*naq, N_train)
         X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
-    F_te_pred = (K_te_jac @ alpha).reshape(N_TEST, naq)
+    F_te_pred = -(K_te_jac @ alpha).reshape(N_TEST, naq)
     print(f"    Force  prediction kernel built in {time.perf_counter() - t0:.4f}s")
 
     # ------------------------------------------------------------------
