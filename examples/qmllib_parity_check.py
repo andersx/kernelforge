@@ -291,9 +291,9 @@ def check_jacobian_kernels():
         SIGMA,
     )
     ok &= _check(
-        "kernel_gaussian_jacobian_t vs GP FE block",
+        "kernel_gaussian_jacobian_t vs GP EF block",
         K_jact,
-        K_full[nm1:, :nm2],
+        K_full[:nm1, nm2:],
         rtol=KERN_RTOL,
         atol=KERN_ATOL,
     )
