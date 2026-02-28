@@ -42,11 +42,7 @@ from kernelforge.local_kernels import (
 N_TRAIN = 500
 N_TEST = 200
 SIGMA = 2.0
-# NOTE: The combined E+F system (BIG = N*(1+naq) rows) is dominated by the
-# force block (naq=27 times more rows than the energy block).  Without
-# per-block weighting the energy predictions are unreliable; only force
-# predictions are physically meaningful in this unweighted demo.
-L2 = 1e-4  # larger regularisation needed for the numerically large full system
+L2 = 1e-8
 ELEMENTS = [1, 6, 8]  # H, C, O
 
 
@@ -71,7 +67,7 @@ def load_data(n_train: int, n_test: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n_total, n_atoms, rep_size)
-    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, 3*n_atoms)
+    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, n_atoms, 3)
     Q = np.tile(z, (n_total, 1))  # (n_total, n_atoms) int32
     N = np.full(n_total, n_atoms, dtype=np.int32)  # (n_total,)
     naq = n_atoms * 3  # number of atomic coordinates = 27 for ethanol

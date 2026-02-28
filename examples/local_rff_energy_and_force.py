@@ -73,10 +73,7 @@ def load_data(n_train: int, n_test: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n_total, n_atoms, rep_size)
-    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, 3*n_atoms)
-    dX = dX.reshape(
-        n_total, n_atoms, dX.shape[2], n_atoms, 3
-    )  # → (n_total, n_atoms, rep_size, n_atoms, 3)
+    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, n_atoms, 3)
     naq = n_atoms * 3  # number of atomic coordinates = 27 for ethanol
 
     # Q for elemental RFF: list of 1D int32 arrays with 0-based element indices (no padding)
