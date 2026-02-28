@@ -118,7 +118,7 @@ def test_krr_fchl18_qm7b():
     y_test = properties[n_train:]
 
     # ------------------------------------------------------------------
-    # Build symmetric kernel (train × train)
+    # Build symmetric kernel (train x train)
     # ------------------------------------------------------------------
     # import timer
     import time

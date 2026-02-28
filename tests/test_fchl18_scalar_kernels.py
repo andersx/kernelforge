@@ -9,7 +9,6 @@ Verifies:
 from typing import TypedDict
 
 import numpy as np
-import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod

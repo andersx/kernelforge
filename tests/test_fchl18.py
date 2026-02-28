@@ -11,9 +11,9 @@ from typing import TypedDict
 
 import numpy as np
 import pytest
-from numpy.typing import NDArray
 
 import kernelforge.fchl18_kernel as kernel_mod
+import kernelforge.fchl18_repr as repr_mod
 
 
 class _KernelArgs(TypedDict):
@@ -27,8 +27,6 @@ class _KernelArgs(TypedDict):
     cut_distance: float
     fourier_order: int
 
-
-import kernelforge.fchl18_repr as repr_mod
 
 # =============================================================================
 # Reference (pure-Python) FCHL18 implementation
@@ -441,7 +439,7 @@ def test_repr_n_atoms_correct():
 def test_repr_padding_value():
     """Slots beyond n_atoms must still have the 1e100 padding in channel 0."""
     coords, Z = _water_like()
-    x, n, nn = repr_mod.generate([coords], [Z], max_size=10, cut_distance=8.0)
+    x, n, _nn = repr_mod.generate([coords], [Z], max_size=10, cut_distance=8.0)
     na = int(n[0])
     # Atoms beyond na should have distance 1e100 for all neighbour slots
     for i in range(na, 10):
@@ -452,7 +450,7 @@ def test_repr_self_at_index_0():
     """For every real atom, the first neighbour (index 0) is the atom itself:
     distance=0, same Z, displacement=(0,0,0)."""
     coords, Z = _water_like()
-    x, n, nn = repr_mod.generate([coords], [Z], max_size=10, cut_distance=8.0)
+    x, n, _nn = repr_mod.generate([coords], [Z], max_size=10, cut_distance=8.0)
     na = int(n[0])
     for i in range(na):
         assert x[0, i, 0, 0] == pytest.approx(0.0, abs=1e-12)  # self-distance
@@ -479,7 +477,7 @@ def test_repr_translation_invariance():
     shift = np.array([3.14, -2.72, 1.41])
 
     x1, n1, nn1 = repr_mod.generate([coords], [Z], max_size=10, cut_distance=6.0)
-    x2, n2, nn2 = repr_mod.generate([coords + shift], [Z], max_size=10, cut_distance=6.0)
+    x2, _n2, _nn2 = repr_mod.generate([coords + shift], [Z], max_size=10, cut_distance=6.0)
 
     # Distances (channel 0) must be identical
     np.testing.assert_allclose(x1[0, :, 0, :], x2[0, :, 0, :], atol=1e-10)
@@ -655,7 +653,7 @@ def test_kernel_gaussian_same_molecule_large_value():
     KAB = kernel_mod.kernel_gaussian(xA, xB, nA, nB, nnA, nnB, sigma=2.5, **KERNEL_ARGS)[0, 0]
 
     assert KAA > 0.0
-    assert KAB == pytest.approx(0.0, abs=1e-14)
+    assert pytest.approx(0.0, abs=1e-14) == KAB
     assert KAA > KAB
 
 

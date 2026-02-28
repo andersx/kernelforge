@@ -16,7 +16,6 @@ import copy
 from typing import TypedDict
 
 import numpy as np
-import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
@@ -386,7 +385,8 @@ def test_full_use_atm_runs_and_finite():
 
 
 def test_full_active_cutoff_runs_and_finite():
-    """Active cutoff (cut_start=0.5, cut_distance=2.0): all variants run and produce finite values."""
+    """Active cutoff (cut_start=0.5, cut_distance=2.0): all variants run and produce finite
+    values."""
     args = copy.copy(KERNEL_ARGS)
     args["cut_start"] = 0.5
     args["cut_distance"] = 2.0

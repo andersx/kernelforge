@@ -10,7 +10,6 @@ Also verified that J == kernel_gaussian_jacobian_t.T (by symmetry of K).
 from typing import TypedDict
 
 import numpy as np
-import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
@@ -94,7 +93,7 @@ def _numerical_jacobian(coords_A_list, z_A_list, x2, n2, nn2, kernel_args, sigma
     J_num = np.zeros((D_A, N_B), dtype=np.float64)
 
     row = 0
-    for coords_A, z_A in zip(coords_A_list, z_A_list):
+    for coords_A, z_A in zip(coords_A_list, z_A_list, strict=False):
         na = coords_A.shape[0]
         for alpha in range(na):
             for mu in range(3):

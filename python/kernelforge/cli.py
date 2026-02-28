@@ -1215,17 +1215,17 @@ def benchmark_rff_full_gramian_elemental_rfp() -> tuple[float, str]:
     return elapsed, f"rff::rff_full_gramian_elemental_rfp (N={n_mols}, D={D}, QM7b-like)"
 
 
-_FCHL18_KERNEL_ARGS = dict(
-    two_body_width=0.1,
-    two_body_scaling=2.0,
-    two_body_power=6.0,
-    three_body_width=3.0,
-    three_body_scaling=2.0,
-    three_body_power=3.0,
-    cut_start=0.5,
-    cut_distance=1e6,
-    fourier_order=2,
-)
+_FCHL18_KERNEL_ARGS = {
+    "two_body_width": 0.1,
+    "two_body_scaling": 2.0,
+    "two_body_power": 6.0,
+    "three_body_width": 3.0,
+    "three_body_scaling": 2.0,
+    "three_body_power": 3.0,
+    "cut_start": 0.5,
+    "cut_distance": 1e6,
+    "fourier_order": 2,
+}
 
 
 @cache

@@ -9,7 +9,6 @@ gradient computed directly from kernel_gaussian.
 """
 
 import numpy as np
-import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
@@ -132,7 +131,8 @@ def _check_gradient(
         err_msg=(
             f"Gradient mismatch.\n"
             f"  max abs diff = {np.max(np.abs(grad_ana - grad_num)):.3e}\n"
-            f"  max rel diff = {np.max(np.abs((grad_ana - grad_num) / (np.abs(grad_num) + 1e-12))):.3e}"
+            f"  max rel diff = "
+            f"{np.max(np.abs((grad_ana - grad_num) / (np.abs(grad_num) + 1e-12))):.3e}"
         ),
     )
 
@@ -141,33 +141,33 @@ def _check_gradient(
 # Test cases
 # ---------------------------------------------------------------------------
 
-KERNEL_ARGS_DEFAULT = dict(
-    sigma=2.5,
-    two_body_scaling=2.0,
-    two_body_width=0.1,
-    two_body_power=6.0,
-    three_body_scaling=2.0,
-    three_body_width=3.0,
-    three_body_power=3.0,
-    cut_start=0.5,
-    cut_distance=1e6,
-    fourier_order=2,
-    use_atm=True,
-)
+KERNEL_ARGS_DEFAULT = {
+    "sigma": 2.5,
+    "two_body_scaling": 2.0,
+    "two_body_width": 0.1,
+    "two_body_power": 6.0,
+    "three_body_scaling": 2.0,
+    "three_body_width": 3.0,
+    "three_body_power": 3.0,
+    "cut_start": 0.5,
+    "cut_distance": 1e6,
+    "fourier_order": 2,
+    "use_atm": True,
+}
 
-KERNEL_ARGS_TUNED = dict(
-    sigma=2.5,
-    two_body_scaling=2.5,
-    two_body_width=0.1,
-    two_body_power=4.5,
-    three_body_scaling=1.5,
-    three_body_width=3.0,
-    three_body_power=3.0,
-    cut_start=0.5,
-    cut_distance=1e6,
-    fourier_order=1,
-    use_atm=False,
-)
+KERNEL_ARGS_TUNED = {
+    "sigma": 2.5,
+    "two_body_scaling": 2.5,
+    "two_body_width": 0.1,
+    "two_body_power": 4.5,
+    "three_body_scaling": 1.5,
+    "three_body_width": 3.0,
+    "three_body_power": 3.0,
+    "cut_start": 0.5,
+    "cut_distance": 1e6,
+    "fourier_order": 1,
+    "use_atm": False,
+}
 
 
 def test_gradient_water_vs_water_default():
