@@ -1,0 +1,278 @@
+"""Tests for the analytical Hessian kernel of FCHL18.
+
+kernel_gaussian_hessian returns the contracted block matrix
+  H[row, col] = d²K[A,B] / dR_A[flat_row] dR_B[flat_col]
+where flat_row = atom_alpha*3 + mu,  flat_col = atom_beta*3 + nu.
+
+All tests use use_atm=False and cut_distance=1e6 (cutoff inactive).
+Numerical Hessians are computed via double central differences on
+kernel_gaussian with eps=5e-3 (found to be reliable in practice).
+"""
+
+import numpy as np
+import pytest
+
+import kernelforge.fchl18_kernel as kernel_mod
+import kernelforge.fchl18_repr as repr_mod
+
+# ---------------------------------------------------------------------------
+# Small molecule definitions (same as in test_fchl18_gradient.py)
+# ---------------------------------------------------------------------------
+
+WATER_COORDS = np.array(
+    [[0.000, 0.000, 0.119], [0.000, 0.757, -0.477], [0.000, -0.757, -0.477]],
+    dtype=np.float64,
+)
+WATER_Z = np.array([8, 1, 1], dtype=np.int32)
+
+AMMONIA_COORDS = np.array(
+    [
+        [0.000, 0.000, 0.116],
+        [0.000, 0.939, -0.271],
+        [0.813, -0.469, -0.271],
+        [-0.813, -0.469, -0.271],
+    ],
+    dtype=np.float64,
+)
+AMMONIA_Z = np.array([7, 1, 1, 1], dtype=np.int32)
+
+METHANE_COORDS = np.array(
+    [
+        [0.000, 0.000, 0.000],
+        [0.629, 0.629, 0.629],
+        [-0.629, -0.629, 0.629],
+        [-0.629, 0.629, -0.629],
+        [0.629, -0.629, -0.629],
+    ],
+    dtype=np.float64,
+)
+METHANE_Z = np.array([6, 1, 1, 1, 1], dtype=np.int32)
+
+# HF: asymmetric diatomic
+HF_COORDS = np.array(
+    [[0.0, 0.0, 0.0], [0.0, 0.0, 0.917]],
+    dtype=np.float64,
+)
+HF_Z = np.array([1, 9], dtype=np.int32)
+
+# Kernel hyperparameters (no cutoff, no ATM — required for hessian)
+KERNEL_ARGS: dict = dict(
+    two_body_width=0.1,
+    two_body_scaling=2.5,
+    two_body_power=4.5,
+    three_body_width=3.0,
+    three_body_scaling=1.5,
+    three_body_power=3.0,
+    cut_start=1.0,
+    cut_distance=1e6,
+    fourier_order=1,
+    use_atm=False,
+)
+SIGMA = 2.5
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_repr(coords_list, z_list, cut_distance=1e6):
+    max_size = max(len(z) for z in z_list)
+    return repr_mod.generate(coords_list, z_list, max_size=max_size, cut_distance=cut_distance)
+
+
+def _analytical_hessian(coords_A_list, z_A_list, coords_B_list, z_B_list, kernel_args, sigma):
+    """Call kernel_gaussian_hessian and return (D_A, D_B) array."""
+    return kernel_mod.kernel_gaussian_hessian(
+        coords_A_list,
+        z_A_list,
+        coords_B_list,
+        z_B_list,
+        sigma=sigma,
+        **kernel_args,
+    )
+
+
+def _numerical_hessian(coords_A, z_A, coords_B, z_B, kernel_args, sigma, eps=5e-3):
+    """Double central-difference numerical Hessian for a single (A, B) pair.
+
+    H_num[alpha*3+mu, beta*3+nu]
+      = (K(A+,B+) - K(A+,B-) - K(A-,B+) + K(A-,B-)) / (4*eps^2)
+    """
+    na = coords_A.shape[0]
+    nb = coords_B.shape[0]
+    D_A = na * 3
+    D_B = nb * 3
+    H_num = np.zeros((D_A, D_B), dtype=np.float64)
+
+    cut = kernel_args["cut_distance"]
+
+    for amu in range(D_A):
+        alpha, mu = divmod(amu, 3)
+        A_p = coords_A.copy()
+        A_p[alpha, mu] += eps
+        A_m = coords_A.copy()
+        A_m[alpha, mu] -= eps
+
+        for bnu in range(D_B):
+            beta, nu = divmod(bnu, 3)
+            B_p = coords_B.copy()
+            B_p[beta, nu] += eps
+            B_m = coords_B.copy()
+            B_m[beta, nu] -= eps
+
+            def K(ca, cb):
+                xa, na_arr, nna = _make_repr([ca], [z_A], cut_distance=cut)
+                xb, nb_arr, nnb = _make_repr([cb], [z_B], cut_distance=cut)
+                return kernel_mod.kernel_gaussian(
+                    xa, xb, na_arr, nb_arr, nna, nnb, sigma=sigma, **kernel_args
+                )[0, 0]
+
+            H_num[amu, bnu] = (K(A_p, B_p) - K(A_p, B_m) - K(A_m, B_p) + K(A_m, B_m)) / (
+                4.0 * eps * eps
+            )
+
+    return H_num
+
+
+def _check_hessian(
+    coords_A, z_A, coords_B, z_B, kernel_args, sigma, eps=5e-3, rtol=1e-3, atol=1e-4
+):
+    H_ana = _analytical_hessian([coords_A], [z_A], [coords_B], [z_B], kernel_args, sigma)
+    H_num = _numerical_hessian(coords_A, z_A, coords_B, z_B, kernel_args, sigma, eps=eps)
+
+    assert H_ana.shape == H_num.shape, (
+        f"Shape mismatch: analytical {H_ana.shape} vs numerical {H_num.shape}"
+    )
+
+    np.testing.assert_allclose(
+        H_ana,
+        H_num,
+        rtol=rtol,
+        atol=atol,
+        err_msg=(
+            f"Hessian mismatch.\n"
+            f"  max abs diff = {np.max(np.abs(H_ana - H_num)):.3e}\n"
+            f"  max rel diff = {np.max(np.abs((H_ana - H_num) / (np.abs(H_num) + 1e-12))):.3e}"
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_hessian_shape_water_ammonia():
+    """Output shape is (D_A, D_B) = (n_atoms_A*3, n_atoms_B*3)."""
+    H = _analytical_hessian(
+        [WATER_COORDS],
+        [WATER_Z],
+        [AMMONIA_COORDS],
+        [AMMONIA_Z],
+        KERNEL_ARGS,
+        SIGMA,
+    )
+    assert H.shape == (3 * 3, 4 * 3), f"Expected (9, 12), got {H.shape}"
+
+
+def test_hessian_shape_batch():
+    """Batch: (nm_A=2, nm_B=3) gives correct contracted shape."""
+    coords_A = [WATER_COORDS, AMMONIA_COORDS]
+    z_A = [WATER_Z, AMMONIA_Z]
+    coords_B = [HF_COORDS, WATER_COORDS, METHANE_COORDS]
+    z_B = [HF_Z, WATER_Z, METHANE_Z]
+
+    D_A = (3 + 4) * 3  # water(3) + ammonia(4) atoms, * 3 coords
+    D_B = (2 + 3 + 5) * 3  # HF(2) + water(3) + methane(5) atoms
+
+    H = _analytical_hessian(coords_A, z_A, coords_B, z_B, KERNEL_ARGS, SIGMA)
+    assert H.shape == (D_A, D_B), f"Expected ({D_A}, {D_B}), got {H.shape}"
+
+
+def test_hessian_water_vs_water():
+    """Water vs water: same-species, non-trivial Hessian."""
+    _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, KERNEL_ARGS, SIGMA)
+
+
+def test_hessian_water_vs_ammonia():
+    """Water vs ammonia: different sizes and element sets."""
+    _check_hessian(WATER_COORDS, WATER_Z, AMMONIA_COORDS, AMMONIA_Z, KERNEL_ARGS, SIGMA)
+
+
+def test_hessian_ammonia_vs_ammonia():
+    """Ammonia vs ammonia.
+
+    Uses a smaller eps than the default because certain directions (e.g. the
+    y-coordinate of N at the C3v symmetry axis) exhibit high-order curvature
+    that makes the double-central-difference inaccurate at eps=5e-3.  The
+    analytical Hessian is correct; eps=1e-4 verifies it numerically.
+    """
+    _check_hessian(
+        AMMONIA_COORDS, AMMONIA_Z, AMMONIA_COORDS, AMMONIA_Z, KERNEL_ARGS, SIGMA, eps=1e-4
+    )
+
+
+def test_hessian_ammonia_vs_methane():
+    """Ammonia vs methane: different heavy elements (N vs C)."""
+    _check_hessian(AMMONIA_COORDS, AMMONIA_Z, METHANE_COORDS, METHANE_Z, KERNEL_ARGS, SIGMA)
+
+
+def test_hessian_hf_vs_water():
+    """HF (diatomic) vs water: small system."""
+    _check_hessian(HF_COORDS, HF_Z, WATER_COORDS, WATER_Z, KERNEL_ARGS, SIGMA)
+
+
+def test_hessian_symmetry():
+    """H[A,B] == H[B,A]^T  (by symmetry of the kernel)."""
+    H_AB = _analytical_hessian(
+        [AMMONIA_COORDS],
+        [AMMONIA_Z],
+        [WATER_COORDS],
+        [WATER_Z],
+        KERNEL_ARGS,
+        SIGMA,
+    )
+    H_BA = _analytical_hessian(
+        [WATER_COORDS],
+        [WATER_Z],
+        [AMMONIA_COORDS],
+        [AMMONIA_Z],
+        KERNEL_ARGS,
+        SIGMA,
+    )
+    np.testing.assert_allclose(
+        H_AB,
+        H_BA.T,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg="H[A,B] != H[B,A]^T — symmetry violated",
+    )
+
+
+def test_hessian_raises_use_atm():
+    """use_atm=True must raise ValueError."""
+    args = dict(KERNEL_ARGS, use_atm=True)
+    with pytest.raises((ValueError, RuntimeError, Exception)):
+        _analytical_hessian(
+            [WATER_COORDS],
+            [WATER_Z],
+            [WATER_COORDS],
+            [WATER_Z],
+            args,
+            SIGMA,
+        )
+
+
+def test_hessian_raises_cutoff():
+    """cut_start < 1.0 must raise ValueError."""
+    args = dict(KERNEL_ARGS, cut_start=0.5)
+    with pytest.raises((ValueError, RuntimeError, Exception)):
+        _analytical_hessian(
+            [WATER_COORDS],
+            [WATER_Z],
+            [WATER_COORDS],
+            [WATER_Z],
+            args,
+            SIGMA,
+        )

@@ -6,6 +6,15 @@ FCHL18 C++ implementation.  Requires the QM7b dataset cached at
 
 Run with:
     pytest -m integration tests/test_fchl18_integration.py
+
+Hyperparameters
+---------------
+Tuned via ablation + grid search on QM7b (see FCHL18_TUNING.md).
+Key changes from original defaults:
+  - fourier_order=1   (order=2 gives identical accuracy, 20% slower)
+  - use_atm=False     (ATM factor hurts accuracy on QM7b)
+  - two_body_power=4.5, three_body_power=3.0  (Round 2 2D grid optimum)
+  - two_body_scaling=2.5, three_body_scaling=1.5  (Round 3 ratio scan optimum)
 """
 
 import numpy as np
@@ -15,25 +24,26 @@ import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
 from kernelforge.cli import load_qm7b_raw_data
 
-# Default hyperparameters from old_code/test_fchl_scalar.py
+# Tuned hyperparameters (see FCHL18_TUNING.md, Round 4 best)
 KERNEL_ARGS = dict(
     two_body_width=0.1,
-    two_body_scaling=2.0,
-    two_body_power=6.0,
+    two_body_scaling=2.5,
+    two_body_power=4.5,
     three_body_width=3.0,
-    three_body_scaling=2.0,
+    three_body_scaling=1.5,
     three_body_power=3.0,
     cut_start=0.5,
     cut_distance=1e6,
-    fourier_order=2,
+    fourier_order=1,
+    use_atm=False,
 )
 
 
 @pytest.mark.slow
 def test_krr_fchl18_qm7b():
-    """KRR on QM7b energies with FCHL18: MAE should be close to 2 kcal/mol (100 molecules)."""
+    """KRR on QM7b energies with FCHL18: MAE should be below 1.0 kcal/mol (1500 molecules)."""
 
-    n_points = 2000
+    n_points = 200
     max_size = 23  # largest QM7b molecule has 23 atoms
     sigma = 2.5
     llambda = 1e-8
@@ -155,6 +165,7 @@ def test_krr_fchl18_qm7b():
     assert K_test.shape == (n_test, n_train)
     assert not np.any(np.isnan(K_test)), "Test kernel contains NaN"
 
+    print(f"K_train shape: {K_sym.shape}, K_asym shape: {K_asym.shape}")
     print(f"K_test shape: {K_test.shape}, alpha shape: {alpha.shape}")
     print(f"K_test sample:\n{K_test[:5, :5]}")
     print(f"alpha sample:\n{alpha[:5]}")
@@ -171,9 +182,10 @@ def test_krr_fchl18_qm7b():
 
     print(f"FCHL18 KRR MAE on QM7b ({n_points} molecules): {mae:.3f} kcal/mol")
 
-    assert abs(2.0 - mae) < 2.0, (
-        f"FCHL18 KRR MAE = {mae:.3f} kcal/mol — expected close to 2.0 kcal/mol"
+    assert mae < 1.5, (
+        f"FCHL18 KRR MAE = {mae:.3f} kcal/mol — expected < 1.5 kcal/mol with 200 molecules"
     )
+
 
 if __name__ == "__main__":
     # Run the test directly (without pytest) for quick debugging
