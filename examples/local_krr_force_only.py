@@ -13,11 +13,11 @@ Kernel usage
   Training error  :  derived from normal equations      (no extra allocation)
   Predict forces  :  kernel_gaussian_hessian             — Hessian, asymmetric
                      shape (N_test*naq, N_train*naq)
-  Predict energies:  kernel_gaussian_jacobian_t          — Jacobian-transpose, asymmetric
+  Predict energies:  kernel_gaussian_jacobian             — Jacobian, asymmetric
                      shape (N_test, N_train*naq)
 
-The jacobian_t kernel K_jt[i, j*naq+d] = dK(x_test_i, x_train_j)/d(coord_d_j),
-so K_jt @ alpha (with alpha the force coefficients) gives energy predictions.
+The jacobian kernel K_j[i, j*naq+d] = dK(x_test_i, x_train_j)/d(coord_d_j),
+so K_j @ alpha (with alpha the force coefficients) gives energy predictions.
 
 Dataset: ethanol MD17, FCHL19 representation.
 """
@@ -32,7 +32,7 @@ from kernelforge.fchl19_repr import generate_fchl_acsf_and_gradients
 from kernelforge.local_kernels import (
     kernel_gaussian_hessian,
     kernel_gaussian_hessian_symm_rfp,
-    kernel_gaussian_jacobian_t,
+    kernel_gaussian_jacobian,
 )
 
 # ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ def load_data(n_train: int, n_test: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n_total, n_atoms, rep_size)
-    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, n_atoms, 3)
+    dX = np.array(dX_list, dtype=np.float64)  # (n_total, n_atoms, rep_size, 3*n_atoms)
     Q = np.tile(z, (n_total, 1))  # (n_total, n_atoms) int32
     N = np.full(n_total, n_atoms, dtype=np.int32)  # (n_total,)
     naq = n_atoms * 3  # number of atomic coordinates = 27 for ethanol
@@ -167,7 +167,7 @@ def main():
     #    E_pred[i] = sum_{j,d} K_jt[i, j*naq+d] * alpha[j*naq+d]
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_te_jt = kernel_gaussian_jacobian_t(  # (N_test, N_train*naq)
+    K_te_jt = kernel_gaussian_jacobian(  # (N_test, N_train*naq)
         X_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
     E_te_pred = K_te_jt @ alpha  # (N_test,)
