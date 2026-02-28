@@ -13,11 +13,6 @@ Convention notes (discovered by inspection):
 
 import numpy as np
 import pytest
-from numpy.typing import NDArray
-
-import kernelforge.local_kernels as kf_lk
-from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
-from kernelforge.kernelmath import rfp_to_full
 from qmllib.kernels.gradient_kernels import (
     get_gdml_kernel,
     get_gp_kernel,
@@ -28,6 +23,10 @@ from qmllib.kernels.gradient_kernels import (
     get_symmetric_gp_kernel,
 )
 from qmllib.representations import generate_fchl19
+
+import kernelforge.local_kernels as kf_lk
+from kernelforge.fchl19_repr import generate_fchl_acsf, generate_fchl_acsf_and_gradients
+from kernelforge.kernelmath import rfp_to_full
 
 # ---------------------------------------------------------------------------
 # Constants / defaults matching qmllib's generate_fchl19 defaults
@@ -77,7 +76,7 @@ def _build_repr_arrays(
     nm = len(coords_list)
     reps_kf = []
     reps_qml = []
-    for coords, charges in zip(coords_list, charges_list):
+    for coords, charges in zip(coords_list, charges_list, strict=True):
         X_kf = generate_fchl_acsf(coords, charges, elements=ELEMENTS)
         X_qml = generate_fchl19(charges, coords, elements=ELEMENTS, gradients=False)
         reps_kf.append(X_kf)
@@ -91,7 +90,7 @@ def _build_repr_arrays(
     Q_kf_pad = np.zeros((nm, max_atoms), dtype=int)
     N_kf = np.zeros(nm, dtype=int)
 
-    for i, (charges, X_kf, X_qml) in enumerate(zip(charges_list, reps_kf, reps_qml)):
+    for i, (charges, X_kf, X_qml) in enumerate(zip(charges_list, reps_kf, reps_qml, strict=True)):
         natoms = len(charges)
         X_kf_pad[i, :natoms] = X_kf
         X_qml_pad[i, :natoms] = X_qml
@@ -121,7 +120,7 @@ def _build_repr_and_grad_arrays(
     reps_kf, grads_kf = [], []
     reps_qml, grads_qml = [], []
 
-    for coords, charges in zip(coords_list, charges_list):
+    for coords, charges in zip(coords_list, charges_list, strict=True):
         X_kf, dX_kf = generate_fchl_acsf_and_gradients(coords, charges, elements=ELEMENTS)
         X_qml, dX_qml = generate_fchl19(charges, coords, elements=ELEMENTS, gradients=True)
         reps_kf.append(X_kf)
@@ -141,7 +140,7 @@ def _build_repr_and_grad_arrays(
     dX_qml_pad = np.zeros((nm, max_atoms, rep_size, max_atoms, 3))
 
     for i, (charges, X_kf, dX_kf, X_qml, dX_qml) in enumerate(
-        zip(charges_list, reps_kf, grads_kf, reps_qml, grads_qml)
+        zip(charges_list, reps_kf, grads_kf, reps_qml, grads_qml, strict=True)
     ):
         natoms = len(charges)
         X_kf_pad[i, :natoms] = X_kf
@@ -179,7 +178,7 @@ def test_repr_matches_qmllib() -> None:
     the C++ and Fortran implementations; non-zero values agree to <1e-13 (relative).
     """
     coords_list, charges_list = _load_qm7b_molecules(N_REPR)
-    for coords, charges in zip(coords_list, charges_list):
+    for coords, charges in zip(coords_list, charges_list, strict=True):
         X_kf = generate_fchl_acsf(coords, charges, elements=ELEMENTS)
         X_qml = generate_fchl19(charges, coords, elements=ELEMENTS, gradients=False)
         np.testing.assert_allclose(
@@ -199,7 +198,7 @@ def test_repr_gradients_match_qmllib() -> None:
       qml: (natoms, rep, natoms, 3) -> reshape to (natoms, rep, 3*natoms)
     """
     coords_list, charges_list = _load_qm7b_molecules(N_KERN_GRAD)
-    for coords, charges in zip(coords_list, charges_list):
+    for coords, charges in zip(coords_list, charges_list, strict=True):
         natoms = len(charges)
         _X_kf, dX_kf = generate_fchl_acsf_and_gradients(coords, charges, elements=ELEMENTS)
         _X_qml, dX_qml = generate_fchl19(charges, coords, elements=ELEMENTS, gradients=True)
@@ -527,7 +526,7 @@ def test_full_gp_asymm_matches_qmllib() -> None:
     # Block-by-block comparison (K_qml is transposed K_kf, with sign flip in FE block):
     #   EE: K_kf[:nm1, :nm2] == K_qml[:nm2, :nm1].T           (energy-energy, no sign flip)
     #   FE: K_kf[nm1:, :nm2] == -K_qml[:nm2, nm1:].T          (jacobian/force-energy, sign flipped)
-    #   EF: K_kf[:nm1, nm2:] == K_qml[nm2:, :nm1].T           (jacobian_t/energy-force, no extra sign)
+    #   EF: K_kf[:nm1, nm2:] == K_qml[nm2:, :nm1].T     (jacobian_t/energy-force, no extra sign)
     #   FF: K_kf[nm1:, nm2:] == K_qml[nm2:, nm1:].T           (hessian/force-force, no sign flip)
 
     # FE block: kf Jacobian (dX1-side) has opposite sign to qmllib's convention
