@@ -2069,11 +2069,11 @@ void kernel_gaussian_full(
                         static_cast<blas_int>(full_cols)
                     );
 
-// Accumulate D_ew for jact: D_ew += -expdiag * D_row
-// (sign: jact coeff is -expdiag * SD2^T @ D_row, factor out SD2^T)
+// Accumulate D_ew for jact: D_ew += expdiag * D_row
+// (sign matches kernel_gaussian_full_symm: jact coeff is +expdiag * SD2^T @ D_row)
 #pragma omp simd
                     for (int k = 0; k < rep_size; ++k)
-                        D_ew[k] -= expdiag * D_row[k];
+                        D_ew[k] += expdiag * D_row[k];
 
                     // S_sum += expdiag * SD1  (for hessian static term)
                     for (int k = 0; k < rep_size; ++k) {
