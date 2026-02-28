@@ -182,15 +182,219 @@ def kernel_gaussian_hessian(
     three_body_width : float, default 3.0
     three_body_power : float, default 3.0
     cut_start : float, default 1.0
-        Must be >= 1.0 (cutoff must be inactive). Raises ValueError otherwise.
     cut_distance : float, default 1e6
     fourier_order : int, default 1
     use_atm : bool, default False
-        Must be False. Raises ValueError if True.
 
     Returns
     -------
     ndarray, shape (D_A, D_B), float64
         D_A = sum_i n_atoms_i * 3,  D_B = sum_j n_atoms_j * 3.
+    """
+    ...
+
+def kernel_gaussian_hessian_symm(
+    coords_list: Sequence[NDArray[np.float64]],
+    z_list: Sequence[NDArray[np.int32]],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+) -> NDArray[np.float64]:
+    """Symmetric FCHL18 Hessian kernel (full matrix).
+
+    Equivalent to kernel_gaussian_hessian(mols, mols, ...) but exploits symmetry.
+
+    Returns
+    -------
+    ndarray, shape (D, D), float64
+        D = sum_i n_atoms_i * 3.
+    """
+    ...
+
+def kernel_gaussian_hessian_symm_rfp(
+    coords_list: Sequence[NDArray[np.float64]],
+    z_list: Sequence[NDArray[np.int32]],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+) -> NDArray[np.float64]:
+    """Symmetric FCHL18 Hessian kernel in RFP format.
+
+    Returns
+    -------
+    ndarray, shape (D*(D+1)//2,), float64
+        Upper-triangle RFP-packed Hessian kernel.
+    """
+    ...
+
+def kernel_gaussian_symm_rfp(
+    coords_list: Sequence[NDArray[np.float64]],
+    z_list: Sequence[NDArray[np.int32]],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 0.5,
+    cut_distance: float = 1e6,
+    fourier_order: int = 2,
+    use_atm: bool = True,
+) -> NDArray[np.float64]:
+    """Symmetric FCHL18 scalar kernel in RFP format.
+
+    Returns
+    -------
+    ndarray, shape (N*(N+1)//2,), float64
+        Upper-triangle RFP-packed scalar kernel.
+    """
+    ...
+
+def kernel_gaussian_jacobian(
+    coords_A_list: Sequence[NDArray[np.float64]],
+    z_A_list: Sequence[NDArray[np.int32]],
+    x2: NDArray[np.float64],
+    n2: NDArray[np.int32],
+    nn2: NDArray[np.int32],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 0.5,
+    cut_distance: float = 1e6,
+    fourier_order: int = 2,
+    use_atm: bool = True,
+) -> NDArray[np.float64]:
+    """FCHL18 Jacobian kernel dK/dR_A.
+
+    Returns
+    -------
+    ndarray, shape (D_A, N_B), float64
+        D_A = sum_i n_atoms_i * 3.
+    """
+    ...
+
+def kernel_gaussian_jacobian_t(
+    coords_train_list: Sequence[NDArray[np.float64]],
+    z_train_list: Sequence[NDArray[np.int32]],
+    x_test: NDArray[np.float64],
+    n_test: NDArray[np.int32],
+    nn_test: NDArray[np.int32],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 0.5,
+    cut_distance: float = 1e6,
+    fourier_order: int = 2,
+    use_atm: bool = True,
+) -> NDArray[np.float64]:
+    """FCHL18 Jacobian-transpose kernel for energy prediction from force coefficients.
+
+    Returns
+    -------
+    ndarray, shape (N_test, D_total), float64
+    """
+    ...
+
+def kernel_gaussian_full(
+    coords_A_list: Sequence[NDArray[np.float64]],
+    z_A_list: Sequence[NDArray[np.int32]],
+    coords_B_list: Sequence[NDArray[np.float64]],
+    z_B_list: Sequence[NDArray[np.int32]],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+) -> NDArray[np.float64]:
+    """Full combined energy+force FCHL18 kernel (asymmetric).
+
+    Block layout::
+
+        [0:N_A,  0:N_B ]  scalar   K[a,b]
+        [0:N_A,  N_B:  ]  jac_t    dK/dR_B
+        [N_A:,   0:N_B ]  jac      dK/dR_A
+        [N_A:,   N_B:  ]  hessian  d²K/dR_A dR_B
+
+    Returns
+    -------
+    ndarray, shape (N_A+D_A_total, N_B+D_B_total), float64
+    """
+    ...
+
+def kernel_gaussian_full_symm(
+    coords_list: Sequence[NDArray[np.float64]],
+    z_list: Sequence[NDArray[np.int32]],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+) -> NDArray[np.float64]:
+    """Full combined energy+force FCHL18 kernel (symmetric training set).
+
+    Returns
+    -------
+    ndarray, shape (N+D, N+D), float64
+    """
+    ...
+
+def kernel_gaussian_full_symm_rfp(
+    coords_list: Sequence[NDArray[np.float64]],
+    z_list: Sequence[NDArray[np.int32]],
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+) -> NDArray[np.float64]:
+    """Full combined energy+force FCHL18 kernel (symmetric, RFP format).
+
+    Returns
+    -------
+    ndarray, shape (BIG*(BIG+1)//2,), float64
+        BIG = N + D.
     """
     ...

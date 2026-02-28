@@ -6,11 +6,28 @@ They are intentionally simple and not performance-optimised; the C++ code must
 agree with them to numerical precision.
 """
 
+import copy
+from typing import TypedDict
+
 import numpy as np
 import pytest
 from numpy.typing import NDArray
 
 import kernelforge.fchl18_kernel as kernel_mod
+
+
+class _KernelArgs(TypedDict):
+    two_body_width: float
+    two_body_scaling: float
+    two_body_power: float
+    three_body_width: float
+    three_body_scaling: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+
+
 import kernelforge.fchl18_repr as repr_mod
 
 # =============================================================================
@@ -18,7 +35,9 @@ import kernelforge.fchl18_repr as repr_mod
 # =============================================================================
 
 
-def _cut_function(r: float, cut_start: float, cut_distance: float) -> float:
+def _cut_function(
+    r: float | np.floating, cut_start: float, cut_distance: float
+) -> float | np.floating:
     ru = cut_distance
     rl = cut_start * cut_distance
     if r >= ru:
@@ -497,17 +516,17 @@ def test_repr_nn_consistency():
 # =============================================================================
 
 # Default hyperparameters matching the test in old_code/test_fchl_scalar.py
-KERNEL_ARGS = dict(
-    two_body_width=0.1,
-    two_body_scaling=2.0,
-    two_body_power=6.0,
-    three_body_width=3.0,
-    three_body_scaling=2.0,
-    three_body_power=3.0,
-    cut_start=0.5,
-    cut_distance=8.0,
-    fourier_order=2,
-)
+KERNEL_ARGS: _KernelArgs = {
+    "two_body_width": 0.1,
+    "two_body_scaling": 2.0,
+    "two_body_power": 6.0,
+    "three_body_width": 3.0,
+    "three_body_scaling": 2.0,
+    "three_body_power": 3.0,
+    "cut_start": 0.5,
+    "cut_distance": 8.0,
+    "fourier_order": 2,
+}
 
 
 def _small_batch(n_mols=4, seed=0):
@@ -580,7 +599,7 @@ def test_kernel_gaussian_matches_reference(seed):
     x, n, nn = _small_batch(3, seed=seed)
 
     # Use a smaller fourier_order and cut_distance for the reference (speed)
-    kargs = dict(KERNEL_ARGS)
+    kargs = copy.copy(KERNEL_ARGS)
     kargs["fourier_order"] = 1  # reference is slow; reduce order
 
     K_cpp = kernel_mod.kernel_gaussian(x, x, n, n, nn, nn, sigma=2.5, **kargs)

@@ -12,11 +12,28 @@ Block layout for kernel_gaussian_full:
 All tests use use_atm=False and cut_start=1.0 (required for hessian).
 """
 
+import copy
+from typing import TypedDict
+
 import numpy as np
 import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
+
+
+class _KernelArgs(TypedDict):
+    two_body_scaling: float
+    two_body_width: float
+    two_body_power: float
+    three_body_scaling: float
+    three_body_width: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
 
 # ---------------------------------------------------------------------------
 # Molecule definitions
@@ -54,18 +71,18 @@ HF_COORDS = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.917]], dtype=np.float64)
 HF_Z = np.array([1, 9], dtype=np.int32)
 
 SIGMA = 2.5
-KERNEL_ARGS = dict(
-    two_body_scaling=2.5,
-    two_body_width=0.1,
-    two_body_power=4.5,
-    three_body_scaling=1.5,
-    three_body_width=3.0,
-    three_body_power=3.0,
-    cut_start=1.0,
-    cut_distance=1e6,
-    fourier_order=1,
-    use_atm=False,
-)
+KERNEL_ARGS: _KernelArgs = {
+    "two_body_scaling": 2.5,
+    "two_body_width": 0.1,
+    "two_body_power": 4.5,
+    "three_body_scaling": 1.5,
+    "three_body_width": 3.0,
+    "three_body_power": 3.0,
+    "cut_start": 1.0,
+    "cut_distance": 1e6,
+    "fourier_order": 1,
+    "use_atm": False,
+}
 
 
 def _make_repr(coords_list, z_list, cut_distance=1e6):
@@ -346,7 +363,8 @@ def test_full_symm_rfp_single_mol():
 
 def test_full_use_atm_runs_and_finite():
     """use_atm=True: all full kernel variants run without error and produce finite values."""
-    args = dict(KERNEL_ARGS, use_atm=True)
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
     coords = [WATER_COORDS, AMMONIA_COORDS]
     zs = [WATER_Z, AMMONIA_Z]
 
@@ -369,7 +387,9 @@ def test_full_use_atm_runs_and_finite():
 
 def test_full_active_cutoff_runs_and_finite():
     """Active cutoff (cut_start=0.5, cut_distance=2.0): all variants run and produce finite values."""
-    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    args = copy.copy(KERNEL_ARGS)
+    args["cut_start"] = 0.5
+    args["cut_distance"] = 2.0
     coords = [WATER_COORDS, AMMONIA_COORDS]
     zs = [WATER_Z, AMMONIA_Z]
 

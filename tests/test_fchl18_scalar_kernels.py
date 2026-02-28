@@ -6,11 +6,27 @@ Verifies:
   3. kernel_gaussian_symm(K) == unpack(kernel_gaussian_symm_rfp(K)).
 """
 
+from typing import TypedDict
+
 import numpy as np
 import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
+
+
+class _KernelArgs(TypedDict):
+    two_body_scaling: float
+    two_body_width: float
+    two_body_power: float
+    three_body_scaling: float
+    three_body_width: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
 
 # ---------------------------------------------------------------------------
 # Molecule definitions
@@ -48,18 +64,18 @@ HF_COORDS = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.917]], dtype=np.float64)
 HF_Z = np.array([1, 9], dtype=np.int32)
 
 SIGMA = 2.5
-KERNEL_ARGS = dict(
-    two_body_scaling=2.0,
-    two_body_width=0.1,
-    two_body_power=6.0,
-    three_body_scaling=2.0,
-    three_body_width=3.0,
-    three_body_power=3.0,
-    cut_start=0.5,
-    cut_distance=1e6,
-    fourier_order=2,
-    use_atm=True,
-)
+KERNEL_ARGS: _KernelArgs = {
+    "two_body_scaling": 2.0,
+    "two_body_width": 0.1,
+    "two_body_power": 6.0,
+    "three_body_scaling": 2.0,
+    "three_body_width": 3.0,
+    "three_body_power": 3.0,
+    "cut_start": 0.5,
+    "cut_distance": 1e6,
+    "fourier_order": 2,
+    "use_atm": True,
+}
 
 
 def _make_repr(coords_list, z_list, cut_distance=1e6):

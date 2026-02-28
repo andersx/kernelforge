@@ -9,10 +9,27 @@ Verified by:
   3. Checking exact symmetry H[i,j] == H[j,i].
 """
 
+import copy
+from typing import TypedDict
+
 import numpy as np
 import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
+
+
+class _KernelArgs(TypedDict):
+    two_body_scaling: float
+    two_body_width: float
+    two_body_power: float
+    three_body_scaling: float
+    three_body_width: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
 
 # ---------------------------------------------------------------------------
 # Molecule definitions
@@ -50,18 +67,18 @@ HF_COORDS = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.917]], dtype=np.float64)
 HF_Z = np.array([1, 9], dtype=np.int32)
 
 SIGMA = 2.5
-KERNEL_ARGS = dict(
-    two_body_scaling=2.5,
-    two_body_width=0.1,
-    two_body_power=4.5,
-    three_body_scaling=1.5,
-    three_body_width=3.0,
-    three_body_power=3.0,
-    cut_start=1.0,
-    cut_distance=1e6,
-    fourier_order=1,
-    use_atm=False,
-)
+KERNEL_ARGS: _KernelArgs = {
+    "two_body_scaling": 2.5,
+    "two_body_width": 0.1,
+    "two_body_power": 4.5,
+    "three_body_scaling": 1.5,
+    "three_body_width": 3.0,
+    "three_body_power": 3.0,
+    "cut_start": 1.0,
+    "cut_distance": 1e6,
+    "fourier_order": 1,
+    "use_atm": False,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +183,8 @@ def test_hessian_symm_matches_rfp():
 
 def test_hessian_symm_use_atm_is_symmetric():
     """use_atm=True: kernel_gaussian_hessian_symm output is still exactly symmetric."""
-    args = dict(KERNEL_ARGS, use_atm=True)
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
     H = kernel_mod.kernel_gaussian_hessian_symm(
         [WATER_COORDS, AMMONIA_COORDS], [WATER_Z, AMMONIA_Z], sigma=SIGMA, **args
     )
@@ -175,7 +193,8 @@ def test_hessian_symm_use_atm_is_symmetric():
 
 def test_hessian_symm_use_atm_matches_asymm():
     """use_atm=True: hessian_symm == kernel_gaussian_hessian(mols, mols)."""
-    args = dict(KERNEL_ARGS, use_atm=True)
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
     mols = [WATER_COORDS, AMMONIA_COORDS]
     zs = [WATER_Z, AMMONIA_Z]
     H_sym = kernel_mod.kernel_gaussian_hessian_symm(mols, zs, sigma=SIGMA, **args)
@@ -187,7 +206,9 @@ def test_hessian_symm_use_atm_matches_asymm():
 
 def test_hessian_symm_active_cutoff_is_symmetric():
     """Active cutoff (cut_start=0.5, cut_distance=2.0): output is still symmetric."""
-    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    args = copy.copy(KERNEL_ARGS)
+    args["cut_start"] = 0.5
+    args["cut_distance"] = 2.0
     H = kernel_mod.kernel_gaussian_hessian_symm(
         [WATER_COORDS, AMMONIA_COORDS], [WATER_Z, AMMONIA_Z], sigma=SIGMA, **args
     )
@@ -196,7 +217,9 @@ def test_hessian_symm_active_cutoff_is_symmetric():
 
 def test_hessian_symm_active_cutoff_matches_asymm():
     """Active cutoff: hessian_symm == kernel_gaussian_hessian(mols, mols)."""
-    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    args = copy.copy(KERNEL_ARGS)
+    args["cut_start"] = 0.5
+    args["cut_distance"] = 2.0
     mols = [WATER_COORDS, AMMONIA_COORDS]
     zs = [WATER_Z, AMMONIA_Z]
     H_sym = kernel_mod.kernel_gaussian_hessian_symm(mols, zs, sigma=SIGMA, **args)

@@ -17,6 +17,8 @@ Key changes from original defaults:
   - two_body_scaling=2.5, three_body_scaling=1.5  (Round 3 ratio scan optimum)
 """
 
+from typing import TypedDict
+
 import numpy as np
 import pytest
 
@@ -24,19 +26,33 @@ import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
 from kernelforge.cli import load_qm7b_raw_data
 
+
+class _KernelArgs(TypedDict):
+    two_body_width: float
+    two_body_scaling: float
+    two_body_power: float
+    three_body_width: float
+    three_body_scaling: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
+
 # Tuned hyperparameters (see FCHL18_TUNING.md, Round 4 best)
-KERNEL_ARGS = dict(
-    two_body_width=0.1,
-    two_body_scaling=2.5,
-    two_body_power=4.5,
-    three_body_width=3.0,
-    three_body_scaling=1.5,
-    three_body_power=3.0,
-    cut_start=0.5,
-    cut_distance=1e6,
-    fourier_order=1,
-    use_atm=False,
-)
+KERNEL_ARGS: _KernelArgs = {
+    "two_body_width": 0.1,
+    "two_body_scaling": 2.5,
+    "two_body_power": 4.5,
+    "three_body_width": 3.0,
+    "three_body_scaling": 1.5,
+    "three_body_power": 3.0,
+    "cut_start": 0.5,
+    "cut_distance": 1e6,
+    "fourier_order": 1,
+    "use_atm": False,
+}
 
 
 @pytest.mark.slow

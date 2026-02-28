@@ -9,11 +9,28 @@ Numerical Hessians are computed via double central differences on
 kernel_gaussian with eps=5e-3 (found to be reliable in practice).
 """
 
+import copy
+from typing import TypedDict
+
 import numpy as np
 import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
+
+
+class _KernelArgs(TypedDict):
+    two_body_width: float
+    two_body_scaling: float
+    two_body_power: float
+    three_body_width: float
+    three_body_scaling: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
 
 # ---------------------------------------------------------------------------
 # Small molecule definitions (same as in test_fchl18_gradient.py)
@@ -55,19 +72,19 @@ HF_COORDS = np.array(
 )
 HF_Z = np.array([1, 9], dtype=np.int32)
 
-# Kernel hyperparameters (no cutoff, no ATM — required for hessian)
-KERNEL_ARGS: dict = dict(
-    two_body_width=0.1,
-    two_body_scaling=2.5,
-    two_body_power=4.5,
-    three_body_width=3.0,
-    three_body_scaling=1.5,
-    three_body_power=3.0,
-    cut_start=1.0,
-    cut_distance=1e6,
-    fourier_order=1,
-    use_atm=False,
-)
+# Kernel hyperparameters
+KERNEL_ARGS: _KernelArgs = {
+    "two_body_width": 0.1,
+    "two_body_scaling": 2.5,
+    "two_body_power": 4.5,
+    "three_body_width": 3.0,
+    "three_body_scaling": 1.5,
+    "three_body_power": 3.0,
+    "cut_start": 1.0,
+    "cut_distance": 1e6,
+    "fourier_order": 1,
+    "use_atm": False,
+}
 SIGMA = 2.5
 
 
@@ -252,20 +269,24 @@ def test_hessian_symmetry():
 
 def test_hessian_use_atm_water_vs_water():
     """use_atm=True: analytical Hessian matches double-central-difference of scalar kernel."""
-    args = dict(KERNEL_ARGS, use_atm=True)
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
     _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, args, SIGMA, eps=1e-4)
 
 
 def test_hessian_use_atm_water_vs_ammonia():
     """use_atm=True, mixed pair: analytical Hessian matches numerical."""
-    args = dict(KERNEL_ARGS, use_atm=True)
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
     _check_hessian(WATER_COORDS, WATER_Z, AMMONIA_COORDS, AMMONIA_Z, args, SIGMA, eps=1e-4)
 
 
 def test_hessian_use_atm_differs_from_no_atm():
     """use_atm=True gives a different result than use_atm=False (ATM is actually active)."""
-    args_atm = dict(KERNEL_ARGS, use_atm=True)
-    args_no = dict(KERNEL_ARGS, use_atm=False)
+    args_atm = copy.copy(KERNEL_ARGS)
+    args_atm["use_atm"] = True
+    args_no = copy.copy(KERNEL_ARGS)
+    args_no["use_atm"] = False
     H_atm = _analytical_hessian(
         [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], args_atm, SIGMA
     )
@@ -284,14 +305,20 @@ def test_hessian_active_cutoff_matches_numerical():
     which spans the H-H and N-H intra-molecular distances, so the cutoff derivatives
     are non-trivial.
     """
-    args = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
+    args = copy.copy(KERNEL_ARGS)
+    args["cut_start"] = 0.5
+    args["cut_distance"] = 2.0
     _check_hessian(WATER_COORDS, WATER_Z, AMMONIA_COORDS, AMMONIA_Z, args, SIGMA, eps=1e-4)
 
 
 def test_hessian_active_cutoff_differs_from_no_cutoff():
     """Active cutoff gives a different result than the infinite-cutoff baseline."""
-    args_cut = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=2.0)
-    args_no_cut = dict(KERNEL_ARGS, cut_start=0.5, cut_distance=1e6)
+    args_cut = copy.copy(KERNEL_ARGS)
+    args_cut["cut_start"] = 0.5
+    args_cut["cut_distance"] = 2.0
+    args_no_cut = copy.copy(KERNEL_ARGS)
+    args_no_cut["cut_start"] = 0.5
+    args_no_cut["cut_distance"] = 1e6
     H_cut = _analytical_hessian(
         [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], args_cut, SIGMA
     )
@@ -305,5 +332,8 @@ def test_hessian_active_cutoff_differs_from_no_cutoff():
 
 def test_hessian_use_atm_and_cutoff_matches_numerical():
     """Combination of use_atm=True and active cutoff: analytical Hessian matches numerical."""
-    args = dict(KERNEL_ARGS, use_atm=True, cut_start=0.5, cut_distance=2.0)
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
+    args["cut_start"] = 0.5
+    args["cut_distance"] = 2.0
     _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, args, SIGMA, eps=1e-4)
