@@ -14,6 +14,24 @@ namespace py = pybind11;
 // Forward declaration — defined in rff_elemental_bindings.cpp
 void register_rff_elemental(py::module_ &m);
 
+// Transpose dX from Python layout (N, ncoords, rep_size) to C++ internal layout
+// (rep_size, N*ncoords). Allocates and returns an aligned buffer; caller must
+// free it with aligned_free_64().
+static double *transpose_dX(
+    const double *dX, std::size_t N, std::size_t ncoords, std::size_t rep_size
+) {
+    const std::size_t total_grads = N * ncoords;
+    double *dX_T = aligned_alloc_64(rep_size * total_grads);
+    for (std::size_t i = 0; i < N; ++i) {
+        for (std::size_t r = 0; r < rep_size; ++r) {
+            for (std::size_t c = 0; c < ncoords; ++c) {
+                dX_T[r * total_grads + i * ncoords + c] = dX[(i * ncoords + c) * rep_size + r];
+            }
+        }
+    }
+    return dX_T;
+}
+
 // ---- rff_features binding ---------------------------------------------------
 
 static py::array_t<double> py_rff_features(
@@ -56,45 +74,65 @@ static py::array_t<double> py_rff_gradient(
     const py::array_t<double, py::array::c_style | py::array::forcecast> &b_arr
 ) {
     if (X_arr.ndim() != 2) throw std::invalid_argument("X must be 2D (N, rep_size)");
-    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, rep_size, ncoords)");
+    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, ncoords, rep_size)");
     if (W_arr.ndim() != 2) throw std::invalid_argument("W must be 2D (rep_size, D)");
     if (b_arr.ndim() != 1) throw std::invalid_argument("b must be 1D (D,)");
 
     const auto N = static_cast<std::size_t>(X_arr.shape(0));
     const auto rep_size = static_cast<std::size_t>(X_arr.shape(1));
     const auto D = static_cast<std::size_t>(b_arr.shape(0));
-    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(2));
+    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(1));
 
     if (static_cast<std::size_t>(dX_arr.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N)");
-    if (static_cast<std::size_t>(dX_arr.shape(1)) != rep_size)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (rep_size)");
+    if (static_cast<std::size_t>(dX_arr.shape(2)) != rep_size)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(0)) != rep_size)
         throw std::invalid_argument("W.shape[0] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(1)) != D)
         throw std::invalid_argument("W.shape[1] must equal b.shape[0] (D)");
 
     const std::size_t total_grads = N * ncoords;
-    double *Gptr = aligned_alloc_64(D * total_grads);
-    auto capsule = py::capsule(Gptr, [](void *p) { aligned_free_64(p); });
+
+    double *dX_T = transpose_dX(dX_arr.data(), N, ncoords, rep_size);
+
+    double *Gptr = aligned_alloc_64(total_grads * D);
 
     kf::rff::rff_gradient(
         X_arr.data(),
-        dX_arr.data(),
+        dX_T,
         W_arr.data(),
         b_arr.data(),
         N,
         rep_size,
         D,
         ncoords,
+        total_grads,  // dX_T_stride = N * ncoords
         Gptr
     );
+
+    aligned_free_64(dX_T);
+
+    // G is stored as (total_grads, D) row-major. Transpose to (D, total_grads) C-contiguous for API
+    // compatibility.
+    double *G_transposed = aligned_alloc_64(D * total_grads);
+
+    // Transpose: G_transposed[d, i] = Gptr[i, d]
+    for (std::size_t i = 0; i < total_grads; ++i) {
+        for (std::size_t d = 0; d < D; ++d) {
+            G_transposed[d * total_grads + i] = Gptr[i * D + d];
+        }
+    }
+
+    aligned_free_64(Gptr);
+
+    auto capsule = py::capsule(G_transposed, [](void *p) { aligned_free_64(p); });
 
     return py::array_t<double>(
         {static_cast<py::ssize_t>(D), static_cast<py::ssize_t>(total_grads)},
         {static_cast<py::ssize_t>(total_grads * sizeof(double)),
          static_cast<py::ssize_t>(sizeof(double))},
-        Gptr,
+        G_transposed,
         capsule
     );
 }
@@ -108,39 +146,46 @@ static py::array_t<double> py_rff_full(
     const py::array_t<double, py::array::c_style | py::array::forcecast> &b_arr
 ) {
     if (X_arr.ndim() != 2) throw std::invalid_argument("X must be 2D (N, rep_size)");
-    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, rep_size, ncoords)");
+    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, ncoords, rep_size)");
     if (W_arr.ndim() != 2) throw std::invalid_argument("W must be 2D (rep_size, D)");
     if (b_arr.ndim() != 1) throw std::invalid_argument("b must be 1D (D,)");
 
     const auto N = static_cast<std::size_t>(X_arr.shape(0));
     const auto rep_size = static_cast<std::size_t>(X_arr.shape(1));
     const auto D = static_cast<std::size_t>(b_arr.shape(0));
-    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(2));
+    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(1));
 
     if (static_cast<std::size_t>(dX_arr.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N)");
-    if (static_cast<std::size_t>(dX_arr.shape(1)) != rep_size)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (rep_size)");
+    if (static_cast<std::size_t>(dX_arr.shape(2)) != rep_size)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(0)) != rep_size)
         throw std::invalid_argument("W.shape[0] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(1)) != D)
         throw std::invalid_argument("W.shape[1] must equal b.shape[0] (D)");
 
-    const std::size_t total_rows = N + N * ncoords;
+    const std::size_t total_grads = N * ncoords;
+    const std::size_t total_rows = N + total_grads;
+
+    double *dX_T = transpose_dX(dX_arr.data(), N, ncoords, rep_size);
+
     double *Zptr = aligned_alloc_64(total_rows * D);
     auto capsule = py::capsule(Zptr, [](void *p) { aligned_free_64(p); });
 
     kf::rff::rff_full(
         X_arr.data(),
-        dX_arr.data(),
+        dX_T,
         W_arr.data(),
         b_arr.data(),
         N,
         rep_size,
         D,
         ncoords,
+        total_grads,  // dX_T_stride = N * ncoords
         Zptr
     );
+
+    aligned_free_64(dX_T);
 
     return py::array_t<double>(
         {static_cast<py::ssize_t>(total_rows), static_cast<py::ssize_t>(D)},
@@ -221,7 +266,7 @@ static py::tuple py_rff_gradient_gramian_symm(
     std::size_t chunk_size
 ) {
     if (X_arr.ndim() != 2) throw std::invalid_argument("X must be 2D (N, rep_size)");
-    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, rep_size, ncoords)");
+    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, ncoords, rep_size)");
     if (W_arr.ndim() != 2) throw std::invalid_argument("W must be 2D (rep_size, D)");
     if (b_arr.ndim() != 1) throw std::invalid_argument("b must be 1D (D,)");
     if (F_arr.ndim() != 1) throw std::invalid_argument("F must be 1D (N*ncoords,)");
@@ -229,22 +274,24 @@ static py::tuple py_rff_gradient_gramian_symm(
     const auto N = static_cast<std::size_t>(X_arr.shape(0));
     const auto rep_size = static_cast<std::size_t>(X_arr.shape(1));
     const auto D = static_cast<std::size_t>(b_arr.shape(0));
-    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(2));
+    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(1));
 
     if (static_cast<std::size_t>(dX_arr.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N)");
-    if (static_cast<std::size_t>(dX_arr.shape(1)) != rep_size)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (rep_size)");
+    if (static_cast<std::size_t>(dX_arr.shape(2)) != rep_size)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(0)) != rep_size)
         throw std::invalid_argument("W.shape[0] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(1)) != D)
         throw std::invalid_argument("W.shape[1] must equal b.shape[0] (D)");
 
-    const std::size_t expected_F = N * ncoords;
-    if (static_cast<std::size_t>(F_arr.shape(0)) != expected_F)
+    const std::size_t total_grads = N * ncoords;
+    if (static_cast<std::size_t>(F_arr.shape(0)) != total_grads)
         throw std::invalid_argument(
-            "F.shape[0] must equal N * ncoords = " + std::to_string(expected_F)
+            "F.shape[0] must equal N * ncoords = " + std::to_string(total_grads)
         );
+
+    double *dX_T = transpose_dX(dX_arr.data(), N, ncoords, rep_size);
 
     double *GtG_ptr = aligned_alloc_64(D * D);
     double *GtF_ptr = aligned_alloc_64(D);
@@ -253,7 +300,7 @@ static py::tuple py_rff_gradient_gramian_symm(
 
     kf::rff::rff_gradient_gramian_symm(
         X_arr.data(),
-        dX_arr.data(),
+        dX_T,
         W_arr.data(),
         b_arr.data(),
         F_arr.data(),
@@ -262,9 +309,12 @@ static py::tuple py_rff_gradient_gramian_symm(
         D,
         ncoords,
         chunk_size,
+        total_grads,  // dX_T_stride = N * ncoords
         GtG_ptr,
         GtF_ptr
     );
+
+    aligned_free_64(dX_T);
 
     auto GtG_out = py::array_t<double>(
         {static_cast<py::ssize_t>(D), static_cast<py::ssize_t>(D)},
@@ -295,7 +345,7 @@ static py::tuple py_rff_full_gramian_symm(
     std::size_t energy_chunk, std::size_t force_chunk
 ) {
     if (X_arr.ndim() != 2) throw std::invalid_argument("X must be 2D (N, rep_size)");
-    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, rep_size, ncoords)");
+    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, ncoords, rep_size)");
     if (W_arr.ndim() != 2) throw std::invalid_argument("W must be 2D (rep_size, D)");
     if (b_arr.ndim() != 1) throw std::invalid_argument("b must be 1D (D,)");
     if (Y_arr.ndim() != 1) throw std::invalid_argument("Y must be 1D (N,)");
@@ -304,12 +354,12 @@ static py::tuple py_rff_full_gramian_symm(
     const auto N = static_cast<std::size_t>(X_arr.shape(0));
     const auto rep_size = static_cast<std::size_t>(X_arr.shape(1));
     const auto D = static_cast<std::size_t>(b_arr.shape(0));
-    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(2));
+    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(1));
 
     if (static_cast<std::size_t>(dX_arr.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N)");
-    if (static_cast<std::size_t>(dX_arr.shape(1)) != rep_size)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (rep_size)");
+    if (static_cast<std::size_t>(dX_arr.shape(2)) != rep_size)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(0)) != rep_size)
         throw std::invalid_argument("W.shape[0] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(1)) != D)
@@ -317,11 +367,13 @@ static py::tuple py_rff_full_gramian_symm(
     if (static_cast<std::size_t>(Y_arr.shape(0)) != N)
         throw std::invalid_argument("Y.shape[0] must equal X.shape[0] (N)");
 
-    const std::size_t expected_F = N * ncoords;
-    if (static_cast<std::size_t>(F_arr.shape(0)) != expected_F)
+    const std::size_t total_grads = N * ncoords;
+    if (static_cast<std::size_t>(F_arr.shape(0)) != total_grads)
         throw std::invalid_argument(
-            "F.shape[0] must equal N * ncoords = " + std::to_string(expected_F)
+            "F.shape[0] must equal N * ncoords = " + std::to_string(total_grads)
         );
+
+    double *dX_T = transpose_dX(dX_arr.data(), N, ncoords, rep_size);
 
     double *ZtZ_ptr = aligned_alloc_64(D * D);
     double *ZtY_ptr = aligned_alloc_64(D);
@@ -330,7 +382,7 @@ static py::tuple py_rff_full_gramian_symm(
 
     kf::rff::rff_full_gramian_symm(
         X_arr.data(),
-        dX_arr.data(),
+        dX_T,
         W_arr.data(),
         b_arr.data(),
         Y_arr.data(),
@@ -341,9 +393,12 @@ static py::tuple py_rff_full_gramian_symm(
         ncoords,
         energy_chunk,
         force_chunk,
+        total_grads,  // dX_T_stride = N * ncoords
         ZtZ_ptr,
         ZtY_ptr
     );
+
+    aligned_free_64(dX_T);
 
     auto ZtZ_out = py::array_t<double>(
         {static_cast<py::ssize_t>(D), static_cast<py::ssize_t>(D)},
@@ -434,7 +489,7 @@ static py::tuple py_rff_gradient_gramian_symm_rfp(
     std::size_t chunk_size
 ) {
     if (X_arr.ndim() != 2) throw std::invalid_argument("X must be 2D (N, rep_size)");
-    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, rep_size, ncoords)");
+    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, ncoords, rep_size)");
     if (W_arr.ndim() != 2) throw std::invalid_argument("W must be 2D (rep_size, D)");
     if (b_arr.ndim() != 1) throw std::invalid_argument("b must be 1D (D,)");
     if (F_arr.ndim() != 1) throw std::invalid_argument("F must be 1D (N*ncoords,)");
@@ -442,22 +497,24 @@ static py::tuple py_rff_gradient_gramian_symm_rfp(
     const auto N = static_cast<std::size_t>(X_arr.shape(0));
     const auto rep_size = static_cast<std::size_t>(X_arr.shape(1));
     const auto D = static_cast<std::size_t>(b_arr.shape(0));
-    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(2));
+    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(1));
 
     if (static_cast<std::size_t>(dX_arr.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N)");
-    if (static_cast<std::size_t>(dX_arr.shape(1)) != rep_size)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (rep_size)");
+    if (static_cast<std::size_t>(dX_arr.shape(2)) != rep_size)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(0)) != rep_size)
         throw std::invalid_argument("W.shape[0] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(1)) != D)
         throw std::invalid_argument("W.shape[1] must equal b.shape[0] (D)");
 
-    const std::size_t expected_F = N * ncoords;
-    if (static_cast<std::size_t>(F_arr.shape(0)) != expected_F)
+    const std::size_t total_grads = N * ncoords;
+    if (static_cast<std::size_t>(F_arr.shape(0)) != total_grads)
         throw std::invalid_argument(
-            "F.shape[0] must equal N * ncoords = " + std::to_string(expected_F)
+            "F.shape[0] must equal N * ncoords = " + std::to_string(total_grads)
         );
+
+    double *dX_T = transpose_dX(dX_arr.data(), N, ncoords, rep_size);
 
     const std::size_t nt = D * (D + 1) / 2;
     double *GtG_rfp_ptr = aligned_alloc_64(nt);
@@ -467,7 +524,7 @@ static py::tuple py_rff_gradient_gramian_symm_rfp(
 
     kf::rff::rff_gradient_gramian_symm_rfp(
         X_arr.data(),
-        dX_arr.data(),
+        dX_T,
         W_arr.data(),
         b_arr.data(),
         F_arr.data(),
@@ -476,9 +533,12 @@ static py::tuple py_rff_gradient_gramian_symm_rfp(
         D,
         ncoords,
         chunk_size,
+        total_grads,  // dX_T_stride = N * ncoords
         GtG_rfp_ptr,
         GtF_ptr
     );
+
+    aligned_free_64(dX_T);
 
     auto GtG_rfp_out = py::array_t<double>(
         {static_cast<py::ssize_t>(nt)},
@@ -509,7 +569,7 @@ static py::tuple py_rff_full_gramian_symm_rfp(
     std::size_t energy_chunk, std::size_t force_chunk
 ) {
     if (X_arr.ndim() != 2) throw std::invalid_argument("X must be 2D (N, rep_size)");
-    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, rep_size, ncoords)");
+    if (dX_arr.ndim() != 3) throw std::invalid_argument("dX must be 3D (N, ncoords, rep_size)");
     if (W_arr.ndim() != 2) throw std::invalid_argument("W must be 2D (rep_size, D)");
     if (b_arr.ndim() != 1) throw std::invalid_argument("b must be 1D (D,)");
     if (Y_arr.ndim() != 1) throw std::invalid_argument("Y must be 1D (N,)");
@@ -518,12 +578,12 @@ static py::tuple py_rff_full_gramian_symm_rfp(
     const auto N = static_cast<std::size_t>(X_arr.shape(0));
     const auto rep_size = static_cast<std::size_t>(X_arr.shape(1));
     const auto D = static_cast<std::size_t>(b_arr.shape(0));
-    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(2));
+    const auto ncoords = static_cast<std::size_t>(dX_arr.shape(1));
 
     if (static_cast<std::size_t>(dX_arr.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N)");
-    if (static_cast<std::size_t>(dX_arr.shape(1)) != rep_size)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (rep_size)");
+    if (static_cast<std::size_t>(dX_arr.shape(2)) != rep_size)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(0)) != rep_size)
         throw std::invalid_argument("W.shape[0] must equal X.shape[1] (rep_size)");
     if (static_cast<std::size_t>(W_arr.shape(1)) != D)
@@ -531,11 +591,13 @@ static py::tuple py_rff_full_gramian_symm_rfp(
     if (static_cast<std::size_t>(Y_arr.shape(0)) != N)
         throw std::invalid_argument("Y.shape[0] must equal X.shape[0] (N)");
 
-    const std::size_t expected_F = N * ncoords;
-    if (static_cast<std::size_t>(F_arr.shape(0)) != expected_F)
+    const std::size_t total_grads = N * ncoords;
+    if (static_cast<std::size_t>(F_arr.shape(0)) != total_grads)
         throw std::invalid_argument(
-            "F.shape[0] must equal N * ncoords = " + std::to_string(expected_F)
+            "F.shape[0] must equal N * ncoords = " + std::to_string(total_grads)
         );
+
+    double *dX_T = transpose_dX(dX_arr.data(), N, ncoords, rep_size);
 
     const std::size_t nt = D * (D + 1) / 2;
     double *ZtZ_rfp_ptr = aligned_alloc_64(nt);
@@ -545,7 +607,7 @@ static py::tuple py_rff_full_gramian_symm_rfp(
 
     kf::rff::rff_full_gramian_symm_rfp(
         X_arr.data(),
-        dX_arr.data(),
+        dX_T,
         W_arr.data(),
         b_arr.data(),
         Y_arr.data(),
@@ -556,9 +618,12 @@ static py::tuple py_rff_full_gramian_symm_rfp(
         ncoords,
         energy_chunk,
         force_chunk,
+        total_grads,  // dX_T_stride = N * ncoords
         ZtZ_rfp_ptr,
         ZtY_ptr
     );
+
+    aligned_free_64(dX_T);
 
     auto ZtZ_rfp_out = py::array_t<double>(
         {static_cast<py::ssize_t>(nt)},

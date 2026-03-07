@@ -118,12 +118,12 @@ py::array_t<double> kernel_asymm_py(
 
 static py::array_t<double> gaussian_jacobian_batch_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X1,   // (N1, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX1,  // (N1, M, D)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX1,  // (N1, D, M)
     py::array_t<double, py::array::c_style | py::array::forcecast> X2,   // (N2, M)
     double sigma
 ) {
     if (X1.ndim() != 2) throw std::invalid_argument("X1 must be 2D (N1,M).");
-    if (dX1.ndim() != 3) throw std::invalid_argument("dX1 must be 3D (N1,M,D).");
+    if (dX1.ndim() != 3) throw std::invalid_argument("dX1 must be 3D (N1,D,M).");
     if (X2.ndim() != 2) throw std::invalid_argument("X2 must be 2D (N2,M).");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0.");
 
@@ -132,10 +132,9 @@ static py::array_t<double> gaussian_jacobian_batch_py(
 
     if (static_cast<std::size_t>(dX1.shape(0)) != N1)
         throw std::invalid_argument("dX1.shape[0] must equal X1.shape[0] (N1).");
-    if (static_cast<std::size_t>(dX1.shape(1)) != M)
-        throw std::invalid_argument("dX1.shape[1] must equal X1.shape[1] (M).");
-
-    const auto D = static_cast<std::size_t>(dX1.shape(2));  // = 3N (query)
+    const auto D = static_cast<std::size_t>(dX1.shape(1));  // = 3N (query)
+    if (static_cast<std::size_t>(dX1.shape(2)) != M)
+        throw std::invalid_argument("dX1.shape[2] must equal X1.shape[1] (M).");
     if (D == 0) throw std::invalid_argument("D (last dim of dX1) must be > 0.");
 
     const auto N2 = static_cast<std::size_t>(X2.shape(0));
@@ -144,7 +143,7 @@ static py::array_t<double> gaussian_jacobian_batch_py(
 
     // Raw pointers (contiguous due to c_style|forcecast)
     auto x1 = X1.unchecked<2>();    // (N1,M)
-    auto dx1 = dX1.unchecked<3>();  // (N1,M,D)
+    auto dx1 = dX1.unchecked<3>();  // (N1,D,M)
     auto x2 = X2.unchecked<2>();    // (N2,M)
 
     const double *X1p = x1.data(0, 0);
@@ -163,12 +162,12 @@ static py::array_t<double> gaussian_jacobian_batch_py(
 static py::array_t<double> gaussian_jacobian_t_batch_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X1,   // (N1, M)
     py::array_t<double, py::array::c_style | py::array::forcecast> X2,   // (N2, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, M, D)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, D, M)
     double sigma
 ) {
     if (X1.ndim() != 2) throw std::invalid_argument("X1 must be 2D (N1,M).");
     if (X2.ndim() != 2) throw std::invalid_argument("X2 must be 2D (N2,M).");
-    if (dX2.ndim() != 3) throw std::invalid_argument("dX2 must be 3D (N2,M,D).");
+    if (dX2.ndim() != 3) throw std::invalid_argument("dX2 must be 3D (N2,D,M).");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0.");
 
     const auto N1 = static_cast<std::size_t>(X1.shape(0));
@@ -183,16 +182,15 @@ static py::array_t<double> gaussian_jacobian_t_batch_py(
 
     if (static_cast<std::size_t>(dX2.shape(0)) != N2)
         throw std::invalid_argument("dX2.shape[0] must equal X2.shape[0] (N2).");
-    if (static_cast<std::size_t>(dX2.shape(1)) != M)
-        throw std::invalid_argument("dX2.shape[1] must equal X2.shape[1] (M).");
-
-    const auto D = static_cast<std::size_t>(dX2.shape(2));
-    if (D == 0) throw std::invalid_argument("D (last dim of dX2) must be > 0.");
+    const auto D = static_cast<std::size_t>(dX2.shape(1));
+    if (D == 0) throw std::invalid_argument("D (second dim of dX2) must be > 0.");
+    if (static_cast<std::size_t>(dX2.shape(2)) != M)
+        throw std::invalid_argument("dX2.shape[2] must equal X2.shape[1] (M).");
 
     // Raw pointers (contiguous due to c_style|forcecast)
     auto x1 = X1.unchecked<2>();    // (N1,M)
     auto x2 = X2.unchecked<2>();    // (N2,M)
-    auto dx2 = dX2.unchecked<3>();  // (N2,M,D)
+    auto dx2 = dX2.unchecked<3>();  // (N2,D,M)
 
     const double *X1p = x1.data(0, 0);
     const double *X2p = x2.data(0, 0);
@@ -209,15 +207,15 @@ static py::array_t<double> gaussian_jacobian_t_batch_py(
 
 static py::array_t<double> rbf_hessian_full_tiled_gemm_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X1,   // (N1, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX1,  // (N1, M, D1)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX1,  // (N1, D1, M)
     py::array_t<double, py::array::c_style | py::array::forcecast> X2,   // (N2, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, M, D2)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, D2, M)
     double sigma, py::object tile_B_obj                                  /* int or None */
 ) {
     if (X1.ndim() != 2) throw std::invalid_argument("X1 must be 2D (N1,M).");
     if (X2.ndim() != 2) throw std::invalid_argument("X2 must be 2D (N2,M).");
-    if (dX1.ndim() != 3) throw std::invalid_argument("dX1 must be 3D (N1,M,D1).");
-    if (dX2.ndim() != 3) throw std::invalid_argument("dX2 must be 3D (N2,M,D2).");
+    if (dX1.ndim() != 3) throw std::invalid_argument("dX1 must be 3D (N1,D1,M).");
+    if (dX2.ndim() != 3) throw std::invalid_argument("dX2 must be 3D (N2,D2,M).");
     if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
 
     const std::size_t N1 = static_cast<std::size_t>(X1.shape(0));
@@ -229,17 +227,17 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_py(
 
     if (static_cast<std::size_t>(dX1.shape(0)) != N1)
         throw std::invalid_argument("dX1.shape[0] must equal X1.shape[0] (N1).");
-    if (static_cast<std::size_t>(dX1.shape(1)) != M)
-        throw std::invalid_argument("dX1.shape[1] must equal X1.shape[1] (M).");
+    const std::size_t D1 = static_cast<std::size_t>(dX1.shape(1));
+    if (D1 == 0) throw std::invalid_argument("D1 must be > 0.");
+    if (static_cast<std::size_t>(dX1.shape(2)) != M)
+        throw std::invalid_argument("dX1.shape[2] must equal X1.shape[1] (M).");
 
     if (static_cast<std::size_t>(dX2.shape(0)) != N2)
         throw std::invalid_argument("dX2.shape[0] must equal X2.shape[0] (N2).");
-    if (static_cast<std::size_t>(dX2.shape(1)) != M)
-        throw std::invalid_argument("dX2.shape[1] must equal X2.shape[1] (M).");
-
-    const std::size_t D1 = static_cast<std::size_t>(dX1.shape(2));
-    const std::size_t D2 = static_cast<std::size_t>(dX2.shape(2));
-    if (D1 == 0 || D2 == 0) throw std::invalid_argument("D1 and D2 must be > 0.");
+    const std::size_t D2 = static_cast<std::size_t>(dX2.shape(1));
+    if (D2 == 0) throw std::invalid_argument("D2 must be > 0.");
+    if (static_cast<std::size_t>(dX2.shape(2)) != M)
+        throw std::invalid_argument("dX2.shape[2] must equal X2.shape[1] (M).");
 
     // tile_B: default 0 means "choose heuristic" inside the core
     std::size_t tile_B = 0;
@@ -285,22 +283,21 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_py(
 
 static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, D, M)
     double sigma, py::object tile_B_obj                                 /* int or None */
 ) {
     if (X.ndim() != 2) throw std::invalid_argument("X must be 2D (N,M).");
-    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,D,M).");
     if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
 
     const std::size_t N = static_cast<std::size_t>(X.shape(0));
     const std::size_t M = static_cast<std::size_t>(X.shape(1));
     if (static_cast<std::size_t>(dX.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N).");
-    if (static_cast<std::size_t>(dX.shape(1)) != M)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (M).");
-
-    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    const std::size_t D = static_cast<std::size_t>(dX.shape(1));
     if (D == 0) throw std::invalid_argument("D must be > 0.");
+    if (static_cast<std::size_t>(dX.shape(2)) != M)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (M).");
 
     // tile_B: default 0 means "auto"
     std::size_t tile_B = 0;
@@ -341,22 +338,22 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_py(
 
 static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_rfp_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, D, M)
     double sigma, py::object tile_B_obj                                 /* int or None */
 ) {
     if (X.ndim() != 2) throw std::invalid_argument("X must be 2D (N,M).");
-    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,D,M).");
     if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
 
     const std::size_t N = static_cast<std::size_t>(X.shape(0));
     const std::size_t M = static_cast<std::size_t>(X.shape(1));
     if (static_cast<std::size_t>(dX.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal X.shape[0] (N).");
-    if (static_cast<std::size_t>(dX.shape(1)) != M)
-        throw std::invalid_argument("dX.shape[1] must equal X.shape[1] (M).");
 
-    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    const std::size_t D = static_cast<std::size_t>(dX.shape(1));
     if (D == 0) throw std::invalid_argument("D must be > 0.");
+    if (static_cast<std::size_t>(dX.shape(2)) != M)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (M).");
 
     // tile_B: default 0 means "auto"
     std::size_t tile_B = 0;
@@ -397,15 +394,15 @@ static py::array_t<double> rbf_hessian_full_tiled_gemm_sym_rfp_py(
 // ---- Full combined kernel (asymmetric) ----
 static py::array_t<double> kernel_gaussian_full_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X1,   // (N1, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX1,  // (N1, M, D1)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX1,  // (N1, D1, M)
     py::array_t<double, py::array::c_style | py::array::forcecast> X2,   // (N2, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, M, D2)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX2,  // (N2, D2, M)
     double sigma, py::object tile_B_obj
 ) {
     if (X1.ndim() != 2) throw std::invalid_argument("X1 must be 2D (N1,M).");
-    if (dX1.ndim() != 3) throw std::invalid_argument("dX1 must be 3D (N1,M,D1).");
+    if (dX1.ndim() != 3) throw std::invalid_argument("dX1 must be 3D (N1,D1,M).");
     if (X2.ndim() != 2) throw std::invalid_argument("X2 must be 2D (N2,M).");
-    if (dX2.ndim() != 3) throw std::invalid_argument("dX2 must be 3D (N2,M,D2).");
+    if (dX2.ndim() != 3) throw std::invalid_argument("dX2 must be 3D (N2,D2,M).");
     if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
 
     const std::size_t N1 = static_cast<std::size_t>(X1.shape(0));
@@ -415,16 +412,16 @@ static py::array_t<double> kernel_gaussian_full_py(
     if (Mx != M) throw std::invalid_argument("X2.shape[1] must equal X1.shape[1] (M).");
     if (static_cast<std::size_t>(dX1.shape(0)) != N1)
         throw std::invalid_argument("dX1.shape[0] must equal N1.");
-    if (static_cast<std::size_t>(dX1.shape(1)) != M)
-        throw std::invalid_argument("dX1.shape[1] must equal M.");
     if (static_cast<std::size_t>(dX2.shape(0)) != N2)
         throw std::invalid_argument("dX2.shape[0] must equal N2.");
-    if (static_cast<std::size_t>(dX2.shape(1)) != M)
-        throw std::invalid_argument("dX2.shape[1] must equal M.");
 
-    const std::size_t D1 = static_cast<std::size_t>(dX1.shape(2));
-    const std::size_t D2 = static_cast<std::size_t>(dX2.shape(2));
+    const std::size_t D1 = static_cast<std::size_t>(dX1.shape(1));
+    const std::size_t D2 = static_cast<std::size_t>(dX2.shape(1));
     if (D1 == 0 || D2 == 0) throw std::invalid_argument("D1 and D2 must be > 0.");
+    if (static_cast<std::size_t>(dX1.shape(2)) != M)
+        throw std::invalid_argument("dX1.shape[2] must equal X1.shape[1] (M).");
+    if (static_cast<std::size_t>(dX2.shape(2)) != M)
+        throw std::invalid_argument("dX2.shape[2] must equal X2.shape[1] (M).");
 
     std::size_t tile_B = 0;
     if (!tile_B_obj.is_none()) {
@@ -458,21 +455,21 @@ static py::array_t<double> kernel_gaussian_full_py(
 // ---- Full combined kernel (symmetric) ----
 static py::array_t<double> kernel_gaussian_full_symm_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, D, M)
     double sigma, py::object tile_B_obj
 ) {
     if (X.ndim() != 2) throw std::invalid_argument("X must be 2D (N,M).");
-    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,D,M).");
     if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
 
     const std::size_t N = static_cast<std::size_t>(X.shape(0));
     const std::size_t M = static_cast<std::size_t>(X.shape(1));
     if (static_cast<std::size_t>(dX.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal N.");
-    if (static_cast<std::size_t>(dX.shape(1)) != M)
-        throw std::invalid_argument("dX.shape[1] must equal M.");
-    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    const std::size_t D = static_cast<std::size_t>(dX.shape(1));
     if (D == 0) throw std::invalid_argument("D must be > 0.");
+    if (static_cast<std::size_t>(dX.shape(2)) != M)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (M).");
 
     std::size_t tile_B = 0;
     if (!tile_B_obj.is_none()) {
@@ -502,21 +499,21 @@ static py::array_t<double> kernel_gaussian_full_symm_py(
 // ---- Full combined kernel (symmetric RFP) ----
 static py::array_t<double> kernel_gaussian_full_symm_rfp_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X,   // (N, M)
-    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, M, D)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,  // (N, D, M)
     double sigma, py::object tile_B_obj
 ) {
     if (X.ndim() != 2) throw std::invalid_argument("X must be 2D (N,M).");
-    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,M,D).");
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,D,M).");
     if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
 
     const std::size_t N = static_cast<std::size_t>(X.shape(0));
     const std::size_t M = static_cast<std::size_t>(X.shape(1));
     if (static_cast<std::size_t>(dX.shape(0)) != N)
         throw std::invalid_argument("dX.shape[0] must equal N.");
-    if (static_cast<std::size_t>(dX.shape(1)) != M)
-        throw std::invalid_argument("dX.shape[1] must equal M.");
-    const std::size_t D = static_cast<std::size_t>(dX.shape(2));
+    const std::size_t D = static_cast<std::size_t>(dX.shape(1));
     if (D == 0) throw std::invalid_argument("D must be > 0.");
+    if (static_cast<std::size_t>(dX.shape(2)) != M)
+        throw std::invalid_argument("dX.shape[2] must equal X.shape[1] (M).");
 
     std::size_t tile_B = 0;
     if (!tile_B_obj.is_none()) {
@@ -580,7 +577,7 @@ PYBIND11_MODULE(global_kernels, m) {
         py::arg("X2"),
         py::arg("sigma"),
         "Compute Jacobian kernel with Jacobians on query side (X1).\n"
-        "Shapes: X1(N1,M), dX1(N1,M,D), X2(N2,M) -> K(N1*D, N2)."
+        "Shapes: X1(N1,M), dX1(N1,D,M), X2(N2,M) -> K(N1*D, N2)."
     );
     m.def(
         "kernel_gaussian_jacobian_t",
@@ -590,7 +587,7 @@ PYBIND11_MODULE(global_kernels, m) {
         py::arg("dX2"),
         py::arg("sigma"),
         "Compute transposed Jacobian kernel with Jacobians on reference side (X2).\n"
-        "Shapes: X1(N1,M), X2(N2,M), dX2(N2,M,D) -> K(N1, N2*D).\n"
+        "Shapes: X1(N1,M), X2(N2,M), dX2(N2,D,M) -> K(N1, N2*D).\n"
         "Property: kernel_gaussian_jacobian_t(X2, X1, dX1, σ) == kernel_gaussian_jacobian(X1, dX1, "
         "X2, σ).T"
     );
@@ -604,7 +601,7 @@ PYBIND11_MODULE(global_kernels, m) {
         py::arg("sigma"),
         py::arg("tile_B") = py::none(),
         "Compute the full Gaussian Hessian/GDML kernel with DGEMM tiling.\n"
-        "Shapes: X1(N1,M), dX1(N1,M,D1), X2(N2,M), dX2(N2,M,D2) -> H((N1*D1),(N2*D2)).\n"
+        "Shapes: X1(N1,M), dX1(N1,D1,M), X2(N2,M), dX2(N2,D2,M) -> H((N1*D1),(N2*D2)).\n"
         "tile_B: refs per tile (0 = auto)."
     );
     m.def(
@@ -637,7 +634,7 @@ PYBIND11_MODULE(global_kernels, m) {
         py::arg("sigma"),
         py::arg("tile_B") = py::none(),
         "Compute full combined energy+force kernel (asymmetric).\n"
-        "Shapes: X1(N1,M), dX1(N1,M,D1), X2(N2,M), dX2(N2,M,D2) -> K((N1*(1+D1)),(N2*(1+D2))).\n"
+        "Shapes: X1(N1,M), dX1(N1,D1,M), X2(N2,M), dX2(N2,D2,M) -> K((N1*(1+D1)),(N2*(1+D2))).\n"
         "Layout: [0:N1, 0:N2]=scalar, [0:N1, N2:]=jac_t, [N1:, 0:N2]=jac, [N1:, N2:]=hessian."
     );
     m.def(
@@ -648,7 +645,7 @@ PYBIND11_MODULE(global_kernels, m) {
         py::arg("sigma"),
         py::arg("tile_B") = py::none(),
         "Compute full combined energy+force kernel (symmetric, X1==X2).\n"
-        "Shapes: X(N,M), dX(N,M,D) -> K((N*(1+D)),(N*(1+D))), lower triangle filled.\n"
+        "Shapes: X(N,M), dX(N,D,M) -> K((N*(1+D)),(N*(1+D))), lower triangle filled.\n"
         "Block layout: [0:N,0:N]=scalar, [N:,0:N]=jac, [0:N,N:]=jac_t, [N:,N:]=hessian."
     );
     m.def(
@@ -659,7 +656,7 @@ PYBIND11_MODULE(global_kernels, m) {
         py::arg("sigma"),
         py::arg("tile_B") = py::none(),
         "Compute full combined energy+force kernel (symmetric RFP format).\n"
-        "Shapes: X(N,M), dX(N,M,D) -> 1D RFP array of length N*(1+D)*(N*(1+D)+1)/2.\n"
+        "Shapes: X(N,M), dX(N,D,M) -> 1D RFP array of length N*(1+D)*(N*(1+D)+1)/2.\n"
         "Saves ~50% memory vs full symmetric matrix."
     );
 }
