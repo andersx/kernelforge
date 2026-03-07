@@ -1,5 +1,5 @@
 """
-KRR with force-only training — predict both energies and forces.
+KRR with force-only training -- predict both energies and forces.
 
 Trains on forces alone using the Hessian (force-force) kernel, then predicts:
   - Forces   via the Hessian kernel        (force-force, asymmetric)
@@ -9,17 +9,17 @@ Trains on forces alone using the Hessian (force-force) kernel, then predicts:
 
 Kernel usage
 ------------
-  Training kernel :  kernel_gaussian_hessian_symm_rfp  — Hessian, symmetric, RFP
-  Training error  :  kernel_gaussian_hessian_symm       — Hessian, symmetric, full
-  Predict forces  :  kernel_gaussian_hessian             — Hessian, asymmetric
-                     shape (N_test*D, N_train*D)
-  Predict energies:  kernel_gaussian_jacobian_t          — Jacobian-transpose, asymmetric
-                     shape (N_test, N_train*D)
+  Training kernel :  kernel_gaussian_hessian_symm_rfp  -- Hessian, symmetric, RFP
+  Training error  :  kernel_gaussian_hessian_symm       -- Hessian, symmetric, full
+  Predict forces  :  kernel_gaussian_hessian             -- Hessian, asymmetric
+                     shape (N_test*ncoords, N_train*ncoords)
+  Predict energies:  kernel_gaussian_jacobian_t          -- Jacobian-transpose, asymmetric
+                     shape (N_test, N_train*ncoords)
 
-The jacobian_t kernel K_jt[i, j*D+d] = dK(x_test_i, x_train_j)/d(coord_d_j),
+The jacobian_t kernel K_jt[i, j*ncoords+d] = dK(x_test_i, x_train_j)/d(coord_d_j),
 so K_jt @ alpha (with alpha the force coefficients) gives energy predictions.
 
-Dataset: ethanol MD17, inverse-distance representation (M=36, D=27).
+Dataset: ethanol MD17, inverse-distance representation (M=36, ncoords=27).
 """
 
 import time
@@ -33,6 +33,13 @@ from kernelforge.global_kernels import (
     kernel_gaussian_hessian_symm_rfp,
     kernel_gaussian_jacobian_t,
 )
+
+
+def linfit(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """Return (slope, intercept) from least-squares fit of y_pred vs y_true."""
+    slope, intercept = np.polyfit(y_true.ravel(), y_pred.ravel(), 1)
+    return float(slope), float(intercept)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -62,8 +69,8 @@ def load_data(n_train: int, n_test: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n_total, M=36)
-    dX = np.array(dX_list, dtype=np.float64)  # (n_total, M=36, D=27)
-    D = dX.shape[2]
+    dX = np.array(dX_list, dtype=np.float64)  # (n_total, ncoords=27, M=36)
+    D = dX.shape[1]  # ncoords (Cartesian degrees of freedom)
 
     return (
         X[:n_train],
@@ -83,7 +90,7 @@ def load_data(n_train: int, n_test: int):
 # ---------------------------------------------------------------------------
 def main():
     print("=" * 65)
-    print("KRR: force-only training  →  predict energies + forces")
+    print("KRR: force-only training  ->  predict energies + forces")
     print("=" * 65)
     print(f"  N_train={N_TRAIN}  N_test={N_TEST}  sigma={SIGMA}  l2={L2}")
 
@@ -93,16 +100,16 @@ def main():
     t0 = time.perf_counter()
     (X_tr, dX_tr, X_te, dX_te, E_tr, E_te, F_tr, F_te, D) = load_data(N_TRAIN, N_TEST)
     print(f"\n[1] Data loaded in {time.perf_counter() - t0:.2f}s")
-    print(f"    M={X_tr.shape[1]}  D={D}")
+    print(f"    M={X_tr.shape[1]}  ncoords={D}")
 
-    F_tr_flat = F_tr.ravel()  # (N_train*D,) — training labels
+    F_tr_flat = F_tr.ravel()  # (N_train*ncoords,) -- training labels
 
     # ------------------------------------------------------------------
-    # 2. Build training kernel  —  Hessian, symmetric, RFP packed
+    # 2. Build training kernel  --  Hessian, symmetric, RFP packed
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
     K_rfp = kernel_gaussian_hessian_symm_rfp(X_tr, dX_tr, SIGMA)
-    ND = N_TRAIN * D
+    ND = N_TRAIN * D  # D = ncoords
     print(f"\n[2] Training kernel (hessian, RFP) built in {time.perf_counter() - t0:.3f}s")
     print(f"    K_rfp length={len(K_rfp)}  ({len(K_rfp) * 8 / 1024**2:.1f} MB)")
     assert len(K_rfp) == ND * (ND + 1) // 2
@@ -121,8 +128,13 @@ def main():
     #    We solved (K + l2*I) @ alpha = y, so K @ alpha = y - l2*alpha exactly.
     # ------------------------------------------------------------------
     F_tr_pred_flat = F_tr_flat - L2 * alpha  # K @ alpha = y - l2*alpha
-    train_mae = np.mean(np.abs(F_tr_pred_flat.reshape(N_TRAIN, D) - F_tr))
-    print(f"\n[4] Training MAE (force): {train_mae:.6f} kcal/(mol·Å)")
+    F_tr_pred = F_tr_pred_flat.reshape(N_TRAIN, D)
+    train_mae = np.mean(np.abs(F_tr_pred - F_tr))
+    slope_F_tr, intercept_F_tr = linfit(F_tr, F_tr_pred)
+    print(
+        f"\n[4] Training MAE (force): {train_mae:.6f} kcal/(mol*A)"
+        f"  slope={slope_F_tr:.4f}  intercept={intercept_F_tr:.4f}"
+    )
 
     # ------------------------------------------------------------------
     # 5. Test prediction — forces via Hessian kernel
@@ -140,7 +152,7 @@ def main():
     #    E_pred[i] = sum_{j,d} K_jt[i, j*D+d] * alpha[j*D+d]
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_te_jt = kernel_gaussian_jacobian_t(X_te, X_tr, dX_tr, SIGMA)  # (N_test, N_train*D)
+    K_te_jt = kernel_gaussian_jacobian_t(X_te, X_tr, dX_tr, SIGMA)  # (N_test, N_train*ncoords)
     E_te_pred = K_te_jt @ alpha  # (N_test,)
     print(f"    Energy prediction kernel built in {time.perf_counter() - t0:.4f}s")
 
@@ -151,10 +163,18 @@ def main():
     E_te_c = E_te - E_te.mean()
     test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te))
+    slope_E_te, intercept_E_te = linfit(E_te_c, E_te_pred_c)
+    slope_F_te, intercept_F_te = linfit(F_te, F_te_pred)
 
     print(f"\n[7] Test results")
-    print(f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol")
-    print(f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)")
+    print(
+        f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol"
+        f"  slope={slope_E_te:.4f}  intercept={intercept_E_te:.4f}"
+    )
+    print(
+        f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol*A)"
+        f"  slope={slope_F_te:.4f}  intercept={intercept_F_te:.4f}"
+    )
     print(f"    (Energies are predicted via the Jacobian-transpose kernel.)")
 
     print("\n" + "=" * 65 + "\nDone.\n" + "=" * 65)

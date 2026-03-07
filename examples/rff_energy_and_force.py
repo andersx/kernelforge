@@ -20,8 +20,8 @@ Predictions from the single weight vector w:
 
 RFF functions used
 ------------------
-  Training (normal eqs, RFP): rff_full_gramian_symm_rfp  →  (ZtZ_rfp, ZtY)
-  Predict E + F              : rff_full                    →  Z_full (N_test*(1+ncoords), D_rff)
+  Training (normal eqs, RFP): rff_full_gramian_symm_rfp  ->  (ZtZ_rfp, ZtY)
+  Predict E + F              : rff_full                    ->  Z_full (N_test*(1+ncoords), D_rff)
 
 Dataset: ethanol MD17, inverse-distance representation (M=36, ncoords=27).
 """
@@ -34,14 +34,21 @@ from kernelforge import invdist_repr, kernelmath
 from kernelforge.cli import load_ethanol_raw_data
 from kernelforge.kitchen_sinks import rff_full, rff_full_gramian_symm_rfp
 
+
+def linfit(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """Return (slope, intercept) from least-squares fit of y_pred vs y_true."""
+    slope, intercept = np.polyfit(y_true.ravel(), y_pred.ravel(), 1)
+    return float(slope), float(intercept)
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 N_TRAIN = 1000
 N_TEST = 200
-D_RFF = 2048   # number of random Fourier features
-SIGMA = 3.0    # Gaussian kernel length-scale
-L2 = 1e-6      # L2 regularisation
+D_RFF = 2048  # number of random Fourier features
+SIGMA = 3.0  # Gaussian kernel length-scale
+L2 = 1e-6  # L2 regularisation
 SEED = 42
 
 
@@ -54,7 +61,7 @@ def load_data(n_train: int, n_test: int):
     n_total = n_train + n_test
 
     R = data["R"][:n_total]
-    E = data["E"][:n_total].ravel()               # (n_total,)
+    E = data["E"][:n_total].ravel()  # (n_total,)
     F = data["F"][:n_total].reshape(n_total, -1)  # (n_total, ncoords=27)
 
     X_list, dX_list = [], []
@@ -63,13 +70,13 @@ def load_data(n_train: int, n_test: int):
         X_list.append(x)
         dX_list.append(dx)
 
-    X = np.array(X_list, dtype=np.float64)   # (n_total, M=36)
-    dX = np.array(dX_list, dtype=np.float64) # (n_total, M=36, ncoords=27)
-    ncoords = dX.shape[2]
+    X = np.array(X_list, dtype=np.float64)  # (n_total, M=36)
+    dX = np.array(dX_list, dtype=np.float64)  # (n_total, ncoords=27, M=36)
+    ncoords = dX.shape[1]  # Cartesian degrees of freedom
 
     # Combined labels: energies concatenated with flattened forces
-    y_tr = np.concatenate([E[:n_train], F[:n_train].ravel()])   # (N_train*(1+ncoords),)
-    y_te = np.concatenate([E[n_train:], F[n_train:].ravel()])   # (N_test *(1+ncoords),)
+    y_tr = np.concatenate([E[:n_train], F[:n_train].ravel()])  # (N_train*(1+ncoords),)
+    y_te = np.concatenate([E[n_train:], F[n_train:].ravel()])  # (N_test *(1+ncoords),)
 
     return (
         X[:n_train],
@@ -91,7 +98,7 @@ def load_data(n_train: int, n_test: int):
 # ---------------------------------------------------------------------------
 def main():
     print("=" * 65)
-    print("RFF: energy + force training  →  predict energies + forces")
+    print("RFF: energy + force training  ->  predict energies + forces")
     print("=" * 65)
     print(f"  N_train={N_TRAIN}  N_test={N_TEST}  D_rff={D_RFF}  sigma={SIGMA}  l2={L2}")
 
@@ -140,21 +147,28 @@ def main():
     # ------------------------------------------------------------------
     # 5. Training error  —  recompute Z_full_tr @ w
     # ------------------------------------------------------------------
-    Z_full_tr = rff_full(X_tr, dX_tr, W, b)       # (N_train*(1+ncoords), D_rff)
+    Z_full_tr = rff_full(X_tr, dX_tr, W, b)  # (N_train*(1+ncoords), D_rff)
     y_tr_pred = Z_full_tr @ w
-    train_mae_E = np.mean(np.abs(y_tr_pred[:N_TRAIN] - E_tr))
-    train_mae_F = np.mean(np.abs(y_tr_pred[N_TRAIN:].reshape(N_TRAIN, ncoords) - F_tr))
+    E_tr_pred = y_tr_pred[:N_TRAIN]
+    F_tr_pred = y_tr_pred[N_TRAIN:].reshape(N_TRAIN, ncoords)
+    train_mae_E = np.mean(np.abs(E_tr_pred - E_tr))
+    train_mae_F = np.mean(np.abs(F_tr_pred - F_tr))
+    slope_E_tr, intercept_E_tr = linfit(E_tr, E_tr_pred)
+    slope_F_tr, intercept_F_tr = linfit(F_tr, F_tr_pred)
+    print(f"\n[4] Training MAE")
     print(
-        f"\n[4] Training MAE — energy: {train_mae_E:.6f} kcal/mol"
-        f"   force: {train_mae_F:.6f} kcal/(mol·Å)"
+        f"    Energy : {train_mae_E:.6f} kcal/mol   slope={slope_E_tr:.4f}  intercept={intercept_E_tr:.4f}"
+    )
+    print(
+        f"    Force  : {train_mae_F:.6f} kcal/(mol*A)  slope={slope_F_tr:.4f}  intercept={intercept_F_tr:.4f}"
     )
 
     # ------------------------------------------------------------------
     # 6. Test prediction  —  Z_full_te @ w gives [E_pred; F_pred_flat]
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    Z_full_te = rff_full(X_te, dX_te, W, b)       # (N_test*(1+ncoords), D_rff)
-    y_te_pred = Z_full_te @ w                      # (N_test*(1+ncoords),)
+    Z_full_te = rff_full(X_te, dX_te, W, b)  # (N_test*(1+ncoords), D_rff)
+    y_te_pred = Z_full_te @ w  # (N_test*(1+ncoords),)
     print(f"\n[5] Prediction in {time.perf_counter() - t0:.3f}s")
 
     # ------------------------------------------------------------------
@@ -167,10 +181,18 @@ def main():
     E_te_c = E_te - E_te.mean()
     test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te))
+    slope_E_te, intercept_E_te = linfit(E_te_c, E_te_pred_c)
+    slope_F_te, intercept_F_te = linfit(F_te, F_te_pred)
 
     print(f"\n[6] Test results")
-    print(f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol")
-    print(f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)")
+    print(
+        f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol"
+        f"  slope={slope_E_te:.4f}  intercept={intercept_E_te:.4f}"
+    )
+    print(
+        f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol*A)"
+        f"  slope={slope_F_te:.4f}  intercept={intercept_F_te:.4f}"
+    )
 
     print("\n" + "=" * 65 + "\nDone.\n" + "=" * 65)
 
