@@ -802,17 +802,17 @@ def rff_gradient_numpy(
     W: np.ndarray,
     b: np.ndarray,
 ) -> np.ndarray:
-    """Reference: G[d, i*ncoords+g] = -sqrt(2/D) * sin(z[d]) * (W^T @ dX[i])_{d,g}.
+    """Reference: G[d, i*ncoords+g] = -sqrt(2/D) * sin(z[d]) * (W^T @ dX[i].T)_{d,g}.
 
     X:  (N, rep_size)
-    dX: (N, rep_size, ncoords)
+    dX: (N, ncoords, rep_size)
     W:  (rep_size, D)
     b:  (D,)
     Returns G: (D, N*ncoords)
     """
     N, _rep_size = X.shape
     D = b.shape[0]
-    ncoords = dX.shape[2]
+    ncoords = dX.shape[1]
     norm = -np.sqrt(2.0 / D)
 
     G = np.zeros((D, N * ncoords))
@@ -820,8 +820,8 @@ def rff_gradient_numpy(
         z_i = X[i] @ W + b  # (D,)
         # dg[d, r] = sin(z_i[d]) * norm * W[r, d]
         dg = norm * np.sin(z_i)[:, None] * W.T  # (D, rep_size)
-        # G[:, i*ncoords:(i+1)*ncoords] = dg @ dX[i]
-        G[:, i * ncoords : (i + 1) * ncoords] = dg @ dX[i]
+        # G[:, i*ncoords:(i+1)*ncoords] = dg @ dX[i].T
+        G[:, i * ncoords : (i + 1) * ncoords] = dg @ dX[i].T
     return G
 
 
@@ -836,7 +836,7 @@ class TestRffGradient:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 5, 10, 20, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -850,7 +850,7 @@ class TestRffGradient:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 3, 8, 15, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -862,7 +862,7 @@ class TestRffGradient:
         rng = np.random.default_rng(123)
         N, rep_size, D, ncoords = 4, 6, 12, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -876,7 +876,7 @@ class TestRffGradient:
         rng = np.random.default_rng(456)
         N, rep_size, D, ncoords = 20, 50, 100, 30
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -890,7 +890,7 @@ class TestRffGradient:
         rng = np.random.default_rng(789)
         N, rep_size, D, ncoords = 50, 100, 200, 60
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -909,7 +909,7 @@ class TestRffGradient:
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         # dX[i, r, g] = d(X[i, r]) / d(coord_g)
         # For finite difference: perturb X[i, r] by eps in direction g
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
 
         G_cpp = rff_gradient(X, dX, W, b)
 
@@ -918,7 +918,7 @@ class TestRffGradient:
         eps = 1e-5
         for i in range(N):
             for g in range(ncoords):
-                dX_ig = dX[i, :, g]  # (rep_size,) perturbation direction
+                dX_ig = dX[i, g, :]  # (rep_size,) perturbation direction
                 X_plus = X.copy()
                 X_minus = X.copy()
                 X_plus[i] += eps * dX_ig
@@ -935,7 +935,7 @@ class TestRffGradient:
         rng = np.random.default_rng(7)
         rep_size, D, ncoords = 10, 20, 12
         X = rng.normal(size=(1, rep_size))
-        dX = rng.normal(size=(1, rep_size, ncoords))
+        dX = rng.normal(size=(1, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -1070,7 +1070,7 @@ class TestRffFullGramianSymm:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 8, 10, 20, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))
@@ -1088,7 +1088,7 @@ class TestRffFullGramianSymm:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 10, 12, 25, 12
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))
@@ -1103,7 +1103,7 @@ class TestRffFullGramianSymm:
         rng = np.random.default_rng(123)
         N, rep_size, D, ncoords = 8, 10, 20, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))
@@ -1127,7 +1127,7 @@ class TestRffFullGramianSymm:
         rng = np.random.default_rng(456)
         N, rep_size, D, ncoords = 12, 8, 15, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))
@@ -1147,7 +1147,7 @@ class TestRffFullGramianSymm:
         rng = np.random.default_rng(789)
         N, rep_size, D, ncoords = 10, 12, 20, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))
@@ -1164,7 +1164,7 @@ class TestRffFullGramianSymm:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 5, 8, 15, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(size=(D,))
         Y = rng.normal(size=(N,))
@@ -1204,7 +1204,7 @@ class TestRffFull:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 5, 10, 20, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -1218,7 +1218,7 @@ class TestRffFull:
         rng = np.random.default_rng(123)
         N, rep_size, D, ncoords = 6, 8, 15, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -1232,7 +1232,7 @@ class TestRffFull:
         rng = np.random.default_rng(456)
         N, rep_size, D, ncoords = 4, 6, 12, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -1246,7 +1246,7 @@ class TestRffFull:
         rng = np.random.default_rng(789)
         N, rep_size, D, ncoords = 8, 10, 20, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
 
@@ -1271,7 +1271,7 @@ class TestRffGradientGramianSymm:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 8, 10, 20, 9
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         F = rng.normal(size=(N * ncoords,))
@@ -1288,7 +1288,7 @@ class TestRffGradientGramianSymm:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 10, 12, 25, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         F = rng.normal(size=(N * ncoords,))
@@ -1302,7 +1302,7 @@ class TestRffGradientGramianSymm:
         rng = np.random.default_rng(123)
         N, rep_size, D, ncoords = 6, 8, 15, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         F = rng.normal(size=(N * ncoords,))
@@ -1320,7 +1320,7 @@ class TestRffGradientGramianSymm:
         rng = np.random.default_rng(456)
         N, rep_size, D, ncoords = 10, 8, 15, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         F = rng.normal(size=(N * ncoords,))
@@ -1403,7 +1403,7 @@ class TestRffGradientGramianSymmRfp:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 8, 10, 12, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         F = rng.normal(size=(N * ncoords,))
@@ -1420,7 +1420,7 @@ class TestRffGradientGramianSymmRfp:
         rng = np.random.default_rng(123)
         N, rep_size, D, ncoords = 6, 8, 10, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         F = rng.normal(size=(N * ncoords,))
@@ -1437,7 +1437,7 @@ class TestRffGradientGramianSymmRfp:
         rng = np.random.default_rng(456)
         N, rep_size, D, ncoords = 10, 8, 12, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         F = rng.normal(size=(N * ncoords,))
@@ -1463,7 +1463,7 @@ class TestRffFullGramianSymmRfp:
         rng = np.random.default_rng(42)
         N, rep_size, D, ncoords = 8, 10, 12, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))
@@ -1481,7 +1481,7 @@ class TestRffFullGramianSymmRfp:
         rng = np.random.default_rng(123)
         N, rep_size, D, ncoords = 6, 8, 10, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))
@@ -1501,7 +1501,7 @@ class TestRffFullGramianSymmRfp:
         rng = np.random.default_rng(456)
         N, rep_size, D, ncoords = 10, 8, 12, 6
         X = rng.normal(size=(N, rep_size))
-        dX = rng.normal(size=(N, rep_size, ncoords))
+        dX = rng.normal(size=(N, ncoords, rep_size))
         W = rng.normal(size=(rep_size, D))
         b = rng.uniform(0, 2 * np.pi, size=(D,))
         Y = rng.normal(size=(N,))

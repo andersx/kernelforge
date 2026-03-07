@@ -47,9 +47,9 @@ void rff_features(
     // Z[:, d] = cos(Z[:, d] + b[d]) * sqrt(2/D)
     const double normalization = std::sqrt(2.0 / static_cast<double>(D));
 
-// Outer loop parallelized: when called standalone this uses all OMP threads;
-// when called from inside an OMP parallel region (e.g. gramian functions),
-// nested parallelism is disabled by default so it serializes — same as before.
+    // Outer loop parallelized: when called standalone this uses all OMP threads;
+    // when called from inside an OMP parallel region (e.g. gramian functions),
+    // nested parallelism is disabled by default so it serializes — same as before.
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < N; ++i) {
 #pragma omp simd
@@ -60,93 +60,83 @@ void rff_features(
 }
 
 void rff_gradient(
-    const double *X, const double *dX, const double *W, const double *b, std::size_t N,
-    std::size_t rep_size, std::size_t D, std::size_t ncoords, double *G
+    const double *X, const double *dX_T, const double *W, const double *b, std::size_t N,
+    std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t dX_T_stride, double *G
 ) {
-    if (!X || !dX || !W || !b || !G) throw std::invalid_argument("rff_gradient: null pointer");
+    if (!X || !dX_T || !W || !b || !G) throw std::invalid_argument("rff_gradient: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient: zero dimension");
 
     const double normalization = -std::sqrt(2.0 / static_cast<double>(D));
-    const std::size_t total_grads = N * ncoords;  // total columns of G
+    const std::size_t total_grads = N * ncoords;
 
-    // Parallelize over molecules. Each thread writes to its own non-overlapping
-    // column block of G (molecule i → columns [i*ncoords, (i+1)*ncoords)).
-    //
-    // Per-molecule computation:
-    //   G[:, i*nc:(i+1)*nc] = diag(sin(z_i) * norm) @ W^T @ dX[i]
-    // Split as:
-    //   1. DGEMM: G_chunk = W^T @ dX[i]   (beta=0, initializes the chunk)
-    //   2. Scale row d in-place by sin(z_i[d]) * norm
-    //
-    // This avoids constructing the intermediate dg (D×rep_size) matrix whose
-    // dg[d,r] = sin(z_i[d])*norm*W[r,d] loop reads W with stride-D (column-major
-    // access into a row-major array). BLAS DGEMM with CblasTrans handles the
-    // W transposition via optimised blocked algorithms.
-    //
-    // No initial memset needed: every element of G is initialised by the
-    // per-molecule DGEMM with beta=0.
-    //
-    // Serialise BLAS inside the OMP region to prevent thread oversubscription.
-    // MKL does this automatically; OpenBLAS requires an explicit API call.
-    const int blas_nt = kf_blas_get_num_threads();
-    kf_blas_set_num_threads(1);
-#pragma omp parallel
-    {
-        std::vector<double> z_i(D);
+    // --- Step 1: Compute Z (D, N): z values for all molecules ---
+    // Z[d, i] = b[d] + (W^T @ X^T)[d, i]
+    double *Z = aligned_alloc_64(D * N);
 
-#pragma omp for schedule(static)
+    // Initialize Z with broadcast b: Z[d, i] = b[d] for all i
+#pragma omp parallel for schedule(static)
+    for (std::size_t d = 0; d < D; ++d) {
         for (std::size_t i = 0; i < N; ++i) {
-            // z_i = b + W^T @ X[i]
-            std::memcpy(z_i.data(), b, D * sizeof(double));
-            cblas_dgemv(
-                CblasRowMajor,
-                CblasTrans,
-                static_cast<int>(rep_size),
-                static_cast<int>(D),
-                1.0,
-                W,
-                static_cast<int>(D),
-                X + i * rep_size,
-                1,
-                1.0,
-                z_i.data(),
-                1
-            );
-
-            // G[:, i*ncoords:(i+1)*ncoords] = W^T @ dX[i]
-            // W is (rep_size, D) row-major → W^T is (D, rep_size); lda = D.
-            // dX[i] is (rep_size, ncoords) row-major.
-            // Result (D, ncoords) written at column offset i*ncoords; ldc = total_grads.
-            cblas_dgemm(
-                CblasRowMajor,
-                CblasTrans,
-                CblasNoTrans,
-                static_cast<int>(D),
-                static_cast<int>(ncoords),
-                static_cast<int>(rep_size),
-                1.0,
-                W,  // A: (rep_size, D), lda = D
-                static_cast<int>(D),
-                dX + i * rep_size * ncoords,  // B: dX[i] (rep_size, ncoords)
-                static_cast<int>(ncoords),
-                0.0,              // beta = 0: initialise chunk
-                G + i * ncoords,  // C col offset i*ncoords in G
-                static_cast<int>(total_grads)
-            );
-
-            // Scale row d in-place by sin(z_i[d]) * normalization
-            for (std::size_t d = 0; d < D; ++d) {
-                const double factor = std::sin(z_i[d]) * normalization;
-                double *row = G + d * total_grads + i * ncoords;
-#pragma omp simd
-                for (std::size_t c = 0; c < ncoords; ++c) {
-                    row[c] *= factor;
-                }
-            }
+            Z[d * N + i] = b[d];
         }
-    }  // end omp parallel
-    kf_blas_set_num_threads(blas_nt);
+    }
+
+    // Z += W^T @ X^T
+    // W: (rep_size, D) row-major → W^T via CblasTrans
+    // X: (N, rep_size) row-major → X^T via CblasTrans
+    // Result: Z (D, N) row-major
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasTrans,                  // W^T
+        CblasTrans,                  // X^T
+        static_cast<int>(D),         // M = D
+        static_cast<int>(N),         // N = N
+        static_cast<int>(rep_size),  // K = rep_size
+        1.0,
+        W,
+        static_cast<int>(D),  // lda for W (rep_size, D)
+        X,
+        static_cast<int>(rep_size),  // ldb for X (N, rep_size)
+        1.0,                         // beta = 1.0 (add to b broadcast)
+        Z,
+        static_cast<int>(N)  // ldc for Z (D, N)
+    );
+
+    // --- Step 2: Compute G (total_grads, D) = dX_T^T @ W ---
+    // dX_T: (rep_size, total_grads) with stride dX_T_stride
+    // W:    (rep_size, D) row-major
+    // G:    (total_grads, D) row-major OUTPUT
+    cblas_dgemm(
+        CblasRowMajor,
+        CblasTrans,                     // dX_T^T
+        CblasNoTrans,                   // W
+        static_cast<int>(total_grads),  // M = total_grads
+        static_cast<int>(D),            // N = D
+        static_cast<int>(rep_size),     // K = rep_size
+        1.0,
+        dX_T,
+        static_cast<int>(dX_T_stride),  // lda: stride of dX_T
+        W,
+        static_cast<int>(D),  // ldb: W (rep_size, D)
+        0.0,                  // beta = 0: initialize G
+        G,
+        static_cast<int>(D)  // ldc: G (total_grads, D)
+    );
+
+    // --- Step 3: Scale G in-place: G[i*nc+c, d] *= sin(Z[d, i]) * norm ---
+    // Iterate over each gradient row sequentially for cache-friendly access
+#pragma omp parallel for schedule(static)
+    for (std::size_t g = 0; g < total_grads; ++g) {
+        const std::size_t i = g / ncoords;  // molecule index
+        double *row = G + g * D;            // G[g, :] — contiguous D elements
+#pragma omp simd
+        for (std::size_t d = 0; d < D; ++d) {
+            row[d] *= std::sin(Z[d * N + i]) * normalization;
+        }
+    }
+
+    aligned_free_64(Z);
 }
 
 void rff_gramian_symm(
@@ -209,7 +199,7 @@ void rff_gramian_symm(
         aligned_free_64(Z);
     }
 
-// Symmetrize: copy upper triangle to lower
+    // Symmetrize: copy upper triangle to lower
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
@@ -219,11 +209,12 @@ void rff_gramian_symm(
 }
 
 void rff_full_gramian_symm(
-    const double *X, const double *dX, const double *W, const double *b, const double *Y,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *Y,
     const double *F, std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords,
-    std::size_t energy_chunk, std::size_t force_chunk, double *ZtZ, double *ZtY
+    std::size_t energy_chunk, std::size_t force_chunk, std::size_t dX_T_stride, double *ZtZ,
+    double *ZtY
 ) {
-    if (!X || !dX || !W || !b || !Y || !F || !ZtZ || !ZtY)
+    if (!X || !dX_T || !W || !b || !Y || !F || !ZtZ || !ZtY)
         throw std::invalid_argument("rff_full_gramian_symm: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_full_gramian_symm: zero dimension");
@@ -290,44 +281,45 @@ void rff_full_gramian_symm(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        double *G = aligned_alloc_64(ngrads_chunk * D);
 
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,
             G
         );
 
-        // ZtZ += G @ G^T  (upper triangle, G is D×ngrads_chunk)
+        // ZtZ += G^T @ G  (upper triangle, G is ngrads_chunk×D)
         cblas_dsyrk(
             CblasRowMajor,
             CblasUpper,
-            CblasNoTrans,
+            CblasTrans,
             static_cast<int>(D),
             static_cast<int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             ZtZ,
             static_cast<int>(D)
         );
 
-        // ZtY += G @ F_chunk
+        // ZtY += G^T @ F_chunk
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
+            CblasTrans,
             static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             F + cs * ncoords,
             1,
             1.0,
@@ -338,7 +330,7 @@ void rff_full_gramian_symm(
         aligned_free_64(G);
     }
 
-// Symmetrize: copy upper triangle to lower
+    // Symmetrize: copy upper triangle to lower
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
@@ -348,47 +340,45 @@ void rff_full_gramian_symm(
 }
 
 void rff_full(
-    const double *X, const double *dX, const double *W, const double *b, std::size_t N,
-    std::size_t rep_size, std::size_t D, std::size_t ncoords, double *Z_full
+    const double *X, const double *dX_T, const double *W, const double *b, std::size_t N,
+    std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t dX_T_stride,
+    double *Z_full
 ) {
-    if (!X || !dX || !W || !b || !Z_full) throw std::invalid_argument("rff_full: null pointer");
+    if (!X || !dX_T || !W || !b || !Z_full) throw std::invalid_argument("rff_full: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_full: zero dimension");
 
-    const std::size_t total_grads = N * ncoords;
-
-    // Top half: energy features Z[0:N, :]
+    // Top half: energy features Z[0:N, :] — (N, D) row-major
     rff_features(X, W, b, N, rep_size, D, Z_full);
 
-    // Bottom half: G^T where G is (D, total_grads)
-    double *G = aligned_alloc_64(D * total_grads);
-    rff_gradient(X, dX, W, b, N, rep_size, D, ncoords, G);
-
-// Transpose G (D, total_grads) -> Z_full[N:] (total_grads, D)
-// Z_full[(N + g) * D + d] = G[d * total_grads + g]
-#pragma omp parallel for schedule(static)
-    for (std::size_t g = 0; g < total_grads; ++g) {
-        double *row = Z_full + (N + g) * D;
-        for (std::size_t d = 0; d < D; ++d) {
-            row[d] = G[d * total_grads + g];
-        }
-    }
-
-    aligned_free_64(G);
+    // Bottom half: gradient features — write directly into Z_full[N:, :]
+    // rff_gradient outputs (total_grads, D) row-major — exactly what we need.
+    rff_gradient(
+        X,
+        dX_T,
+        W,
+        b,
+        N,
+        rep_size,
+        D,
+        ncoords,
+        dX_T_stride,
+        Z_full + N * D  // write directly at Z_full[N:, :], no transpose needed
+    );
 }
 
 void rff_gradient_gramian_symm(
-    const double *X, const double *dX, const double *W, const double *b, const double *F,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *F,
     std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t chunk_size,
-    double *GtG, double *GtF
+    std::size_t dX_T_stride, double *GtG, double *GtF
 ) {
-    if (!X || !dX || !W || !b || !F || !GtG || !GtF)
+    if (!X || !dX_T || !W || !b || !F || !GtG || !GtF)
         throw std::invalid_argument("rff_gradient_gramian_symm: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient_gramian_symm: zero dimension");
     if (chunk_size == 0) throw std::invalid_argument("rff_gradient_gramian_symm: zero chunk_size");
 
-    // rff_gradient uses OMP internally; keep outer loop sequential.
+    // rff_gradient now uses full BLAS threading; keep outer loop sequential.
     // Accumulate directly into GtG/GtF; clear_or_sum avoids memset.
     std::size_t chunk_idx = 0;
     for (std::size_t cs = 0; cs < N; cs += chunk_size, ++chunk_idx) {
@@ -396,47 +386,49 @@ void rff_gradient_gramian_symm(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        // G is (ngrads_chunk, D) row-major
+        double *G = aligned_alloc_64(ngrads_chunk * D);
 
         // zero accum on first chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,  // column offset into transposed dX
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,  // stride of full dX_T array
             G
         );
 
-        // GtG += G @ G^T (upper triangle, G is D×ngrads_chunk)
+        // GtG += G^T @ G (upper triangle, G is ngrads_chunk × D)
         cblas_dsyrk(
             CblasRowMajor,
             CblasUpper,
-            CblasNoTrans,
+            CblasTrans,
             static_cast<int>(D),
             static_cast<int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),  // lda = D (row stride of G)
             clear_or_sum,
             GtG,
             static_cast<int>(D)
         );
 
-        // GtF += G @ F_chunk
+        // GtF += G^T @ F_chunk
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
+            CblasTrans,
             static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             F + cs * ncoords,
             1,
             clear_or_sum,
@@ -447,7 +439,7 @@ void rff_gradient_gramian_symm(
         aligned_free_64(G);
     }
 
-// Symmetrize: copy upper triangle to lower
+    // Symmetrize: copy upper triangle to lower
 #pragma omp parallel for schedule(static)
     for (std::size_t i = 0; i < D; ++i) {
         for (std::size_t j = i + 1; j < D; ++j) {
@@ -466,10 +458,9 @@ void rff_gramian_symm_rfp(
         throw std::invalid_argument("rff_gramian_symm_rfp: zero dimension");
     if (chunk_size == 0) throw std::invalid_argument("rff_gramian_symm_rfp: zero chunk_size");
 
-    const std::size_t nt = D * (D + 1) / 2;
     const std::size_t nchunks = (N + chunk_size - 1) / chunk_size;
 
-    // // Accumulate directly into RFP using DSFRK
+    // Accumulate directly into RFP using DSFRK
     for (std::size_t ci = 0; ci < nchunks; ++ci) {
         const std::size_t cs = ci * chunk_size;
         const std::size_t ce = std::min(cs + chunk_size, N);
@@ -517,11 +508,11 @@ void rff_gramian_symm_rfp(
 }
 
 void rff_gradient_gramian_symm_rfp(
-    const double *X, const double *dX, const double *W, const double *b, const double *F,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *F,
     std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords, std::size_t chunk_size,
-    double *GtG_rfp, double *GtF
+    std::size_t dX_T_stride, double *GtG_rfp, double *GtF
 ) {
-    if (!X || !dX || !W || !b || !F || !GtG_rfp || !GtF)
+    if (!X || !dX_T || !W || !b || !F || !GtG_rfp || !GtF)
         throw std::invalid_argument("rff_gradient_gramian_symm_rfp: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_gradient_gramian_symm_rfp: zero dimension");
@@ -536,48 +527,49 @@ void rff_gradient_gramian_symm_rfp(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        double *G = aligned_alloc_64(ngrads_chunk * D);
 
         // zero accum on first chunk, then sum
         double clear_or_sum = (chunk_idx == 0) ? 0.0 : 1.0;
 
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,
             G
         );
 
-        // GtG_rfp += G @ G^T
-        // G is (D, ngrads_chunk) row-major ≡ (ngrads_chunk, D) col-major with LDA=ngrads_chunk.
-        // DSFRK TRANS='T': C += A^T*A where A is (ngrads_chunk, D) → D×D ✓
+        // GtG_rfp += G^T @ G
+        // G is (ngrads_chunk, D) row-major ≡ (D, ngrads_chunk) col-major with LDA=D.
+        // DSFRK TRANS='N': C += A^T*A where A is (D, ngrads_chunk) col-major → D×D ✓
         kf_dsfrk(
             'N',
             'U',
-            'T',
+            'N',
             static_cast<blas_int>(D),
             static_cast<blas_int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<blas_int>(ngrads_chunk),
+            static_cast<blas_int>(D),
             clear_or_sum,
             GtG_rfp
         );
 
-        // GtF += G @ F_chunk
+        // GtF += G^T @ F_chunk
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
+            CblasTrans,
             static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             F + cs * ncoords,
             1,
             clear_or_sum,
@@ -590,11 +582,12 @@ void rff_gradient_gramian_symm_rfp(
 }
 
 void rff_full_gramian_symm_rfp(
-    const double *X, const double *dX, const double *W, const double *b, const double *Y,
+    const double *X, const double *dX_T, const double *W, const double *b, const double *Y,
     const double *F, std::size_t N, std::size_t rep_size, std::size_t D, std::size_t ncoords,
-    std::size_t energy_chunk, std::size_t force_chunk, double *ZtZ_rfp, double *ZtY
+    std::size_t energy_chunk, std::size_t force_chunk, std::size_t dX_T_stride, double *ZtZ_rfp,
+    double *ZtY
 ) {
-    if (!X || !dX || !W || !b || !Y || !F || !ZtZ_rfp || !ZtY)
+    if (!X || !dX_T || !W || !b || !Y || !F || !ZtZ_rfp || !ZtY)
         throw std::invalid_argument("rff_full_gramian_symm_rfp: null pointer");
     if (N == 0 || rep_size == 0 || D == 0 || ncoords == 0)
         throw std::invalid_argument("rff_full_gramian_symm_rfp: zero dimension");
@@ -659,42 +652,44 @@ void rff_full_gramian_symm_rfp(
         const std::size_t nc = ce - cs;
         const std::size_t ngrads_chunk = nc * ncoords;
 
-        double *G = aligned_alloc_64(D * ngrads_chunk);
+        double *G = aligned_alloc_64(ngrads_chunk * D);
+
         rff_gradient(
             X + cs * rep_size,
-            dX + cs * rep_size * ncoords,
+            dX_T + cs * ncoords,
             W,
             b,
             nc,
             rep_size,
             D,
             ncoords,
+            dX_T_stride,
             G
         );
 
-        // ZtZ_rfp += G @ G^T
+        // ZtZ_rfp += G^T @ G
         kf_dsfrk(
             'N',
             'U',
-            'T',
+            'N',
             static_cast<blas_int>(D),
             static_cast<blas_int>(ngrads_chunk),
             1.0,
             G,
-            static_cast<blas_int>(ngrads_chunk),
+            static_cast<blas_int>(D),
             1.0,
             ZtZ_rfp
         );
 
-        // ZtY += G @ F_chunk
+        // ZtY += G^T @ F_chunk
         cblas_dgemv(
             CblasRowMajor,
-            CblasNoTrans,
-            static_cast<int>(D),
+            CblasTrans,
             static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             1.0,
             G,
-            static_cast<int>(ngrads_chunk),
+            static_cast<int>(D),
             F + cs * ncoords,
             1,
             1.0,
