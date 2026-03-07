@@ -831,7 +831,7 @@ void kernel_gaussian_jacobian(
     std::fill(kernel_out, kernel_out + (size_t)nm1 * naq2, 0.0);
 
     const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
-    const double inv_sigma2 = -1.0 / (sigma * sigma);
+    const double inv_sigma2 = 1.0 / (sigma * sigma);  // positive: output is +dK/dR2
 
     // ------------------------------------------------------------
     // Build per-label list of (a, j1) only for valid j1 < n1[a]
@@ -977,13 +977,13 @@ void kernel_gaussian_jacobian(
 // kernel_gaussian_jacobian_t: Jacobians on set-1 side (dX1).
 // Output shape: (naq1, nm2), where naq1 = 3 * sum(n1).
 //
-// Mathematical relationship (sign flips because diff d = x1-x2 -> x2-x1 when roles swap):
+// Mathematical relationship:
 //   kernel_gaussian_jacobian_t(x1, x2, dX1, ...) ==
-//       -kernel_gaussian_jacobian(x2, x1, dX1, ...).T
+//       kernel_gaussian_jacobian(x2, x1, dX1, ...).T
 //
 // For each matching-label pair (a,j1) from set-1 and (b,j2) from set-2:
 //   d = x1[a,j1] - x2[b,j2]
-//   alpha = exp(-|d|^2 / 2sigma^2) * (-1/sigma^2)
+//   alpha = exp(-|d|^2 / 2sigma^2) * (+1/sigma^2)
 //   K_t[naq1_off_a + r, b] += alpha * A1[r, :] @ d   for r in [0, 3*n1[a])
 // where A1 = dX1[a, j1, :, :] shape (rep_size, 3*max_atoms1) row-major.
 void kernel_gaussian_jacobian_t(
@@ -1032,7 +1032,7 @@ void kernel_gaussian_jacobian_t(
     std::fill(kernel_out, kernel_out + (size_t)naq1 * nm2, 0.0);
 
     const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
-    const double inv_sigma2 = -1.0 / (sigma * sigma);
+    const double inv_sigma2 = 1.0 / (sigma * sigma);  // positive: output is +dK/dR1
 
     // Build per-label list of (b, j2) only for valid j2 < n2[b]
     std::unordered_map<int, std::vector<std::pair<int, int>>> lj2;
@@ -2069,11 +2069,13 @@ void kernel_gaussian_full(
                         static_cast<blas_int>(full_cols)
                     );
 
-// Accumulate D_ew for jact: D_ew += -expdiag * D_row
-// (sign: jact coeff is -expdiag * SD2^T @ D_row, factor out SD2^T)
+// Accumulate D_ew for jact: D_ew += expdiag * D_row
+// jact = dK/dR2: coefficient is +expdiag = +(1/sigma^2)*exp, opposite sign to
+// jac = dK/dR1 which uses -expdiag.  This ensures K_full[0:nm, nm:] == K_full[nm:, 0:nm].T
+// when called with identical row/column sets (i.e. the full matrix is symmetric).
 #pragma omp simd
                     for (int k = 0; k < rep_size; ++k)
-                        D_ew[k] -= expdiag * D_row[k];
+                        D_ew[k] += expdiag * D_row[k];
 
                     // S_sum += expdiag * SD1  (for hessian static term)
                     for (int k = 0; k < rep_size; ++k) {
@@ -2462,12 +2464,18 @@ void kernel_gaussian_full_symm(
 
             // Scatter hessian
             if (a == b) {
+                // Write lower triangle, then mirror to upper triangle
                 for (int c = 0; c < ncols_a; ++c) {
                     const double *dcol = Hdiag.data() + (size_t)c * ncols_b;
-                    for (int r = c; r < ncols_b; ++r)
+                    for (int r = c; r < ncols_b; ++r) {
                         kernel_out[(size_t)(nm + row_off + r) * BIG + (nm + col_off + c)] +=
                             dcol[r];
+                    }
                 }
+                for (int c = 0; c < ncols_a; ++c)
+                    for (int r = 0; r < c; ++r)
+                        kernel_out[(size_t)(nm + row_off + r) * BIG + (nm + col_off + c)] =
+                            kernel_out[(size_t)(nm + row_off + c) * BIG + (nm + col_off + r)];
             } else {
                 for (int c = 0; c < ncols_a; ++c)
                     for (int r = 0; r < ncols_b; ++r) {

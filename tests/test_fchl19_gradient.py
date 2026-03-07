@@ -40,7 +40,7 @@ def slow_ref_grad(
     K = np.zeros((nm1, naq2), dtype=np.float64)
 
     inv_2sigma2 = -1.0 / (2.0 * sigma * sigma)
-    inv_sigma2 = -1.0 / (sigma * sigma)
+    inv_sigma2 = 1.0 / (sigma * sigma)  # positive: output is +dK/dR2
 
     for a in range(nm1):
         na = int(n1[a])
@@ -207,7 +207,7 @@ def slow_ref_grad_t(
     K = np.zeros((naq1, nm2), dtype=np.float64)
 
     inv_2sigma2 = -1.0 / (2.0 * sigma * sigma)
-    inv_sigma2 = -1.0 / (sigma * sigma)
+    inv_sigma2 = 1.0 / (sigma * sigma)  # positive: output is +dK/dR1
 
     for a in range(nm1):
         na = int(n1[a])
@@ -285,7 +285,8 @@ def test_jacobian_t_transpose_property() -> None:
     K_t = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
 
     # kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1) -> (nm2, naq1)
-    # Swapping x1/x2 flips the diff d -> -d, so result is negated.
+    # Swapping x1/x2 flips d = x1-x2 -> x2-x1, negating the output regardless of the
+    # output sign convention.  So K_t(x1,x2,dX1) == -K_jac(x2,x1,dX1).T always holds.
     K_jac = fchl.kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1, sigma)
 
     np.testing.assert_allclose(K_t, -K_jac.T, rtol=1e-10, atol=1e-10)
