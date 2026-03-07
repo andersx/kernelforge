@@ -218,6 +218,18 @@ kf_add_cpp_module(kitchen_sinks
   SOURCES  src/rff_features.cpp src/rff_elemental.cpp
   BINDINGS src/rff_features_bindings.cpp src/rff_elemental_bindings.cpp)
 
+kf_add_cpp_module(fchl18_repr
+  SOURCES  src/fchl18_repr.cpp
+  BINDINGS src/fchl18_repr_bindings.cpp)
+
+kf_add_cpp_module(fchl18_kernel
+  SOURCES  src/fchl18_kernel.cpp src/fchl18_repr.cpp
+           src/fchl18_scalar_kernels.cpp
+           src/fchl18_jacobian_kernels.cpp
+           src/fchl18_hessian_kernels.cpp
+           src/fchl18_full_kernels.cpp
+  BINDINGS src/fchl18_kernel_bindings.cpp)
+
 # ---- Install ----------------------------------------------------------------
 install(TARGETS ${_KF_ALL_MODULES}
   LIBRARY DESTINATION kernelforge   # Linux/macOS
