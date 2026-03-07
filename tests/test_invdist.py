@@ -23,19 +23,19 @@ def test_shapes_and_ordering_and_sparsity() -> None:
     M = invdist.num_pairs(N)
     assert x_only.shape == (M,)
     assert x.shape == (M,)
-    assert J.shape == (M, 3 * N)
+    assert J.shape == (3 * N, M)
     assert np.allclose(x_only, x)
 
-    # Ordering: rows correspond to strict upper-triangle
+    # Ordering: columns correspond to strict upper-triangle pairs
     pairs = _strict_upper_pairs(N)
     for p, (i, j) in enumerate(pairs):
         # nonzero atoms should be exactly i and j
-        row = J[p].reshape(N, 3)
-        nz_atoms = np.where(np.any(np.abs(row) > 0, axis=1))[0]
+        col = J[:, p].reshape(N, 3)
+        nz_atoms = np.where(np.any(np.abs(col) > 0, axis=1))[0]
         assert set(nz_atoms.tolist()) == {i, j}
 
         # Conservation (translation invariance): sum of per-atom grads is ~0
-        assert np.allclose(row.sum(axis=0), 0.0, atol=1e-12)
+        assert np.allclose(col.sum(axis=0), 0.0, atol=1e-12)
 
 
 @pytest.mark.parametrize("N", [4, 5])
@@ -49,14 +49,14 @@ def test_jacobian_central_difference(N: int) -> None:
 
     M = invdist.num_pairs(N)
     assert x.shape == (M,)
-    assert J.shape == (M, 3 * N)
+    assert J.shape == (3 * N, M)
 
     # Central finite-difference check
     h = 1e-6
     atol = 5e-6
     rtol = 2e-4
 
-    # Flatten coord index mapping: col c -> atom k = c//3, axis a = c%3
+    # Flatten coord index mapping: row c -> atom k = c//3, axis a = c%3
     for c in range(3 * N):
         k, a = divmod(c, 3)
         R_plus = R.copy()
@@ -66,12 +66,12 @@ def test_jacobian_central_difference(N: int) -> None:
 
         x_plus = invdist.inverse_distance_upper(R_plus)
         x_minus = invdist.inverse_distance_upper(R_minus)
-        # numerical derivative column c
-        num_col = (x_plus - x_minus) / (2.0 * h)
-        ana_col = J[:, c]
+        # numerical derivative row c
+        num_row = (x_plus - x_minus) / (2.0 * h)
+        ana_row = J[c, :]
 
         # Compare robustly across all M features
-        np.testing.assert_allclose(ana_col, num_col, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(ana_row, num_row, rtol=rtol, atol=atol)
 
 
 def test_eps_stability_no_nan_inf() -> None:

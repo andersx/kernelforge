@@ -21,7 +21,7 @@ def test_shapes_and_basic_values() -> None:
     M = N * (N - 1) // 2  # typical inverse-distance feature length
 
     X1 = rng.normal(size=(N1, M))
-    dX1 = rng.normal(size=(N1, M, D))
+    dX1 = rng.normal(size=(N1, D, M))
     X2 = rng.normal(size=(N2, M))
     sigma = 0.7
 
@@ -42,7 +42,7 @@ def test_formula_matches_numpy_reference() -> None:
     M = 3  # any M works; choose small for clarity
 
     X1 = rng.normal(size=(N1, M))
-    dX1 = rng.normal(size=(N1, M, D))
+    dX1 = rng.normal(size=(N1, D, M))
     X2 = rng.normal(size=(N2, M))
     sigma = 0.5
     inv_s2 = 1.0 / (sigma * sigma)
@@ -56,13 +56,13 @@ def test_formula_matches_numpy_reference() -> None:
     K_ref = np.zeros_like(K)
     for a in range(N1):
         x1 = X1[a]
-        J = dX1[a]  # (M, D)
+        J = dX1[a]  # (D, M)
         for b in range(N2):
             diff = X2[b] - x1
             sq = float(diff @ diff)
             k_ab = np.exp(-0.5 * inv_s2 * sq)
             w_ab = (k_ab * inv_s2) * diff
-            K_ref[a * D : (a + 1) * D, b] = J.T @ w_ab
+            K_ref[a * D : (a + 1) * D, b] = J @ w_ab
 
     np.testing.assert_allclose(K, K_ref, rtol=1e-12, atol=1e-12)
 
@@ -78,7 +78,7 @@ def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N:
     rng = np.random.default_rng(2)
     D = 3 * N
     X1 = rng.normal(size=(N1, M))
-    dX1 = rng.normal(size=(N1, M, D))
+    dX1 = rng.normal(size=(N1, D, M))
     X2 = rng.normal(size=(N2, M))
     sigma = 0.8
     inv_s2 = 1.0 / (sigma * sigma)
@@ -94,7 +94,7 @@ def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N:
 
     for a, b in pairs_to_test:
         x1 = X1[a].copy()
-        J = dX1[a]  # (M, D)
+        J = dX1[a]  # (D, M)
         x2 = X2[b]
 
         # Define k_ab(r) with linearized feature model around r=0
@@ -105,7 +105,7 @@ def test_finite_difference_linearized_feature_model(N1: int, N2: int, M: int, N:
             J: NDArray[np.float64] = J,
             x2: NDArray[np.float64] = x2,
         ) -> np.floating[Any]:
-            x1_r = x1 + J @ r_vec  # (M,)
+            x1_r = x1 + J.T @ r_vec  # (M,)
             diff = x1_r - x2
             result: np.floating[Any] = np.exp(-0.5 * inv_s2 * float(diff @ diff))
             return result
@@ -133,7 +133,7 @@ def test_bad_sigma_raises() -> None:
 
     N1, N2, M, D = 1, 1, 4, 6
     X1 = rng.normal(size=(N1, M))
-    dX1 = rng.normal(size=(N1, M, D))
+    dX1 = rng.normal(size=(N1, D, M))
     X2 = rng.normal(size=(N2, M))
 
     with pytest.raises(Exception, match=r".*"):
@@ -148,7 +148,7 @@ def test_input_shape_mismatch_errors() -> None:
 
     N1, N2, M, D = 2, 2, 5, 9
     X1 = rng.normal(size=(N1, M))
-    dX1 = rng.normal(size=(N1, M, D))
+    dX1 = rng.normal(size=(N1, D, M))
     X2_ok = rng.normal(size=(N2, M))
     X2_bad = rng.normal(size=(N2, M + 1))
 
@@ -158,7 +158,7 @@ def test_input_shape_mismatch_errors() -> None:
 
     # dX1 M dimension must match X1 M
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.kernel_gaussian_jacobian(X1, dX1[:, :-1, :], X2_ok, 0.9)
+        _ = _kernels.kernel_gaussian_jacobian(X1, dX1[:, :, :-1], X2_ok, 0.9)
 
     # dX1 N1 dimension must match X1 N1
     with pytest.raises(Exception, match=r".*"):
@@ -181,7 +181,7 @@ def test_jacobian_t_shapes() -> None:
 
     X1 = rng.normal(size=(N1, M))
     X2 = rng.normal(size=(N2, M))
-    dX2 = rng.normal(size=(N2, M, D))
+    dX2 = rng.normal(size=(N2, D, M))
     sigma = 0.7
 
     K_t = _kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
@@ -202,9 +202,9 @@ def test_jacobian_t_equals_jacobian_transposed() -> None:
     M = 5
 
     X1 = rng.normal(size=(N1, M))
-    dX1 = rng.normal(size=(N1, M, D))
+    dX1 = rng.normal(size=(N1, D, M))
     X2 = rng.normal(size=(N2, M))
-    dX2 = rng.normal(size=(N2, M, D))
+    dX2 = rng.normal(size=(N2, D, M))
     sigma = 0.8
 
     # Compute K: (N1*D, N2) with Jacobians on X1 side
@@ -230,25 +230,25 @@ def test_jacobian_t_formula_matches_numpy_reference() -> None:
 
     X1 = rng.normal(size=(N1, M))
     X2 = rng.normal(size=(N2, M))
-    dX2 = rng.normal(size=(N2, M, D))
+    dX2 = rng.normal(size=(N2, D, M))
     sigma = 0.6
     inv_s2 = 1.0 / (sigma * sigma)
 
     K_t = _kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
 
-    # NumPy reference: K_t[a, b*D:(b+1)*D] = w_ab @ J2[b]
+    # NumPy reference: K_t[a, b*D:(b+1)*D] = w_ab @ J2[b].T
     # where w_ab = (k_ab / σ²) * (x1[a] - x2[b])
     K_ref = np.zeros_like(K_t)
     for a in range(N1):
         x1 = X1[a]
         for b in range(N2):
             x2 = X2[b]
-            J2 = dX2[b]  # (M, D)
+            J2 = dX2[b]  # (D, M)
             diff = x1 - x2
             sq = float(diff @ diff)
             k_ab = np.exp(-0.5 * inv_s2 * sq)
             w_ab = (k_ab * inv_s2) * diff
-            K_ref[a, b * D : (b + 1) * D] = w_ab @ J2
+            K_ref[a, b * D : (b + 1) * D] = w_ab @ J2.T
 
     np.testing.assert_allclose(K_t, K_ref, rtol=1e-12, atol=1e-12)
 
@@ -262,7 +262,7 @@ def test_jacobian_t_symmetry_when_same_data() -> None:
     M = 5
 
     X = rng.normal(size=(N, M))
-    dX = rng.normal(size=(N, M, D))
+    dX = rng.normal(size=(N, D, M))
     sigma = 0.9
 
     # K: (N*D, N) with Jacobians on query side
@@ -282,7 +282,7 @@ def test_jacobian_t_bad_sigma() -> None:
     N1, N2, M, D = 2, 2, 4, 6
     X1 = rng.normal(size=(N1, M))
     X2 = rng.normal(size=(N2, M))
-    dX2 = rng.normal(size=(N2, M, D))
+    dX2 = rng.normal(size=(N2, D, M))
 
     with pytest.raises(Exception, match=r".*"):
         _ = _kernels.kernel_gaussian_jacobian_t(X1, X2, dX2, 0.0)
@@ -299,7 +299,7 @@ def test_jacobian_t_shape_mismatch_errors() -> None:
     X1 = rng.normal(size=(N1, M))
     X2_ok = rng.normal(size=(N2, M))
     X2_bad = rng.normal(size=(N2, M + 1))
-    dX2 = rng.normal(size=(N2, M, D))
+    dX2 = rng.normal(size=(N2, D, M))
 
     # X2 second dim must equal M
     with pytest.raises(Exception, match=r".*"):
@@ -307,7 +307,7 @@ def test_jacobian_t_shape_mismatch_errors() -> None:
 
     # dX2 M dimension must match X2 M
     with pytest.raises(Exception, match=r".*"):
-        _ = _kernels.kernel_gaussian_jacobian_t(X1, X2_ok, dX2[:, :-1, :], 0.9)
+        _ = _kernels.kernel_gaussian_jacobian_t(X1, X2_ok, dX2[:, :, :-1], 0.9)
 
     # dX2 N2 dimension must match X2 N2
     with pytest.raises(Exception, match=r".*"):
