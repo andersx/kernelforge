@@ -17,7 +17,7 @@ Kernel usage
                      shape (N_test, N_train*naq)
 
 The jacobian kernel K_j[i, j*naq+d] = dK(x_test_i, x_train_j)/d(coord_d_j),
-so K_j @ alpha (with alpha the force coefficients) gives energy predictions.
+so -(K_j @ alpha) (with alpha the force coefficients) gives energy predictions.
 
 Dataset: ethanol MD17, FCHL19 representation.
 """
@@ -27,6 +27,14 @@ import time
 import numpy as np
 
 from kernelforge import kernelmath
+
+
+def linfit(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """Return (slope, intercept) from least-squares fit of y_pred vs y_true."""
+    slope, intercept = np.polyfit(y_true.ravel(), y_pred.ravel(), 1)
+    return float(slope), float(intercept)
+
+
 from kernelforge.cli import load_ethanol_raw_data
 from kernelforge.fchl19_repr import generate_fchl_acsf_and_gradients
 from kernelforge.local_kernels import (
@@ -146,8 +154,13 @@ def main():
     #    We solved (K + l2*I) @ alpha = y, so K @ alpha = y - l2*alpha exactly.
     # ------------------------------------------------------------------
     F_tr_pred_flat = F_tr_flat - L2 * alpha  # K @ alpha = y - l2*alpha
-    train_mae = np.mean(np.abs(F_tr_pred_flat.reshape(N_TRAIN, naq) - F_tr))
-    print(f"\n[4] Training MAE (force): {train_mae:.6f} kcal/(mol·Å)")
+    F_tr_pred = F_tr_pred_flat.reshape(N_TRAIN, naq)
+    train_mae = np.mean(np.abs(F_tr_pred - F_tr))
+    slope_F_tr, intercept_F_tr = linfit(F_tr, F_tr_pred)
+    print(
+        f"\n[4] Training MAE (force): {train_mae:.6f} kcal/(mol·Å)"
+        f"  slope={slope_F_tr:.4f}  intercept={intercept_F_tr:.4f}"
+    )
 
     # ------------------------------------------------------------------
     # 5. Test prediction — forces via Hessian kernel
@@ -170,7 +183,9 @@ def main():
     K_te_jt = kernel_gaussian_jacobian(  # (N_test, N_train*naq)
         X_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
-    E_te_pred = K_te_jt @ alpha  # (N_test,)
+    E_te_pred = -(
+        K_te_jt @ alpha
+    )  # (N_test,)  — negate: kernel returns +dK/dR, energy needs -dK/dR
     print(f"    Energy prediction kernel built in {time.perf_counter() - t0:.4f}s")
 
     # ------------------------------------------------------------------
@@ -180,10 +195,18 @@ def main():
     E_te_c = E_te - E_te.mean()
     test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te))
+    slope_E_te, intercept_E_te = linfit(E_te_c, E_te_pred_c)
+    slope_F_te, intercept_F_te = linfit(F_te, F_te_pred)
 
     print(f"\n[7] Test results")
-    print(f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol")
-    print(f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)")
+    print(
+        f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol"
+        f"  slope={slope_E_te:.4f}  intercept={intercept_E_te:.4f}"
+    )
+    print(
+        f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)"
+        f"  slope={slope_F_te:.4f}  intercept={intercept_F_te:.4f}"
+    )
     print(f"    (Energies are predicted via the Jacobian-transpose kernel.)")
 
     print("\n" + "=" * 65 + "\nDone.\n" + "=" * 65)

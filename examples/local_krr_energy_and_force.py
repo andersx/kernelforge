@@ -1,8 +1,8 @@
 """
-Local KRR with combined energy + force training — predict both energies and forces.
+Local KRR with combined energy + force training -- predict both energies and forces.
 
 Trains simultaneously on energies and forces using the full combined local kernel,
-which fuses the scalar, Jacobian, and Hessian blocks into a single BIG×BIG system
+which fuses the scalar, Jacobian, and Hessian blocks into a single BIG x BIG system
 (BIG = N*(1 + naq), where naq = n_atoms*3):
 
   K_full[0:N,   0:N  ] = scalar   (energy-energy)
@@ -12,9 +12,10 @@ which fuses the scalar, Jacobian, and Hessian blocks into a single BIG×BIG syst
 
 Kernel usage
 ------------
-  Training kernel :  kernel_gaussian_full_symm_rfp  — full combined, symmetric, RFP
+  Training kernel :  kernel_gaussian_full  -- full combined, dense square matrix
+                     (symmetric: K_tr[i,j] == K_tr[j,i])
   Training error  :  derived from normal equations  (no extra allocation)
-  Predict E + F   :  kernel_gaussian_full            — full combined, asymmetric
+  Predict E + F   :  kernel_gaussian_full  -- full combined, asymmetric
                      shape (N_test*(1+naq), N_train*(1+naq))
 
 The prediction kernel applied to alpha gives:
@@ -31,10 +32,7 @@ import numpy as np
 from kernelforge import kernelmath
 from kernelforge.cli import load_ethanol_raw_data
 from kernelforge.fchl19_repr import generate_fchl_acsf_and_gradients
-from kernelforge.local_kernels import (
-    kernel_gaussian_full,
-    kernel_gaussian_full_symm_rfp,
-)
+from kernelforge.local_kernels import kernel_gaussian_full
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -42,11 +40,7 @@ from kernelforge.local_kernels import (
 N_TRAIN = 500
 N_TEST = 200
 SIGMA = 2.0
-# NOTE: The combined E+F system (BIG = N*(1+naq) rows) is dominated by the
-# force block (naq=27 times more rows than the energy block).  Without
-# per-block weighting the energy predictions are unreliable; only force
-# predictions are physically meaningful in this unweighted demo.
-L2 = 1e-4  # larger regularisation needed for the numerically large full system
+L2 = 1e-8
 ELEMENTS = [1, 6, 8]  # H, C, O
 
 
@@ -56,13 +50,13 @@ ELEMENTS = [1, 6, 8]  # H, C, O
 def load_data(n_train: int, n_test: int):
     """Return FCHL19 representations and combined labels for n_train + n_test structures."""
     data = load_ethanol_raw_data()
-    z = data["z"].astype(np.int32)  # (9,) atomic numbers — same for all ethanol structures
+    z = data["z"].astype(np.int32)  # (9,) atomic numbers -- same for all ethanol structures
     n_atoms = len(z)
     n_total = n_train + n_test
 
     R = data["R"][:n_total]  # (n_total, 9, 3)
     E = data["E"][:n_total].ravel()  # (n_total,)
-    F = data["F"][:n_total].reshape(n_total, -1)  # (n_total, naq=27)
+    F = -data["F"][:n_total].reshape(n_total, -1)  # (n_total, naq=27)
 
     X_list, dX_list = [], []
     for r in R:
@@ -99,12 +93,20 @@ def load_data(n_train: int, n_test: int):
     )
 
 
+def linfit(y_true: np.ndarray, y_pred: np.ndarray):
+    """Return (slope, intercept) from least-squares fit of y_pred vs y_true."""
+    x = y_true.ravel()
+    y = y_pred.ravel()
+    slope, intercept = np.polyfit(x, y, 1)
+    return float(slope), float(intercept)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
     print("=" * 65)
-    print("Local KRR: energy + force training  →  predict energies + forces")
+    print("Local KRR: energy + force training  ->  predict energies + forces")
     print("=" * 65)
     print(f"  N_train={N_TRAIN}  N_test={N_TEST}  sigma={SIGMA}  l2={L2}")
 
@@ -137,37 +139,46 @@ def main():
     print(f"    BIG_train={BIG_tr}  BIG_test={BIG_te}")
 
     # ------------------------------------------------------------------
-    # 2. Build training kernel  —  full combined, symmetric, RFP packed
+    # 2. Build training kernel  --  full combined, dense square matrix
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_rfp = kernel_gaussian_full_symm_rfp(X_tr, dX_tr, Q_tr, N_tr, SIGMA)
-    print(f"\n[2] Training kernel (full, RFP) built in {time.perf_counter() - t0:.3f}s")
-    print(f"    K_rfp length={len(K_rfp)}  ({len(K_rfp) * 8 / 1024**2:.1f} MB)")
-    assert len(K_rfp) == BIG_tr * (BIG_tr + 1) // 2
+    K_tr = kernel_gaussian_full(X_tr, X_tr, dX_tr, dX_tr, Q_tr, Q_tr, N_tr, N_tr, SIGMA)
+    print(f"\n[2] Training kernel (full dense) built in {time.perf_counter() - t0:.3f}s")
+    print(f"    K_tr shape={K_tr.shape}  ({K_tr.nbytes / 1024**2:.1f} MB)")
+    assert K_tr.shape == (BIG_tr, BIG_tr)
+    assert np.allclose(K_tr, K_tr.T, atol=1e-10), "Training kernel must be symmetric!"
 
     # ------------------------------------------------------------------
     # 3. Solve  alpha = (K + l2*I)^{-1} y_train
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    alpha = kernelmath.cho_solve_rfp(K_rfp, y_tr, l2=L2)
-    del K_rfp
+    alpha = kernelmath.solve_cholesky(K_tr, y_tr, regularize=L2)
+    del K_tr
     print(f"\n[3] Cholesky solve in {time.perf_counter() - t0:.3f}s")
     print(f"    alpha: shape={alpha.shape}  ||alpha||={np.linalg.norm(alpha):.4f}")
 
     # ------------------------------------------------------------------
-    # 4. Training error  —  derived from the normal equations (no extra allocation)
+    # 4. Training error  --  derived from the normal equations
     #    We solved (K + l2*I) @ alpha = y, so K @ alpha = y - l2*alpha exactly.
     # ------------------------------------------------------------------
-    y_tr_pred = y_tr - L2 * alpha  # K @ alpha = y - l2*alpha
-    train_mae_E = np.mean(np.abs(y_tr_pred[:N_TRAIN] - E_tr))
-    train_mae_F = np.mean(np.abs(y_tr_pred[N_TRAIN:].reshape(N_TRAIN, naq) - F_tr))
+    y_tr_pred = y_tr - L2 * alpha
+    E_tr_pred = y_tr_pred[:N_TRAIN]
+    F_tr_pred = y_tr_pred[N_TRAIN:].reshape(N_TRAIN, naq)
+
+    train_mae_E = np.mean(np.abs(E_tr_pred - E_tr))
+    train_mae_F = np.mean(np.abs(F_tr_pred - F_tr))
+    slope_E_tr, intercept_E_tr = linfit(E_tr, E_tr_pred)
+    slope_F_tr, intercept_F_tr = linfit(F_tr, F_tr_pred)
+    print(f"\n[4] Training MAE")
     print(
-        f"\n[4] Training MAE — energy: {train_mae_E:.6f} kcal/mol"
-        f"   force: {train_mae_F:.6f} kcal/(mol·Å)"
+        f"    Energy : {train_mae_E:.6f} kcal/mol   slope={slope_E_tr:.4f}  intercept={intercept_E_tr:.4f}"
+    )
+    print(
+        f"    Force  : {train_mae_F:.6f} kcal/(mol*A)  slope={slope_F_tr:.4f}  intercept={intercept_F_tr:.4f}"
     )
 
     # ------------------------------------------------------------------
-    # 5. Test prediction  —  asymmetric full combined kernel
+    # 5. Test prediction  --  asymmetric full combined kernel
     #    K_pred shape: (BIG_te, BIG_tr)
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
@@ -184,14 +195,18 @@ def main():
     E_te_pred = y_te_pred[:N_TEST]
     F_te_pred = y_te_pred[N_TEST:].reshape(N_TEST, naq)
 
-    E_te_pred_c = E_te_pred - E_te_pred.mean()
-    E_te_c = E_te - E_te.mean()
-    test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
+    test_mae_E = np.mean(np.abs(E_te_pred - E_te))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te))
+    slope_E_te, intercept_E_te = linfit(E_te, E_te_pred)
+    slope_F_te, intercept_F_te = linfit(F_te, F_te_pred)
 
     print(f"\n[6] Test results")
-    print(f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol")
-    print(f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)")
+    print(
+        f"    Energy MAE : {test_mae_E:.4f} kcal/mol   slope={slope_E_te:.4f}  intercept={intercept_E_te:.4f}"
+    )
+    print(
+        f"    Force  MAE : {test_mae_F:.4f} kcal/(mol*A)  slope={slope_F_te:.4f}  intercept={intercept_F_te:.4f}"
+    )
 
     print("\n" + "=" * 65 + "\nDone.\n" + "=" * 65)
 
