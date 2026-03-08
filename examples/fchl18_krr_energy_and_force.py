@@ -45,23 +45,32 @@ from kernelforge.cli import load_ethanol_raw_data
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-N_TRAIN = 200
-N_TEST = 100
-SIGMA = 1.25
-L2 = 1e-4  # FCHL18 full kernel needs modest regularisation for Cholesky stability
+N_TRAIN = 50
+N_TEST = 50
+SIGMA = 2.5
+L2 = 1e-8  # FCHL18 full kernel needs modest regularisation for Cholesky stability
 MAX_SIZE = 9  # ethanol has 9 atoms
 
 KERNEL_ARGS: dict = dict(
-    two_body_width=0.1,
-    two_body_scaling=2.5,
-    two_body_power=4.5,
-    three_body_width=3.0,
-    three_body_scaling=1.5,
-    three_body_power=3.0,
+    two_body_scaling=np.sqrt(8),
+    three_body_scaling=1.6,
+    two_body_width=0.2,
+    three_body_width=np.pi,
+    two_body_power=4.0,
+    three_body_power=2.0,
     cut_start=1.0,
-    cut_distance=1e6,
-    fourier_order=2,
-    use_atm=False,
+    cut_distance=5.0,
+    fourier_order=1,
+    # two_body_width=0.1,
+    # two_body_scaling=2.5,
+    # two_body_power=4.5,
+    # three_body_width=3.0,
+    # three_body_scaling=1.5,
+    # three_body_power=3.0,
+    # cut_start=1.0,
+    # cut_distance=1e6,
+    # fourier_order=2,
+    use_atm=True,
 )
 
 
@@ -82,11 +91,11 @@ def load_data(n_train: int, n_test: int, seed: int = 42):
 
     R_tr = [data["R"][i].astype(np.float64) for i in idx_tr]  # list of (9,3)
     E_tr = data["E"][idx_tr].ravel().astype(np.float64)  # (n_train,)
-    F_tr = [data["F"][i].astype(np.float64) for i in idx_tr]  # list of (9,3)
+    F_tr = [-data["F"][i].astype(np.float64) for i in idx_tr]  # list of (9,3)
 
     R_te = [data["R"][i].astype(np.float64) for i in idx_te]  # list of (9,3)
     E_te = data["E"][idx_te].ravel().astype(np.float64)  # (n_test,)
-    F_te = [data["F"][i].astype(np.float64) for i in idx_te]  # list of (9,3)
+    F_te = [-data["F"][i].astype(np.float64) for i in idx_te]  # list of (9,3)
 
     z_list = [z] * n_total
 
