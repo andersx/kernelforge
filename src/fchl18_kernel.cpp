@@ -236,7 +236,8 @@ static double scalar_noalchemy(
     const double *s_prefactor,  // (order) precomputed Fourier prefactors
     double distance_scale, double angular_scale
 ) {
-    // Early exit: central atoms must have the same nuclear charge
+    // Early exit: central atoms must have the same nuclear charge (matches Fortran
+    // scalar_noalchemy)
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);  // channel 1, neighbour 0 = self
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
     if (Z1 != Z2) return 0.0;
@@ -562,7 +563,8 @@ void kernel_gaussian(
     // Zero output
     std::memset(kernel_out, 0, sizeof(double) * nm1 * nm2);
 
-    const double inv_sigma2 = -1.0 / (sigma * sigma);
+    // qmllib convention: parameters = -0.5/sigma^2 (see fchl_kernel_functions.py)
+    const double inv_sigma2 = -0.5 / (sigma * sigma);
 
     // Precompute Fourier prefactors once for the entire kernel call
     const double pi = 4.0 * std::atan(1.0);
@@ -589,15 +591,12 @@ void kernel_gaussian(
             for (int i = 0; i < na; ++i) {
                 const AtomData &adi = ad1[static_cast<std::size_t>(a) * max_size1 + i];
                 const double *x1_chan = x1.data() + a * mol1 + i * at1;
-                const int Zi = static_cast<int>(x1_chan[max_size1]);  // Z of centre atom i
 
                 const double sii = ss1[static_cast<std::size_t>(a) * max_size1 + i];
 
                 for (int j = 0; j < nb; ++j) {
                     const AtomData &adj = ad2[static_cast<std::size_t>(b) * max_size2 + j];
                     const double *x2_chan = x2.data() + b * mol2 + j * at2;
-                    const int Zj = static_cast<int>(x2_chan[max_size2]);  // Z of centre atom j
-                    if (Zi != Zj) continue;
 
                     const double sjj = ss2[static_cast<std::size_t>(b) * max_size2 + j];
 
@@ -691,7 +690,8 @@ void kernel_gaussian_symm(
     // Zero output
     std::memset(kernel_out, 0, sizeof(double) * nm * nm);
 
-    const double inv_sigma2 = -1.0 / (sigma * sigma);
+    // qmllib convention: parameters = -0.5/sigma^2 (see fchl_kernel_functions.py)
+    const double inv_sigma2 = -0.5 / (sigma * sigma);
 
     // Precompute Fourier prefactors once for the entire kernel call
     const double pi = 4.0 * std::atan(1.0);
@@ -726,15 +726,12 @@ void kernel_gaussian_symm(
         for (int i = 0; i < na; ++i) {
             const AtomData &adi = ad[static_cast<std::size_t>(a) * max_size + i];
             const double *xa_chan = x.data() + a * mol_s + i * at_s;
-            const int Zi = static_cast<int>(xa_chan[max_size]);
 
             const double sii = ss[static_cast<std::size_t>(a) * max_size + i];
 
             for (int j = 0; j < nb; ++j) {
                 const AtomData &adj = ad[static_cast<std::size_t>(b) * max_size + j];
                 const double *xb_chan = x.data() + b * mol_s + j * at_s;
-                const int Zj = static_cast<int>(xb_chan[max_size]);
-                if (Zi != Zj) continue;
 
                 const double sjj = ss[static_cast<std::size_t>(b) * max_size + j];
 
@@ -1592,6 +1589,8 @@ static double scalar_noalchemy_and_grad(
     int n_atoms_A,              // for gradient output size
     std::vector<double> &ds_dR  // output: size n_atoms_A*3
 ) {
+    // Early exit: central atoms must have the same nuclear charge (matches Fortran
+    // scalar_noalchemy)
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
     ds_dR.assign(static_cast<std::size_t>(n_atoms_A) * 3, 0.0);
@@ -1769,6 +1768,8 @@ static double scalar_noalchemy_and_grad_full(
     const std::vector<double> &sin2, double d_width, int order, int pmax, const double *s_prefactor,
     double distance_scale, double angular_scale, int n_atoms_A, std::vector<double> &ds_dR
 ) {
+    // Early exit: central atoms must have the same nuclear charge (matches Fortran
+    // scalar_noalchemy)
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
     ds_dR.assign(static_cast<std::size_t>(n_atoms_A) * 3, 0.0);
@@ -1887,7 +1888,9 @@ void kernel_gaussian_gradient(
     const double true_distance_scale = two_body_scaling / 16.0;
     const double true_angular_scale = three_body_scaling / std::sqrt(8.0);
     const double ang_norm2 = get_angular_norm2(three_body_width);
-    const double inv_sigma2 = 1.0 / (sigma * sigma);
+    // qmllib convention: K = exp(-0.5*(l2)/sigma^2), l2 = s_ii+s_jj-2*s_ij
+    // => dK/dR = K * (-0.5/sigma^2) * dl2/dR
+    const double inv_sigma2 = 0.5 / (sigma * sigma);
 
     // -----------------------------------------------------------------------
     // Build representation for molecule A
@@ -2137,15 +2140,12 @@ void kernel_gaussian_gradient(
         for (int i = 0; i < n_atoms_A; ++i) {
             const AtomDataGrad &adi = adA[i];
             const double *x1_chan = x_A_mol.data() + i * atom_stride_A;
-            const int Zi = static_cast<int>(x1_chan[max_size_A]);
             const double sii = ss_A[i];
             const double *dsii = dss_A[i].data();
 
             for (int j = 0; j < nb; ++j) {
                 const AtomData &adj = adB[static_cast<std::size_t>(b) * max_size2 + j];
                 const double *x2_chan = x2.data() + b * mol2_stride + j * at2_stride;
-                const int Zj = static_cast<int>(x2_chan[max_size2]);
-                if (Zi != Zj) continue;
 
                 const double sjj = ss_B[static_cast<std::size_t>(b) * max_size2 + j];
 
@@ -2178,9 +2178,10 @@ void kernel_gaussian_gradient(
                     dsij_dR
                 );
 
-                // k(i,j) = exp(-(sii + sjj - 2*sij) / sigma^2)
+                // k(i,j) = exp(-0.5*(sii + sjj - 2*sij) / sigma^2)
+                // dK/dR = k(i,j) * (-0.5/sigma^2) * d(sii+sjj-2*sij)/dR
                 const double kij = std::exp(-(sii + sjj - 2.0 * sij) * inv_sigma2);
-                const double coeff = kij * inv_sigma2;  // = k(i,j)/sigma^2
+                const double coeff = kij * inv_sigma2;  // = k(i,j) * 0.5/sigma^2
 
                 // Accumulate: G[alpha,mu,b] += coeff * (-dsii[alpha,mu] + 2*dsij[alpha,mu])
                 // Each b writes exclusively to grad_out[:, :, b] — no race condition.
@@ -2228,6 +2229,8 @@ static void scalar_noalchemy_cross_hessian(
     double angular_scale, int n_atoms_A, int n_atoms_B,
     std::vector<double> &hess  // (n_atoms_A*3, n_atoms_B*3) accumulated
 ) {
+    // Early exit: central atoms must have the same nuclear charge (matches Fortran
+    // scalar_noalchemy)
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
     if (Z1 != Z2) return;
@@ -2399,7 +2402,7 @@ void kernel_gaussian_hessian(
     const double true_distance_scale = two_body_scaling / 16.0;
     const double true_angular_scale = three_body_scaling / std::sqrt(8.0);
     const double ang_norm2 = get_angular_norm2(three_body_width);
-    const double inv_sigma2 = 1.0 / (sigma * sigma);
+    const double inv_sigma2 = 0.5 / (sigma * sigma);
 
     // -----------------------------------------------------------------------
     // Generate representations for A and B
@@ -2652,13 +2655,10 @@ void kernel_gaussian_hessian(
     for (int i = 0; i < n_atoms_A; ++i) {
         const AtomDataGrad &adi = adA[i];
         const double *x1_chan = x_A_mol.data() + i * atom_stride_A;
-        const int Zi = static_cast<int>(x1_chan[max_size_A]);
 
         for (int j = 0; j < n_atoms_B; ++j) {
             const AtomDataGrad &adj = adB[j];
             const double *x2_chan = x_B_mol.data() + j * atom_stride_B;
-            const int Zj = static_cast<int>(x2_chan[max_size_B]);
-            if (Zi != Zj) continue;
 
             // Compute s_ij and ds_ij/dR_A
             std::vector<double> dsij_dRA;

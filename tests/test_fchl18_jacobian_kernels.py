@@ -228,3 +228,83 @@ def test_jacobian_is_transpose_of_jacobian_t():
         atol=1e-12,
         err_msg="kernel_gaussian_jacobian should equal kernel_gaussian_jacobian_t.T",
     )
+
+
+def _numerical_jacobian_t(
+    coords_train_list, z_train_list, x_test, n_test, nn_test, kernel_args, sigma, eps=1e-4
+):
+    """Central-difference Jacobian_t: dK(test_b, train_i)/dR_{train_i}[flat_coord].
+
+    Returns array of shape (N_test, D_train) where D_train = sum_i n_atoms_i * 3.
+    """
+    N_test = x_test.shape[0]
+    D_train = sum(c.shape[0] * 3 for c in coords_train_list)
+    Jt_num = np.zeros((N_test, D_train), dtype=np.float64)
+
+    col = 0
+    for coords_i, z_i in zip(coords_train_list, z_train_list, strict=False):
+        na = coords_i.shape[0]
+        for alpha in range(na):
+            for mu in range(3):
+                cp = coords_i.copy()
+                cm = coords_i.copy()
+                cp[alpha, mu] += eps
+                cm[alpha, mu] -= eps
+
+                xp, np_, nnp = _make_repr([cp], [z_i])
+                xm, nm_, nnm = _make_repr([cm], [z_i])
+
+                # K(test, train_i_perturbed): shape (N_test, 1)
+                Kp = kernel_mod.kernel_gaussian(
+                    x_test, xp, n_test, np_, nn_test, nnp, sigma=sigma, **kernel_args
+                )
+                Km = kernel_mod.kernel_gaussian(
+                    x_test, xm, n_test, nm_, nn_test, nnm, sigma=sigma, **kernel_args
+                )
+
+                Jt_num[:, col] = (Kp[:, 0] - Km[:, 0]) / (2.0 * eps)
+                col += 1
+
+    return Jt_num
+
+
+def test_jacobian_t_numerical_single():
+    """Analytical kernel_gaussian_jacobian_t matches numerical for single train molecule."""
+    coords_train = [WATER_COORDS]
+    z_train = [WATER_Z]
+    x_test, n_test, nn_test = _make_repr([AMMONIA_COORDS, METHANE_COORDS], [AMMONIA_Z, METHANE_Z])
+
+    Jt_ana = kernel_mod.kernel_gaussian_jacobian_t(
+        coords_train, z_train, x_test, n_test, nn_test, sigma=SIGMA, **KERNEL_ARGS
+    )
+    Jt_num = _numerical_jacobian_t(
+        coords_train, z_train, x_test, n_test, nn_test, KERNEL_ARGS, SIGMA
+    )
+    np.testing.assert_allclose(
+        Jt_ana,
+        Jt_num,
+        rtol=1e-4,
+        atol=1e-6,
+        err_msg=f"jacobian_t single mismatch: max abs = {np.max(np.abs(Jt_ana - Jt_num)):.3e}",
+    )
+
+
+def test_jacobian_t_numerical_batch():
+    """Analytical kernel_gaussian_jacobian_t matches numerical for 2 train molecules."""
+    coords_train = [WATER_COORDS, HF_COORDS]
+    z_train = [WATER_Z, HF_Z]
+    x_test, n_test, nn_test = _make_repr([AMMONIA_COORDS, METHANE_COORDS], [AMMONIA_Z, METHANE_Z])
+
+    Jt_ana = kernel_mod.kernel_gaussian_jacobian_t(
+        coords_train, z_train, x_test, n_test, nn_test, sigma=SIGMA, **KERNEL_ARGS
+    )
+    Jt_num = _numerical_jacobian_t(
+        coords_train, z_train, x_test, n_test, nn_test, KERNEL_ARGS, SIGMA
+    )
+    np.testing.assert_allclose(
+        Jt_ana,
+        Jt_num,
+        rtol=1e-4,
+        atol=1e-6,
+        err_msg=f"jacobian_t batch mismatch: max abs = {np.max(np.abs(Jt_ana - Jt_num)):.3e}",
+    )
