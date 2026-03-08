@@ -3,8 +3,8 @@
 Run manually (requires qmllib installed):
     python examples/fchl18_qmllib_parity_check.py
 
-Compares kernelforge FCHL18 scalar and Jacobian kernels against qmllib
-with alchemy='off'. All checks use real QM7b molecules.
+Compares kernelforge FCHL18 scalar and Jacobian kernels against qmllib with
+alchemy='off'. All checks use real QM7b molecules.
 
 Hyperparameter mapping (kernelforge → qmllib defaults):
     two_body_scaling   = sqrt(8)   (qmllib default: sqrt(8))
@@ -25,6 +25,15 @@ Jacobian convention:
     finite-difference Jacobian dK[A,B]/dR_B, shape (nA, ndofs_B_total),
     using dx=0.005 Å displacements.  The two are numerically equal
     (K is symmetric) to the finite-difference accuracy (~rtol=1e-3).
+
+Note on Hessian:
+    qmllib get_local_hessian_kernels uses double finite differences via
+    displaced representations: [k(+,+)-k(+,-)-k(-,+)+k(-,-)]/(4 dx²).
+    This suffers from catastrophic cancellation for Hessian entries that are
+    small relative to the dominant kernel scale — the result does not converge
+    reliably even as dx→0.  kernelforge's analytic Hessian has been verified
+    correct via scalar-kernel numerical differentiation in controlled cases.
+    A qmllib parity check for the Hessian is therefore not included here.
 """
 
 import sys
@@ -66,6 +75,7 @@ KERN_ATOL = 1e-7
 # Observed max relative error is ~0.002; use 3e-3 for a safe margin.
 GRAD_RTOL = 3e-3
 GRAD_ATOL = 5e-6
+
 
 # Finite-difference step used by qmllib (must match dx passed to generate_fchl18_displaced)
 GRAD_DX = 0.005
