@@ -36,8 +36,8 @@ from kernelforge.cli import load_ethanol_raw_data
 # Configuration
 # ---------------------------------------------------------------------------
 N_TRAIN = 400
-N_TEST = 50
-SIGMA = 2.5
+N_TEST = 200
+SIGMA = 22.5
 L2 = 1e-8
 MAX_SIZE = 9  # ethanol has 9 atoms
 

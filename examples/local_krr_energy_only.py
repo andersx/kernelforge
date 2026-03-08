@@ -49,10 +49,10 @@ from kernelforge.local_kernels import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-N_TRAIN = 500
-N_TEST = 200
-SIGMA = 2.0
-L2 = 1e-8
+N_TRAIN = 400
+N_TEST = 50
+SIGMA = 100.0
+L2 = 1e-6
 ELEMENTS = [1, 6, 8]  # H, C, O
 
 
@@ -177,7 +177,7 @@ def main():
     K_te_jac = kernel_gaussian_jacobian_t(  # (N_test*naq, N_train)
         X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
-    F_te_pred = -(K_te_jac @ alpha).reshape(N_TEST, naq)
+    F_te_pred = (K_te_jac @ alpha).reshape(N_TEST, naq)
     print(f"    Force  prediction kernel built in {time.perf_counter() - t0:.4f}s")
 
     # ------------------------------------------------------------------
