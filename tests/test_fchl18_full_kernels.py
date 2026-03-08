@@ -384,6 +384,107 @@ def test_full_use_atm_runs_and_finite():
     )
 
 
+def test_full_use_atm_block_consistency():
+    """use_atm=True: all four blocks of kernel_gaussian_full match the standalone kernels."""
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
+
+    coords_A = [WATER_COORDS]
+    z_A = [WATER_Z]
+    coords_B = [AMMONIA_COORDS]
+    z_B = [AMMONIA_Z]
+    N_A, N_B = 1, 1
+    D_A = 3 * 3  # water: 3 atoms
+    D_B = 4 * 3  # ammonia: 4 atoms
+
+    K_full = kernel_mod.kernel_gaussian_full(coords_A, z_A, coords_B, z_B, sigma=SIGMA, **args)
+
+    # EE block == kernel_gaussian
+    x_A, n_A, nn_A = _make_repr(coords_A, z_A)
+    x_B, n_B, nn_B = _make_repr(coords_B, z_B)
+    K_scalar = kernel_mod.kernel_gaussian(x_A, x_B, n_A, n_B, nn_A, nn_B, sigma=SIGMA, **args)
+    np.testing.assert_allclose(
+        K_full[:N_A, :N_B],
+        K_scalar,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="use_atm: EE block != kernel_gaussian",
+    )
+
+    # FE block == kernel_gaussian_jacobian
+    J = kernel_mod.kernel_gaussian_jacobian(coords_A, z_A, x_B, n_B, nn_B, sigma=SIGMA, **args)
+    np.testing.assert_allclose(
+        K_full[N_A : N_A + D_A, :N_B],
+        J,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="use_atm: FE block != kernel_gaussian_jacobian",
+    )
+
+    # EF block == kernel_gaussian_jacobian_t (via gradient reshape)
+    G = kernel_mod.kernel_gaussian_gradient(
+        AMMONIA_COORDS, AMMONIA_Z, x_A, n_A, nn_A, sigma=SIGMA, **args
+    )
+    jac_t_ref = G.reshape(1, -1)
+    np.testing.assert_allclose(
+        K_full[:N_A, N_B:],
+        jac_t_ref,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="use_atm: EF block != expected jacobian_t",
+    )
+
+    # FF block == kernel_gaussian_hessian
+    H = kernel_mod.kernel_gaussian_hessian(coords_A, z_A, coords_B, z_B, sigma=SIGMA, **args)
+    np.testing.assert_allclose(
+        K_full[N_A:, N_B:],
+        H,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="use_atm: FF block != kernel_gaussian_hessian",
+    )
+
+
+def test_full_use_atm_symm_matches_asymm():
+    """use_atm=True: kernel_gaussian_full_symm == kernel_gaussian_full(mols, mols)."""
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
+    coords = [WATER_COORDS, HF_COORDS]
+    zs = [WATER_Z, HF_Z]
+
+    K_symm = kernel_mod.kernel_gaussian_full_symm(coords, zs, sigma=SIGMA, **args)
+    K_asym = kernel_mod.kernel_gaussian_full(coords, zs, coords, zs, sigma=SIGMA, **args)
+    np.testing.assert_allclose(
+        K_symm,
+        K_asym,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg="use_atm: full_symm != full_asymm(mols, mols)",
+    )
+
+
+def test_full_use_atm_rfp_matches_symm():
+    """use_atm=True: unpacked full_symm_rfp == full_symm."""
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
+    coords = [WATER_COORDS, HF_COORDS]
+    zs = [WATER_Z, HF_Z]
+    N = 2
+    D = (3 + 2) * 3
+    BIG = N + D
+
+    K_full = kernel_mod.kernel_gaussian_full_symm(coords, zs, sigma=SIGMA, **args)
+    rfp = kernel_mod.kernel_gaussian_full_symm_rfp(coords, zs, sigma=SIGMA, **args)
+    K_unpacked = _rfp_to_full(rfp, BIG)
+    np.testing.assert_allclose(
+        K_unpacked,
+        K_full,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="use_atm: full_symm_rfp unpack != full_symm",
+    )
+
+
 def test_full_active_cutoff_runs_and_finite():
     """Active cutoff (cut_start=0.5, cut_distance=2.0): all variants run and produce finite
     values."""

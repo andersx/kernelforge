@@ -267,7 +267,9 @@ def check_jacobian_kernels():
         d["charges_qml"][nm1:],
         SIGMA,
     )
-    ok &= _check("kernel_gaussian_jacobian", K_kf, K_qml.T, rtol=KERN_RTOL, atol=KERN_ATOL)
+    # kernelforge sign convention: K_jact(x1,x2,dX1) == -K_jac(x2,x1,dX1).T, so the
+    # standalone jacobian has opposite sign to qmllib's get_local_gradient_kernel.
+    ok &= _check("kernel_gaussian_jacobian", K_kf, -K_qml.T, rtol=KERN_RTOL, atol=KERN_ATOL)
 
     K_jact = kf_lk.kernel_gaussian_jacobian_t(
         d["X_kf"][:nm1],
@@ -290,10 +292,11 @@ def check_jacobian_kernels():
         d["N_kf"][nm1:],
         SIGMA,
     )
+    # FE block = K_full[nm1:, :nm2] == -K_jact  (kernelforge sign convention for K_jact)
     ok &= _check(
-        "kernel_gaussian_jacobian_t vs GP FE block",
+        "kernel_gaussian_jacobian_t vs GP FE block (sign flip)",
         K_jact,
-        K_full[nm1:, :nm2],
+        -K_full[nm1:, :nm2],
         rtol=KERN_RTOL,
         atol=KERN_ATOL,
     )
@@ -410,7 +413,11 @@ def check_gp_kernels():
         atol=KERN_ATOL,
     )
     ok &= _check(
-        "full_gp_asymm EF", K_kf[:nm1, nm2:], K_qml[nm2:, :nm1].T, rtol=KERN_RTOL, atol=KERN_ATOL
+        "full_gp_asymm EF (sign flip)",
+        K_kf[:nm1, nm2:],
+        -K_qml[nm2:, :nm1].T,
+        rtol=KERN_RTOL,
+        atol=KERN_ATOL,
     )
     ok &= _check(
         "full_gp_asymm FF", K_kf[nm1:, nm2:], K_qml[nm2:, nm1:].T, rtol=KERN_RTOL, atol=KERN_ATOL

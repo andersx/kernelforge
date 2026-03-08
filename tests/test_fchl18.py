@@ -239,7 +239,7 @@ def _ref_kernel_gaussian(
                 if z > pmax:
                     pmax = z
 
-    inv_sigma2 = -1.0 / (sigma**2)
+    inv_sigma2 = -0.5 / (sigma**2)  # qmllib convention: exp(-0.5 * l2 / sigma^2)
     K = np.zeros((nm1, nm2))
 
     # Precompute per-atom data
@@ -319,16 +319,13 @@ def _ref_kernel_gaussian(
                 true_angular_scale,
             )
 
-    # Main kernel loop
+    # Main kernel loop — no outer Zi!=Zj filter (cross-species pairs contribute
+    # exp(-0.5*(s_ii+s_jj)/sigma^2) via s_ij=0 from scalar_noalchemy inner filter)
     for a in range(nm1):
         for b in range(nm2):
             kab = 0.0
             for i in range(n1_arr[a]):
-                Zi = int(x1_batch[a, i, 1, 0])
                 for j in range(n2_arr[b]):
-                    Zj = int(x2_batch[b, j, 1, 0])
-                    if Zi != Zj:
-                        continue
                     s12 = _scalar_ref(
                         x1_batch[a, i],
                         max_size1,
@@ -616,8 +613,13 @@ def test_kernel_gaussian_matches_reference(seed):
     )
 
 
-def test_kernel_gaussian_zero_if_no_shared_species():
-    """K must be zero between molecules with entirely disjoint element sets."""
+def test_kernel_gaussian_nonzero_if_no_shared_species():
+    """K(A,B) is non-zero even when A and B have entirely disjoint element sets.
+
+    Cross-species atom pairs (Zi != Zj) contribute exp(-0.5*(s_ii + s_jj)/sigma^2)
+    via the scalar_noalchemy inner filter (s_ij=0 for mismatched central atoms),
+    so the kernel is not zero — this matches qmllib with alchemy='off'.
+    """
     # Molecule of all H
     coords_h = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=np.float64)
     Z_h = np.array([1, 1], dtype=np.int32)
@@ -628,15 +630,19 @@ def test_kernel_gaussian_zero_if_no_shared_species():
     x1, n1, nn1 = repr_mod.generate([coords_h], [Z_h], max_size=5, cut_distance=8.0)
     x2, n2, nn2 = repr_mod.generate([coords_o], [Z_o], max_size=5, cut_distance=8.0)
 
-    # No shared elements between H and O molecules -> K must be 0
     K = kernel_mod.kernel_gaussian(x1, x2, n1, n2, nn1, nn2, sigma=2.5, **KERNEL_ARGS)
     assert K.shape == (1, 1)
-    assert K[0, 0] == pytest.approx(0.0, abs=1e-14)
+    # Cross-species pairs contribute exp(-0.5*(s_ii+s_jj)/sigma^2) > 0
+    assert K[0, 0] > 0.0
 
 
-def test_kernel_gaussian_same_molecule_large_value():
-    """Two identical molecules should give a larger kernel than two different ones
-    where no shared elements exist."""
+def test_kernel_gaussian_same_molecule_larger_than_disjoint_species():
+    """K(A,A) >= K(A,B) when A and B have entirely disjoint element sets.
+
+    K(A,A) achieves the maximum (s_ij = s_ii = s_jj).
+    K(A,B) > 0 since cross-species pairs contribute exp(-0.5*(s_ii+s_jj)/sigma^2),
+    but K(A,A) > K(A,B) because the cross-scalar s_AB=0 < s_AA.
+    """
     # Molecule A: only O atoms
     coords_o = np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]], dtype=np.float64)
     Z_o = np.array([8, 8], dtype=np.int32)
@@ -647,13 +653,11 @@ def test_kernel_gaussian_same_molecule_large_value():
     xA, nA, nnA = repr_mod.generate([coords_o], [Z_o], max_size=5, cut_distance=8.0)
     xB, nB, nnB = repr_mod.generate([coords_n], [Z_n], max_size=5, cut_distance=8.0)
 
-    # K(A,A) > 0 (same molecule, identical representations)
     KAA = kernel_mod.kernel_gaussian(xA, xA, nA, nA, nnA, nnA, sigma=2.5, **KERNEL_ARGS)[0, 0]
-    # K(A,B) = 0 because O and N are disjoint element sets
     KAB = kernel_mod.kernel_gaussian(xA, xB, nA, nB, nnA, nnB, sigma=2.5, **KERNEL_ARGS)[0, 0]
 
     assert KAA > 0.0
-    assert pytest.approx(0.0, abs=1e-14) == KAB
+    assert KAB > 0.0  # non-zero: cross-species pairs contribute exp(-0.5*(s_ii+s_jj)/sigma^2)
     assert KAA > KAB
 
 

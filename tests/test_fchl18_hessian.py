@@ -336,3 +336,61 @@ def test_hessian_use_atm_and_cutoff_matches_numerical():
     args["cut_start"] = 0.5
     args["cut_distance"] = 2.0
     _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, args, SIGMA, eps=1e-4)
+
+
+def test_hessian_transpose_symmetry_water_ammonia():
+    """H(A, B) == H(B, A).T  (asymmetric hessian transpose identity)."""
+    H_AB = kernel_mod.kernel_gaussian_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], sigma=SIGMA, **KERNEL_ARGS
+    )
+    H_BA = kernel_mod.kernel_gaussian_hessian(
+        [AMMONIA_COORDS], [AMMONIA_Z], [WATER_COORDS], [WATER_Z], sigma=SIGMA, **KERNEL_ARGS
+    )
+    np.testing.assert_allclose(
+        H_AB,
+        H_BA.T,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg=f"H(A,B) != H(B,A).T: max abs diff = {np.max(np.abs(H_AB - H_BA.T)):.3e}",
+    )
+
+
+def test_hessian_transpose_symmetry_batch():
+    """H(A, B) == H(B, A).T for batch of two molecules on each side."""
+    coords_A = [WATER_COORDS, HF_COORDS]
+    z_A = [WATER_Z, HF_Z]
+    coords_B = [AMMONIA_COORDS, METHANE_COORDS]
+    z_B = [AMMONIA_Z, METHANE_Z]
+
+    H_AB = kernel_mod.kernel_gaussian_hessian(
+        coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS
+    )
+    H_BA = kernel_mod.kernel_gaussian_hessian(
+        coords_B, z_B, coords_A, z_A, sigma=SIGMA, **KERNEL_ARGS
+    )
+    np.testing.assert_allclose(
+        H_AB,
+        H_BA.T,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg=f"batch H(A,B) != H(B,A).T: max abs diff = {np.max(np.abs(H_AB - H_BA.T)):.3e}",
+    )
+
+
+def test_hessian_transpose_symmetry_use_atm():
+    """H(A, B) == H(B, A).T holds with use_atm=True."""
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
+    H_AB = kernel_mod.kernel_gaussian_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], sigma=SIGMA, **args
+    )
+    H_BA = kernel_mod.kernel_gaussian_hessian(
+        [AMMONIA_COORDS], [AMMONIA_Z], [WATER_COORDS], [WATER_Z], sigma=SIGMA, **args
+    )
+    np.testing.assert_allclose(
+        H_AB,
+        H_BA.T,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg=f"use_atm H(A,B) != H(B,A).T: max abs diff = {np.max(np.abs(H_AB - H_BA.T)):.3e}",
+    )
