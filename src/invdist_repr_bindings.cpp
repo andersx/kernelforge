@@ -63,7 +63,7 @@ py::tuple inverse_distance_upper_and_jacobian_py(
     }
 
     py::array_t<double> x((py::ssize_t)M);
-    py::array_t<double> J({(py::ssize_t)M, (py::ssize_t)D});
+    py::array_t<double> J({(py::ssize_t)D, (py::ssize_t)M});
 
     auto xv = x.mutable_unchecked<1>();
     auto Jv = J.mutable_unchecked<2>();
@@ -107,6 +107,6 @@ PYBIND11_MODULE(invdist_repr, m) {
         &inverse_distance_upper_and_jacobian_py,
         py::arg("R"),
         py::arg("eps") = 1e-12,
-        "Return (x, J) where x is (M,) upper-triangle and J is (M, 3N)."
+        "Return (x, J) where x is (M,) upper-triangle and J is (3N, M)."
     );
 }

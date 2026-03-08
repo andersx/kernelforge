@@ -77,14 +77,15 @@ void inverse_distance_upper_and_jacobian(
             const double gy = Dy * inv_r3;
             const double gz = Dz * inv_r3;
 
-            // Columns for atom i and j in flattened (x1,y1,z1, x2,y2,z2, ...)
-            J[p * D + (i0 + 0)] = -gx;
-            J[p * D + (i0 + 1)] = -gy;
-            J[p * D + (i0 + 2)] = -gz;
+            // J is now (D, M) row-major: coordinate index is the row, pair index is the column
+            // Row i0+0 (x-coord of atom i), row i0+1 (y-coord), row i0+2 (z-coord), etc.
+            J[(i0 + 0) * M + p] = -gx;
+            J[(i0 + 1) * M + p] = -gy;
+            J[(i0 + 2) * M + p] = -gz;
 
-            J[p * D + (j0 + 0)] = +gx;
-            J[p * D + (j0 + 1)] = +gy;
-            J[p * D + (j0 + 2)] = +gz;
+            J[(j0 + 0) * M + p] = +gx;
+            J[(j0 + 1) * M + p] = +gy;
+            J[(j0 + 2) * M + p] = +gz;
         }
     }
 }

@@ -1,9 +1,9 @@
 """
-KRR with combined energy + force training — predict both energies and forces.
+KRR with combined energy + force training -- predict both energies and forces.
 
 Trains simultaneously on energies and forces using the full combined kernel,
-which fuses the scalar, Jacobian, and Hessian blocks into a single BIG×BIG
-system (BIG = N*(1+D)):
+which fuses the scalar, Jacobian, and Hessian blocks into a single BIG x BIG
+system (BIG = N*(1+ncoords)):
 
   K_full[0:N, 0:N]   = scalar   (energy-energy)
   K_full[N:,  0:N]   = jacobian (force-energy)
@@ -12,16 +12,16 @@ system (BIG = N*(1+D)):
 
 Kernel usage
 ------------
-  Training kernel :  kernel_gaussian_full_symm_rfp  — full combined, symmetric, RFP
-  Training error  :  kernel_gaussian_full_symm       — full combined, symmetric, full
-  Predict E + F   :  kernel_gaussian_full             — full combined, asymmetric
-                     shape (N_test*(1+D), N_train*(1+D))
+  Training kernel :  kernel_gaussian_full_symm_rfp  -- full combined, symmetric, RFP
+  Training error  :  derived from normal equations  (no extra allocation)
+  Predict E + F   :  kernel_gaussian_full            -- full combined, asymmetric
+                     shape (N_test*(1+ncoords), N_train*(1+ncoords))
 
 The prediction kernel applied to alpha gives:
   y_pred[:N_test]    = predicted energies
   y_pred[N_test:]    = predicted forces (flattened)
 
-Dataset: ethanol MD17, inverse-distance representation (M=36, D=27).
+Dataset: ethanol MD17, inverse-distance representation (M=36, ncoords=27).
 """
 
 import time
@@ -34,6 +34,13 @@ from kernelforge.global_kernels import (
     kernel_gaussian_full,
     kernel_gaussian_full_symm_rfp,
 )
+
+
+def linfit(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """Return (slope, intercept) from least-squares fit of y_pred vs y_true."""
+    slope, intercept = np.polyfit(y_true.ravel(), y_pred.ravel(), 1)
+    return float(slope), float(intercept)
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -63,12 +70,12 @@ def load_data(n_train: int, n_test: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n_total, M=36)
-    dX = np.array(dX_list, dtype=np.float64)  # (n_total, M=36, D=27)
-    D = dX.shape[2]
+    dX = np.array(dX_list, dtype=np.float64)  # (n_total, ncoords=27, M=36)
+    D = dX.shape[1]  # ncoords (Cartesian degrees of freedom)
 
     # Combined labels: energies concatenated with flattened forces
-    y_tr = np.concatenate([E[:n_train], F[:n_train].ravel()])  # (N_train*(1+D),)
-    y_te = np.concatenate([E[n_train:], F[n_train:].ravel()])  # (N_test *(1+D),)
+    y_tr = np.concatenate([E[:n_train], F[:n_train].ravel()])  # (N_train*(1+ncoords),)
+    y_te = np.concatenate([E[n_train:], F[n_train:].ravel()])  # (N_test *(1+ncoords),)
 
     return (
         X[:n_train],
@@ -90,7 +97,7 @@ def load_data(n_train: int, n_test: int):
 # ---------------------------------------------------------------------------
 def main():
     print("=" * 65)
-    print("KRR: energy + force training  →  predict energies + forces")
+    print("KRR: energy + force training  ->  predict energies + forces")
     print("=" * 65)
     print(f"  N_train={N_TRAIN}  N_test={N_TEST}  sigma={SIGMA}  l2={L2}")
 
@@ -100,9 +107,9 @@ def main():
     t0 = time.perf_counter()
     (X_tr, dX_tr, X_te, dX_te, y_tr, y_te, E_tr, E_te, F_tr, F_te, D) = load_data(N_TRAIN, N_TEST)
     print(f"\n[1] Data loaded in {time.perf_counter() - t0:.2f}s")
-    BIG_tr = N_TRAIN * (1 + D)
+    BIG_tr = N_TRAIN * (1 + D)  # D = ncoords
     BIG_te = N_TEST * (1 + D)
-    print(f"    M={X_tr.shape[1]}  D={D}  BIG_train={BIG_tr}  BIG_test={BIG_te}")
+    print(f"    M={X_tr.shape[1]}  ncoords={D}  BIG_train={BIG_tr}  BIG_test={BIG_te}")
 
     # ------------------------------------------------------------------
     # 2. Build training kernel  —  full combined, symmetric, RFP packed
@@ -123,19 +130,26 @@ def main():
     print(f"    alpha: shape={alpha.shape}  ||alpha||={np.linalg.norm(alpha):.4f}")
 
     # ------------------------------------------------------------------
-    # 4. Training error  —  derived from the normal equations (no extra allocation)
+    # 4. Training error  --  derived from the normal equations (no extra allocation)
     #    We solved (K + l2*I) @ alpha = y, so K @ alpha = y - l2*alpha exactly.
     # ------------------------------------------------------------------
     y_tr_pred = y_tr - L2 * alpha  # K @ alpha = y - l2*alpha
-    train_mae_E = np.mean(np.abs(y_tr_pred[:N_TRAIN] - E_tr))
-    train_mae_F = np.mean(np.abs(y_tr_pred[N_TRAIN:].reshape(N_TRAIN, D) - F_tr))
+    E_tr_pred = y_tr_pred[:N_TRAIN]
+    F_tr_pred = y_tr_pred[N_TRAIN:].reshape(N_TRAIN, D)
+    train_mae_E = np.mean(np.abs(E_tr_pred - E_tr))
+    train_mae_F = np.mean(np.abs(F_tr_pred - F_tr))
+    slope_E_tr, intercept_E_tr = linfit(E_tr, E_tr_pred)
+    slope_F_tr, intercept_F_tr = linfit(F_tr, F_tr_pred)
+    print(f"\n[4] Training MAE")
     print(
-        f"\n[4] Training MAE — energy: {train_mae_E:.6f} kcal/mol"
-        f"   force: {train_mae_F:.6f} kcal/(mol·Å)"
+        f"    Energy : {train_mae_E:.6f} kcal/mol   slope={slope_E_tr:.4f}  intercept={intercept_E_tr:.4f}"
+    )
+    print(
+        f"    Force  : {train_mae_F:.6f} kcal/(mol*A)  slope={slope_F_tr:.4f}  intercept={intercept_F_tr:.4f}"
     )
 
     # ------------------------------------------------------------------
-    # 5. Test prediction  —  asymmetric full combined kernel
+    # 5. Test prediction  --  asymmetric full combined kernel
     #    K_pred shape: (BIG_te, BIG_tr)
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
@@ -154,10 +168,18 @@ def main():
     E_te_c = E_te - E_te.mean()
     test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te))
+    slope_E_te, intercept_E_te = linfit(E_te_c, E_te_pred_c)
+    slope_F_te, intercept_F_te = linfit(F_te, F_te_pred)
 
     print(f"\n[6] Test results")
-    print(f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol")
-    print(f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)")
+    print(
+        f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol"
+        f"  slope={slope_E_te:.4f}  intercept={intercept_E_te:.4f}"
+    )
+    print(
+        f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol*A)"
+        f"  slope={slope_F_te:.4f}  intercept={intercept_F_te:.4f}"
+    )
 
     print("\n" + "=" * 65 + "\nDone.\n" + "=" * 65)
 
