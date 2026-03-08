@@ -3,8 +3,8 @@
 Run manually (requires qmllib installed):
     python examples/fchl18_qmllib_parity_check.py
 
-Compares kernelforge FCHL18 scalar kernels against qmllib with alchemy='off'.
-All checks use real QM7b molecules.
+Compares kernelforge FCHL18 scalar and Jacobian kernels against qmllib
+with alchemy='off'. All checks use real QM7b molecules.
 
 Hyperparameter mapping (kernelforge → qmllib defaults):
     two_body_scaling   = sqrt(8)   (qmllib default: sqrt(8))
@@ -16,13 +16,24 @@ Hyperparameter mapping (kernelforge → qmllib defaults):
     cut_start          = 1.0
     cut_distance       = 5.0
     fourier_order      = 1
+
+Jacobian convention:
+    kernelforge kernel_gaussian_gradient(coords_B, z_B, x_A, n_A, nn_A)
+    returns dK[B,A_batch]/dR_B, shape (n_atoms_B, 3, nA).
+
+    qmllib get_local_gradient_kernels(X_A, X_B_displaced) returns a
+    finite-difference Jacobian dK[A,B]/dR_B, shape (nA, ndofs_B_total),
+    using dx=0.005 Å displacements.  The two are numerically equal
+    (K is symmetric) to the finite-difference accuracy (~rtol=1e-3).
 """
 
 import sys
 
 import numpy as np
+from qmllib.representations.fchl import fchl_force_kernels as ffk
 from qmllib.representations.fchl import fchl_scalar_kernels as fsk
 from qmllib.representations.fchl import generate_fchl18
+from qmllib.representations.fchl.fchl_representations import generate_fchl18_displaced
 
 import kernelforge.fchl18_kernel as km
 import kernelforge.fchl18_repr as rm
@@ -50,6 +61,14 @@ KARGS = dict(
 # Tolerances
 KERN_RTOL = 1e-7
 KERN_ATOL = 1e-7
+
+# qmllib gradient kernel uses finite differences; tolerance matches ~dx^2 error at dx=0.005
+# Observed max relative error is ~0.002; use 3e-3 for a safe margin.
+GRAD_RTOL = 3e-3
+GRAD_ATOL = 5e-6
+
+# Finite-difference step used by qmllib (must match dx passed to generate_fchl18_displaced)
+GRAD_DX = 0.005
 
 N_MOLS = 5
 
@@ -168,6 +187,96 @@ def check_scalar_asymm():
     return ok
 
 
+def check_jacobian():
+    """Compare kernelforge kernel_gaussian_gradient against qmllib get_local_gradient_kernels.
+
+    qmllib computes dK[A,B]/dR_B via finite differences (dx=0.005 Å).
+    kernelforge computes the same quantity analytically by calling
+    kernel_gaussian_gradient(coords_B, z_B, x_A, n_A, nn_A), which gives
+    dK[B, A_batch]/dR_B (shape (n_atoms_B, 3, nA)) — identical to dK[A,B]/dR_B
+    since K is symmetric.  Tolerance reflects finite-difference error in qmllib.
+    """
+    print(f"Jacobian kernel (kernel_gaussian_gradient vs get_local_gradient_kernels, dx={GRAD_DX})")
+
+    coords_all, charges_all = _load_qm7b(N_MOLS)
+    nA_set, nB_set = 3, N_MOLS - 3  # 3 query mols (A), 2 training mols (B)
+
+    n_atoms = [len(c) for c in charges_all]
+    max_size = max(n_atoms)
+
+    # qmllib representations
+    X_qml_A = np.array(
+        [
+            generate_fchl18(
+                charges_all[i], coords_all[i], max_size=max_size, cut_distance=CUT_DISTANCE
+            )
+            for i in range(nA_set)
+        ]
+    )
+    X_qml_B_disp = np.array(
+        [
+            generate_fchl18_displaced(
+                charges_all[nA_set + j],
+                coords_all[nA_set + j],
+                max_size=max_size,
+                cut_distance=CUT_DISTANCE,
+                dx=GRAD_DX,
+            )
+            for j in range(nB_set)
+        ]
+    )
+
+    # kernelforge A-side representation (used as fixed "training" set)
+    x_kf_A, n_kf_A, nn_kf_A = _build_kf_repr(coords_all[:nA_set], charges_all[:nA_set])
+
+    # DOF offsets for each B molecule in the flattened qmllib output
+    dof_offsets = [0]
+    for j in range(nB_set):
+        dof_offsets.append(dof_offsets[-1] + 3 * n_atoms[nA_set + j])
+
+    ok = True
+    for sigma in [2.0, 5.0]:
+        qml_kargs_g = dict(
+            alchemy="off",
+            two_body_scaling=np.sqrt(8.0),
+            two_body_width=0.2,
+            two_body_power=4.0,
+            three_body_scaling=1.6,
+            three_body_width=np.pi,
+            three_body_power=2.0,
+            cut_start=1.0,
+            cut_distance=CUT_DISTANCE,
+            fourier_order=1,
+            kernel_args={"sigma": [sigma]},
+        )
+        # J_qml shape: (nA_set, ndofs_B_total)
+        J_qml = ffk.get_local_gradient_kernels(X_qml_A, X_qml_B_disp, **qml_kargs_g)[0]
+
+        kf_kargs_g = {k: v for k, v in KARGS.items()}
+        kf_kargs_g["sigma"] = sigma
+
+        for j in range(nB_set):
+            n_Bj = n_atoms[nA_set + j]
+            # kf analytic: dK[Bj, A_batch]/dR_Bj, shape (n_Bj, 3, nA_set)
+            J_kf_j = km.kernel_gaussian_gradient(
+                coords_all[nA_set + j],
+                charges_all[nA_set + j].astype(np.int32),
+                x_kf_A,
+                n_kf_A,
+                nn_kf_A,
+                **kf_kargs_g,
+            )  # shape (n_Bj, 3, nA_set)
+
+            # Compare for each A molecule
+            for a in range(nA_set):
+                kf_flat = J_kf_j[:, :, a].reshape(-1)  # (n_Bj*3,)
+                qml_flat = J_qml[a, dof_offsets[j] : dof_offsets[j + 1]]
+                label = f"gradient sigma={sigma} B={j} A={a} (n_atoms_B={n_Bj})"
+                ok &= _check(label, kf_flat, qml_flat, rtol=GRAD_RTOL, atol=GRAD_ATOL)
+
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -176,6 +285,7 @@ if __name__ == "__main__":
     all_ok = True
     all_ok &= check_scalar_symm()
     all_ok &= check_scalar_asymm()
+    all_ok &= check_jacobian()
 
     if all_ok:
         print("\nAll FCHL18 parity checks passed.")
