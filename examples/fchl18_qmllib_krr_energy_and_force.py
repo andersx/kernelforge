@@ -97,11 +97,11 @@ def load_data(n_train: int, n_test: int, seed: int = 42):
 
     R_tr = data["R"][idx_tr].astype(np.float64)  # (n_train, 9, 3)
     E_tr = data["E"][idx_tr].ravel().astype(np.float64)  # (n_train,)
-    F_tr = data["F"][idx_tr].astype(np.float64)  # (n_train, 9, 3)
+    F_tr = -data["F"][idx_tr].astype(np.float64)  # (n_train, 9, 3)
 
     R_te = data["R"][idx_te].astype(np.float64)  # (n_test, 9, 3)
     E_te = data["E"][idx_te].ravel().astype(np.float64)  # (n_test,)
-    F_te = data["F"][idx_te].astype(np.float64)  # (n_test, 9, 3)
+    F_te = -data["F"][idx_te].astype(np.float64)  # (n_test, 9, 3)
 
     X_tr = np.array(
         [generate_fchl18(z, R, max_size=MAX_SIZE, cut_distance=CUT_DISTANCE) for R in R_tr]

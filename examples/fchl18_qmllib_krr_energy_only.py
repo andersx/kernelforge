@@ -43,13 +43,13 @@ from kernelforge.cli import load_ethanol_raw_data
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-N_TRAIN = 400
-N_TEST = 200
+N_TRAIN = 200
+N_TEST = 50
 MAX_SIZE = 9  # ethanol has 9 atoms
 L2 = 1e-8
 
 # qmllib defaults — passed explicitly to every kernel/repr call
-SIGMA = 2.5
+SIGMA = 22.5
 CUT_DISTANCE = 5.0
 KARGS = dict(
     two_body_scaling=np.sqrt(8),
@@ -61,7 +61,7 @@ KARGS = dict(
     cut_start=1.0,
     cut_distance=CUT_DISTANCE,
     fourier_order=1,
-    alchemy="periodic-table",
+    alchemy="off",
     kernel_args={"sigma": [SIGMA]},
 )
 
