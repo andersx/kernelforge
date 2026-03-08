@@ -48,8 +48,8 @@ from kernelforge.local_kernels import (
 # ---------------------------------------------------------------------------
 N_TRAIN = 500
 N_TEST = 200
-SIGMA = 2.0
-L2 = 1e-8
+SIGMA = 20.0
+L2 = 1e-9
 ELEMENTS = [1, 6, 8]  # H, C, O
 
 

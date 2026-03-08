@@ -32,15 +32,15 @@ import numpy as np
 from kernelforge import kernelmath
 from kernelforge.cli import load_ethanol_raw_data
 from kernelforge.fchl19_repr import generate_fchl_acsf_and_gradients
-from kernelforge.local_kernels import kernel_gaussian_full
+from kernelforge.local_kernels import kernel_gaussian_full, kernel_gaussian_full_symm_rfp
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 N_TRAIN = 500
 N_TEST = 200
-SIGMA = 2.0
-L2 = 1e-8
+SIGMA = 20.0
+L2 = 1e-9
 ELEMENTS = [1, 6, 8]  # H, C, O
 
 
@@ -142,17 +142,17 @@ def main():
     # 2. Build training kernel  --  full combined, dense square matrix
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_tr = kernel_gaussian_full(X_tr, X_tr, dX_tr, dX_tr, Q_tr, Q_tr, N_tr, N_tr, SIGMA)
+    # K_tr = kernel_gaussian_full(X_tr, X_tr, dX_tr, dX_tr, Q_tr, Q_tr, N_tr, N_tr, SIGMA)
+    K_tr = kernel_gaussian_full_symm_rfp(X_tr, dX_tr, Q_tr, N_tr, SIGMA)
     print(f"\n[2] Training kernel (full dense) built in {time.perf_counter() - t0:.3f}s")
     print(f"    K_tr shape={K_tr.shape}  ({K_tr.nbytes / 1024**2:.1f} MB)")
-    assert K_tr.shape == (BIG_tr, BIG_tr)
-    assert np.allclose(K_tr, K_tr.T, atol=1e-10), "Training kernel must be symmetric!"
 
     # ------------------------------------------------------------------
     # 3. Solve  alpha = (K + l2*I)^{-1} y_train
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    alpha = kernelmath.solve_cholesky(K_tr, y_tr, regularize=L2)
+    # alpha = kernelmath.solve_cholesky(K_tr, y_tr, regularize=L2)
+    alpha = kernelmath.cho_solve_rfp(K_tr, y_tr, l2=L2)
     del K_tr
     print(f"\n[3] Cholesky solve in {time.perf_counter() - t0:.3f}s")
     print(f"    alpha: shape={alpha.shape}  ||alpha||={np.linalg.norm(alpha):.4f}")

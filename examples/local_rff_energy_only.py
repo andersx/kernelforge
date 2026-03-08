@@ -46,9 +46,9 @@ from kernelforge.kitchen_sinks import (
 # ---------------------------------------------------------------------------
 N_TRAIN = 500
 N_TEST = 200
-D_RFF = 250  # number of random Fourier features
+D_RFF = 500  # number of random Fourier features
 SIGMA = 20.0  # Gaussian kernel length-scale
-L2 = 1e-6  # L2 regularisation
+L2 = 1e-8  # L2 regularisation
 SEED = 42
 ELEMENTS = [1, 6, 8]  # H, C, O — element order determines W/b stack
 ELEM_TO_IDX = {e: i for i, e in enumerate(ELEMENTS)}
