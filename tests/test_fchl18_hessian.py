@@ -7,6 +7,11 @@ where flat_row = atom_alpha*3 + mu,  flat_col = atom_beta*3 + nu.
 All tests use use_atm=False and cut_distance=1e6 (cutoff inactive).
 Numerical Hessians are computed via double central differences on
 kernel_gaussian with eps=5e-3 (found to be reliable in practice).
+
+Additional tests verify the chain:
+  Hessian = d/dR_B (Jacobian)
+i.e. the analytic Hessian matches central differences of
+kernel_gaussian_gradient with respect to B-side coordinates.
 """
 
 import copy
@@ -336,3 +341,166 @@ def test_hessian_use_atm_and_cutoff_matches_numerical():
     args["cut_start"] = 0.5
     args["cut_distance"] = 2.0
     _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, args, SIGMA, eps=1e-4)
+
+
+def test_hessian_transpose_symmetry_water_ammonia():
+    """H(A, B) == H(B, A).T  (asymmetric hessian transpose identity)."""
+    H_AB = kernel_mod.kernel_gaussian_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], sigma=SIGMA, **KERNEL_ARGS
+    )
+    H_BA = kernel_mod.kernel_gaussian_hessian(
+        [AMMONIA_COORDS], [AMMONIA_Z], [WATER_COORDS], [WATER_Z], sigma=SIGMA, **KERNEL_ARGS
+    )
+    np.testing.assert_allclose(
+        H_AB,
+        H_BA.T,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg=f"H(A,B) != H(B,A).T: max abs diff = {np.max(np.abs(H_AB - H_BA.T)):.3e}",
+    )
+
+
+def test_hessian_transpose_symmetry_batch():
+    """H(A, B) == H(B, A).T for batch of two molecules on each side."""
+    coords_A = [WATER_COORDS, HF_COORDS]
+    z_A = [WATER_Z, HF_Z]
+    coords_B = [AMMONIA_COORDS, METHANE_COORDS]
+    z_B = [AMMONIA_Z, METHANE_Z]
+
+    H_AB = kernel_mod.kernel_gaussian_hessian(
+        coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS
+    )
+    H_BA = kernel_mod.kernel_gaussian_hessian(
+        coords_B, z_B, coords_A, z_A, sigma=SIGMA, **KERNEL_ARGS
+    )
+    np.testing.assert_allclose(
+        H_AB,
+        H_BA.T,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg=f"batch H(A,B) != H(B,A).T: max abs diff = {np.max(np.abs(H_AB - H_BA.T)):.3e}",
+    )
+
+
+def test_hessian_transpose_symmetry_use_atm():
+    """H(A, B) == H(B, A).T holds with use_atm=True."""
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
+    H_AB = kernel_mod.kernel_gaussian_hessian(
+        [WATER_COORDS], [WATER_Z], [AMMONIA_COORDS], [AMMONIA_Z], sigma=SIGMA, **args
+    )
+    H_BA = kernel_mod.kernel_gaussian_hessian(
+        [AMMONIA_COORDS], [AMMONIA_Z], [WATER_COORDS], [WATER_Z], sigma=SIGMA, **args
+    )
+    np.testing.assert_allclose(
+        H_AB,
+        H_BA.T,
+        rtol=1e-10,
+        atol=1e-12,
+        err_msg=f"use_atm H(A,B) != H(B,A).T: max abs diff = {np.max(np.abs(H_AB - H_BA.T)):.3e}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hessian = d/dR_B(Jacobian) tests
+# ---------------------------------------------------------------------------
+
+
+def _numerical_hessian_from_jacobian(coords_A, z_A, coords_B, z_B, kernel_args, sigma, eps=5e-3):
+    """Central-difference Hessian by differentiating kernel_gaussian_gradient wrt R_B.
+
+    H_num[alpha*3+mu, beta*3+nu]
+      = (grad_A(B+eps)[alpha,mu] - grad_A(B-eps)[alpha,mu]) / (2*eps)
+
+    where grad_A(B) = kernel_gaussian_gradient(coords_A, z_A, x_B, n_B, nn_B)
+                    shape (n_atoms_A, 3, 1)  -- derivative wrt coords_A.
+    """
+    na = coords_A.shape[0]
+    nb = coords_B.shape[0]
+    D_A = na * 3
+    D_B = nb * 3
+    H_num = np.zeros((D_A, D_B), dtype=np.float64)
+
+    cut = kernel_args["cut_distance"]
+
+    for bnu in range(D_B):
+        beta, nu = divmod(bnu, 3)
+        B_p = coords_B.copy()
+        B_p[beta, nu] += eps
+        B_m = coords_B.copy()
+        B_m[beta, nu] -= eps
+
+        x_Bp, n_Bp, nn_Bp = _make_repr([B_p], [z_B], cut_distance=cut)
+        x_Bm, n_Bm, nn_Bm = _make_repr([B_m], [z_B], cut_distance=cut)
+
+        # kernel_gaussian_gradient(coords_A, z_A, x_B, n_B, nn_B, ...)
+        # returns dK[A_query, B_training]/dR_A, shape (n_atoms_A, 3, nm_B=1)
+        grad_p = kernel_mod.kernel_gaussian_gradient(
+            coords_A, z_A, x_Bp, n_Bp, nn_Bp, sigma=sigma, **kernel_args
+        )  # (n_atoms_A, 3, 1)
+        grad_m = kernel_mod.kernel_gaussian_gradient(
+            coords_A, z_A, x_Bm, n_Bm, nn_Bm, sigma=sigma, **kernel_args
+        )  # (n_atoms_A, 3, 1)
+
+        # d(grad_A)/d(R_B[beta,nu]) ~ (grad_p - grad_m) / (2*eps)
+        # flatten (n_atoms_A, 3) -> (D_A,)
+        H_num[:, bnu] = ((grad_p[:, :, 0] - grad_m[:, :, 0]) / (2.0 * eps)).reshape(D_A)
+
+    return H_num
+
+
+def _check_hessian_vs_jacobian(
+    coords_A, z_A, coords_B, z_B, kernel_args, sigma, eps=5e-3, rtol=5e-4, atol=1e-6
+):
+    """Check analytic Hessian == central-difference of Jacobian (gradient) wrt R_B."""
+    H_ana = _analytical_hessian([coords_A], [z_A], [coords_B], [z_B], kernel_args, sigma)
+    H_num = _numerical_hessian_from_jacobian(
+        coords_A, z_A, coords_B, z_B, kernel_args, sigma, eps=eps
+    )
+
+    assert H_ana.shape == H_num.shape, (
+        f"Shape mismatch: analytical {H_ana.shape} vs numerical {H_num.shape}"
+    )
+
+    np.testing.assert_allclose(
+        H_ana,
+        H_num,
+        rtol=rtol,
+        atol=atol,
+        err_msg=(
+            f"Hessian != d/dR_B(Jacobian).\n"
+            f"  max abs diff = {np.max(np.abs(H_ana - H_num)):.3e}\n"
+            f"  max rel diff = "
+            f"{np.max(np.abs((H_ana - H_num) / (np.abs(H_num) + 1e-12))):.3e}"
+        ),
+    )
+
+
+def test_hessian_equals_jacobian_derivative_water_vs_water():
+    """H[A,B] = d/dR_B(Jacobian): water vs water."""
+    _check_hessian_vs_jacobian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, KERNEL_ARGS, SIGMA)
+
+
+def test_hessian_equals_jacobian_derivative_water_vs_ammonia():
+    """H[A,B] = d/dR_B(Jacobian): water vs ammonia (different sizes).
+
+    Uses eps=1e-4 because the y-coordinate of N in ammonia has high curvature
+    near the C3v symmetry axis, requiring a smaller finite-difference step.
+    """
+    _check_hessian_vs_jacobian(
+        WATER_COORDS, WATER_Z, AMMONIA_COORDS, AMMONIA_Z, KERNEL_ARGS, SIGMA, eps=1e-4
+    )
+
+
+def test_hessian_equals_jacobian_derivative_hf_vs_water():
+    """H[A,B] = d/dR_B(Jacobian): HF (diatomic) vs water."""
+    _check_hessian_vs_jacobian(HF_COORDS, HF_Z, WATER_COORDS, WATER_Z, KERNEL_ARGS, SIGMA)
+
+
+def test_hessian_equals_jacobian_derivative_use_atm():
+    """H[A,B] = d/dR_B(Jacobian): use_atm=True, water vs ammonia."""
+    args = copy.copy(KERNEL_ARGS)
+    args["use_atm"] = True
+    _check_hessian_vs_jacobian(
+        WATER_COORDS, WATER_Z, AMMONIA_COORDS, AMMONIA_Z, args, SIGMA, eps=1e-4
+    )
