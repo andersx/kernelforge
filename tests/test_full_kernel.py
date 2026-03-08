@@ -34,7 +34,7 @@ from kernelforge.global_kernels import (
 
 
 def _load_ethanol(n: int):
-    """Load n ethanol structures and return X (n, M), dX (n, M, D)."""
+    """Load n ethanol structures and return X (n, M), dX (n, D, M)."""
     data = load_ethanol_raw_data()
     R = data["R"][:n]
 
@@ -45,7 +45,7 @@ def _load_ethanol(n: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n, M)  M=36
-    dX = np.array(dX_list, dtype=np.float64)  # (n, M, D)  D=27
+    dX = np.array(dX_list, dtype=np.float64)  # (n, D, M)  D=27
     return X, dX
 
 
@@ -81,7 +81,7 @@ def test_full_asymm_jacobian_block(N1, N2):
     sigma = 2.0
     X1, dX1 = _load_ethanol(N1)
     X2, dX2 = _load_ethanol(N2)
-    D1 = dX1.shape[2]
+    D1 = dX1.shape[1]
 
     K_full = kernel_gaussian_full(X1, dX1, X2, dX2, sigma)
     K_jac_ref = kernel_gaussian_jacobian(X1, dX1, X2, sigma)
@@ -101,7 +101,7 @@ def test_full_asymm_jacobian_t_block(N1, N2):
     sigma = 2.0
     X1, dX1 = _load_ethanol(N1)
     X2, dX2 = _load_ethanol(N2)
-    D2 = dX2.shape[2]
+    D2 = dX2.shape[1]
 
     K_full = kernel_gaussian_full(X1, dX1, X2, dX2, sigma)
     K_jt_ref = kernel_gaussian_jacobian_t(X1, X2, dX2, sigma)
@@ -159,7 +159,7 @@ def test_full_asymm_output_shape():
     sigma = 1.0
     X1, dX1 = _load_ethanol(N1)
     X2, dX2 = _load_ethanol(N2)
-    D1, D2 = dX1.shape[2], dX2.shape[2]
+    D1, D2 = dX1.shape[1], dX2.shape[1]
 
     K_full = kernel_gaussian_full(X1, dX1, X2, dX2, sigma)
     assert K_full.shape == (N1 * (1 + D1), N2 * (1 + D2)), (
@@ -240,7 +240,7 @@ def test_full_symm_jacobian_block(N):
     """Jacobian block of symmetric full kernel matches standalone kernel_gaussian_jacobian."""
     sigma = 2.0
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
 
     K_full = kernel_gaussian_full_symm(X, dX, sigma)
     K_jac_ref = kernel_gaussian_jacobian(X, dX, X, sigma)
@@ -277,7 +277,7 @@ def test_full_symm_hessian_block_lower_triangle(N):
     """Lower triangle of hessian block in symmetric full kernel matches hessian_symm."""
     sigma = 2.0
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
 
     K_full = kernel_gaussian_full_symm(X, dX, sigma)
     H_ref = kernel_gaussian_hessian_symm(X, dX, sigma)
@@ -317,7 +317,7 @@ def test_full_symm_output_shape():
     """Output shape is (N*(1+D), N*(1+D))."""
     N = 6
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
     K_full = kernel_gaussian_full_symm(X, dX, 2.0)
     BIG = N * (1 + D)
     assert K_full.shape == (BIG, BIG), f"Expected ({BIG},{BIG}), got {K_full.shape}"
@@ -334,7 +334,7 @@ def test_full_symm_matches_asymm():
     N = 8
     sigma = 2.0
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
     BIG = N * (1 + D)
 
     K_asymm = kernel_gaussian_full(X, dX, X, dX, sigma)
@@ -416,7 +416,7 @@ def test_full_symm_rfp_matches_full_symm(N):
     """
     sigma = 2.0
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
     BIG = N * (1 + D)
 
     K_symm = kernel_gaussian_full_symm(X, dX, sigma)
@@ -442,7 +442,7 @@ def test_full_symm_rfp_scalar_block(N):
     """Scalar diagonal in RFP full kernel == 1.0."""
     sigma = 2.0
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
     BIG = N * (1 + D)
 
     K_rfp = kernel_gaussian_full_symm_rfp(X, dX, sigma)
@@ -462,7 +462,7 @@ def test_full_symm_rfp_hessian_block(N):
     """Hessian block in unpacked RFP full kernel matches hessian_symm_rfp."""
     sigma = 2.0
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
     BIG = N * (1 + D)
 
     K_rfp = kernel_gaussian_full_symm_rfp(X, dX, sigma)
@@ -500,7 +500,7 @@ def test_full_symm_rfp_output_length():
     """RFP array length is BIG*(BIG+1)//2."""
     N = 6
     X, dX = _load_ethanol(N)
-    D = dX.shape[2]
+    D = dX.shape[1]
     BIG = N * (1 + D)
 
     K_rfp = kernel_gaussian_full_symm_rfp(X, dX, 2.0)
@@ -606,7 +606,7 @@ def _build_energy_force_labels(n: int):
         dX_list.append(dx)
 
     X = np.array(X_list, dtype=np.float64)  # (n, M)
-    dX = np.array(dX_list, dtype=np.float64)  # (n, M, D)
+    dX = np.array(dX_list, dtype=np.float64)  # (n, D, M)
 
     # Forces in representation-coordinate space: F_rep = F_cart @ (dX/dR)
     # dX shape (n, M, D): dX[i, m, d] = d(X[i,m])/d(coord_d)
@@ -633,7 +633,7 @@ def test_krr_full_rfp_regression(N_train):
     l2 = 1e-6
 
     X, dX, y_train = _build_energy_force_labels(N_train)
-    D = dX.shape[2]
+    D = dX.shape[1]
     BIG = N_train * (1 + D)
     assert y_train.shape == (BIG,), f"Label shape mismatch: {y_train.shape} vs ({BIG},)"
 

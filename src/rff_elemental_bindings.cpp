@@ -152,8 +152,8 @@ static py::array_t<double> py_rff_gradient_elemental(
 
     return py::array_t<double>(
         {static_cast<py::ssize_t>(D), static_cast<py::ssize_t>(ngrads)},
-        {static_cast<py::ssize_t>(ngrads * sizeof(double)), static_cast<py::ssize_t>(sizeof(double))
-        },
+        {static_cast<py::ssize_t>(ngrads * sizeof(double)),
+         static_cast<py::ssize_t>(sizeof(double))},
         Gptr,
         capsule
     );

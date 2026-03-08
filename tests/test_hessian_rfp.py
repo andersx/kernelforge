@@ -42,7 +42,7 @@ def test_rfp_memory_savings():
     """Test that RFP format saves approximately 50% memory."""
     N, M, D = 20, 10, 9
     X = np.random.randn(N, M)
-    dX = np.random.randn(N, M, D)
+    dX = np.random.randn(N, D, M)
     sigma = 1.5
 
     H_full = kernel_gaussian_hessian_symm(X, dX, sigma)
@@ -66,7 +66,7 @@ def test_rfp_values_match_full():
     N, M, D = 5, 8, 6
     np.random.seed(42)
     X = np.random.randn(N, M)
-    dX = np.random.randn(N, M, D)
+    dX = np.random.randn(N, D, M)
     sigma = 1.0
 
     # Compute both versions
@@ -92,7 +92,7 @@ def test_rfp_symmetry():
     N, M, D = 8, 5, 9
     np.random.seed(123)
     X = np.random.randn(N, M)
-    dX = np.random.randn(N, M, D)
+    dX = np.random.randn(N, D, M)
     sigma = 2.0
 
     H_rfp = kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
@@ -114,7 +114,7 @@ def test_rfp_different_sizes():
 
     for N, M, D in test_cases:
         X = np.random.randn(N, M)
-        dX = np.random.randn(N, M, D)
+        dX = np.random.randn(N, D, M)
         sigma = 1.0
 
         H_rfp = kernel_gaussian_hessian_symm_rfp(X, dX, sigma)
@@ -130,7 +130,7 @@ def test_rfp_with_tile_parameter():
     """Test RFP with different tile_B values."""
     N, M, D = 10, 6, 9
     X = np.random.randn(N, M)
-    dX = np.random.randn(N, M, D)
+    dX = np.random.randn(N, D, M)
     sigma = 1.5
 
     # Default tile
@@ -149,7 +149,7 @@ def test_rfp_invalid_inputs():
     """Test that RFP handles invalid inputs correctly."""
     N, M, D = 5, 4, 6
     X = np.random.randn(N, M)
-    dX = np.random.randn(N, M, D)
+    dX = np.random.randn(N, D, M)
 
     # Invalid sigma
     with pytest.raises(ValueError):

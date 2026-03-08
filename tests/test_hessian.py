@@ -14,17 +14,17 @@ def ref_block(
 ) -> NDArray[np.float64]:
     """
     Reference NumPy implementation for one (a,b) block:
-    H = (k/s^2) * J1^T J2 - (k/s^4) * (J1^T d) (J2^T d)^T
+    H = (k/s^2) * J1 J2^T - (k/s^4) * (J1 d) (J2 d)^T
     with d = x1 - x2, k = exp(-||d||^2/(2 s^2))
-    Shapes: x1(M,), J1(M,D1), x2(M,), J2(M,D2)
+    Shapes: x1(M,), J1(D1,M), x2(M,), J2(D2,M)
     Returns: (D1,D2)
     """
     s2 = sigma * sigma
     d = x1 - x2
     k = np.exp(-0.5 * (d @ d) / s2)
-    term1 = (k / s2) * (J1.T @ J2)
-    v1 = J1.T @ d
-    v2 = J2.T @ d
+    term1 = (k / s2) * (J1 @ J2.T)
+    v1 = J1 @ d
+    v2 = J2 @ d
     term2 = (k / (s2 * s2)) * (np.outer(v1, v2))
     result: NDArray[np.float64] = term1 - term2
     return result
@@ -43,15 +43,15 @@ def assemble_ref_full(
     """
     N1, _ = X1.shape
     N2, _ = X2.shape
-    D1 = dX1.shape[2]
-    D2 = dX2.shape[2]
+    D1 = dX1.shape[1]
+    D2 = dX2.shape[1]
     H = np.zeros((N1 * D1, N2 * D2), dtype=np.float64)
     for a in range(N1):
         x1 = X1[a]
-        J1 = dX1[a]  # (M,D1)
+        J1 = dX1[a]  # (D1,M)
         for b in range(N2):
             x2 = X2[b]
-            J2 = dX2[b]  # (M,D2)
+            J2 = dX2[b]  # (D2,M)
             H_block = ref_block(x1, J1, x2, J2, sigma)
             ra = a * D1
             cb = b * D2
@@ -70,8 +70,8 @@ def test_shapes_and_values(N1: int, N2: int, M: int, D1: int, D2: int) -> None:
     rng = np.random.default_rng(0)
     X1 = rng.normal(size=(N1, M))
     X2 = rng.normal(size=(N2, M))
-    dX1 = rng.normal(size=(N1, M, D1))
-    dX2 = rng.normal(size=(N2, M, D2))
+    dX1 = rng.normal(size=(N1, D1, M))
+    dX2 = rng.normal(size=(N2, D2, M))
     sigma = 0.7
 
     H = _kernels.kernel_gaussian_hessian(X1, dX1, X2, dX2, sigma)
@@ -88,8 +88,8 @@ def test_various_tile_sizes(tile_B: int) -> None:
     N1, N2, M, D1, D2 = 2, 5, 8, 3, 4
     X1 = rng.normal(size=(N1, M))
     X2 = rng.normal(size=(N2, M))
-    dX1 = rng.normal(size=(N1, M, D1))
-    dX2 = rng.normal(size=(N2, M, D2))
+    dX1 = rng.normal(size=(N1, D1, M))
+    dX2 = rng.normal(size=(N2, D2, M))
     sigma = 0.9
 
     # Call with explicit tile size (or None)

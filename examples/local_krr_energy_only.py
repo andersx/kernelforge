@@ -19,8 +19,7 @@ Kernel usage
                      shape (N_test*naq, N_train)  where naq = n_atoms*3
 
 The Jacobian-transpose kernel K_jact[i*naq+d, j] = dK(x_test_i, x_train_j)/d(coord_d_i),
-so K_jact @ alpha gives the gradient of the KRR energy prediction w.r.t. the
-test-set atomic coordinates (= predicted forces up to a sign convention).
+so -(K_jact @ alpha) gives predicted forces: forces = -dE/dR = -(dK/dR @ alpha).
 
 Dataset: ethanol MD17, FCHL19 representation.
 """
@@ -30,6 +29,14 @@ import time
 import numpy as np
 
 from kernelforge import kernelmath
+
+
+def linfit(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
+    """Return (slope, intercept) from least-squares fit of y_pred vs y_true."""
+    slope, intercept = np.polyfit(y_true.ravel(), y_pred.ravel(), 1)
+    return float(slope), float(intercept)
+
+
 from kernelforge.cli import load_ethanol_raw_data
 from kernelforge.fchl19_repr import generate_fchl_acsf_and_gradients
 from kernelforge.local_kernels import (
@@ -42,10 +49,10 @@ from kernelforge.local_kernels import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-N_TRAIN = 500
-N_TEST = 200
-SIGMA = 2.0
-L2 = 1e-8
+N_TRAIN = 400
+N_TEST = 50
+SIGMA = 100.0
+L2 = 1e-6
 ELEMENTS = [1, 6, 8]  # H, C, O
 
 
@@ -147,7 +154,11 @@ def main():
     K_tr_full = kernel_gaussian_symm(X_tr, Q_tr, N_tr, SIGMA)  # (N_train, N_train)
     E_tr_pred = K_tr_full @ alpha
     train_mae = np.mean(np.abs(E_tr_pred - E_tr))
-    print(f"\n[4] Training MAE (energy): {train_mae:.6f} kcal/mol")
+    slope_E_tr, intercept_E_tr = linfit(E_tr, E_tr_pred)
+    print(
+        f"\n[4] Training MAE (energy): {train_mae:.6f} kcal/mol"
+        f"  slope={slope_E_tr:.4f}  intercept={intercept_E_tr:.4f}"
+    )
 
     # ------------------------------------------------------------------
     # 5. Test prediction — energies
@@ -160,13 +171,13 @@ def main():
     # ------------------------------------------------------------------
     # 6. Test prediction — forces via Jacobian-transpose kernel
     #    K_jact shape: (N_test*naq, N_train)
-    #    K_jact @ alpha = dE_pred/dR_test;  forces = -dE/dR
+    #    K_jact returns +dK/dR;  forces = -dE/dR = -(K_jact @ alpha)
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
     K_te_jac = kernel_gaussian_jacobian_t(  # (N_test*naq, N_train)
         X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
-    F_te_pred = -(K_te_jac @ alpha).reshape(N_TEST, naq)
+    F_te_pred = (K_te_jac @ alpha).reshape(N_TEST, naq)
     print(f"    Force  prediction kernel built in {time.perf_counter() - t0:.4f}s")
 
     # ------------------------------------------------------------------
@@ -177,10 +188,18 @@ def main():
     E_te_c = E_te - E_te.mean()
     test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te))
+    slope_E_te, intercept_E_te = linfit(E_te_c, E_te_pred_c)
+    slope_F_te, intercept_F_te = linfit(F_te, F_te_pred)
 
     print(f"\n[7] Test results")
-    print(f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol")
-    print(f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)")
+    print(
+        f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol"
+        f"  slope={slope_E_te:.4f}  intercept={intercept_E_te:.4f}"
+    )
+    print(
+        f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)"
+        f"  slope={slope_F_te:.4f}  intercept={intercept_F_te:.4f}"
+    )
     print(f"    (Forces are predicted as gradients of the energy KRR model.)")
 
     print("\n" + "=" * 65 + "\nDone.\n" + "=" * 65)
