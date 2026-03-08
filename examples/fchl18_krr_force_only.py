@@ -39,24 +39,33 @@ from kernelforge.cli import load_ethanol_raw_data
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-N_TRAIN = 200
-N_TEST = 100
+N_TRAIN = 50
+N_TEST = 50
 SIGMA = 2.5
 L2 = 1e-4  # FCHL18 Hessian kernel is only numerically PSD; ~1e-4 is needed for Cholesky at N=200
 MAX_SIZE = 9  # ethanol has 9 atoms
 
 # Hessian kernel hyperparameters.
 KERNEL_ARGS: dict = dict(
-    two_body_width=0.1,
-    two_body_scaling=2.5,
-    two_body_power=4.5,
-    three_body_width=3.0,
-    three_body_scaling=1.5,
-    three_body_power=3.0,
+    two_body_scaling=np.sqrt(8),
+    three_body_scaling=1.6,
+    two_body_width=0.2,
+    three_body_width=np.pi,
+    two_body_power=4.0,
+    three_body_power=2.0,
     cut_start=1.0,
-    cut_distance=1e6,
+    cut_distance=5.0,
     fourier_order=1,
-    use_atm=False,
+    # two_body_width=0.1,
+    # two_body_scaling=2.5,
+    # two_body_power=4.5,
+    # three_body_width=3.0,
+    # three_body_scaling=1.5,
+    # three_body_power=3.0,
+    # cut_start=1.0,
+    # cut_distance=1e6,
+    # fourier_order=1,
+    use_atm=True,
 )
 
 
