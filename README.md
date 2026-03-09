@@ -70,7 +70,7 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 
 ```bash
 # Install Intel oneAPI Base Toolkit
-sudo apt install intel-basekit
+sudo apt install intel-oneapi-base-toolkit
 
 # Set up environment
 source /opt/intel/oneapi/setvars.sh
@@ -88,8 +88,8 @@ CC=icx CXX=icpx uv pip install -e .[test] --verbose
 I've rewritten a few of the kernels from the original QML code completely in C++.
 There are performance gains in most cases.
 These are primarily due to better use of BLAS routines for calculating, for example, Gramian sub-matrices with chunked DGEMM/DSYRK calls, etc.
-In the gradient and Hessian matrices there are also some algorithmic improvement and pre-computed terms.
-Memory usage might be a bit higher, but this could be optimized with more fine-graind chunking if needed.
+In the gradient and Hessian matrices there are also some algorithmic improvements and pre-computed terms.
+Memory usage might be a bit higher, but this could be optimized with more fine-grained chunking if needed.
 More is coming as I find the time ...
 
 Some speedups vs the original QML code are shown below:
@@ -97,8 +97,8 @@ Some speedups vs the original QML code are shown below:
 | Benchmark | QML [s] | Kernelforge [s] |
 |:---------------|------------:|--------------------:|
 | Upper triangle Gaussian kernel (16K x 16K) | 1.82 | 0.64 |
-| 1K FCHL19 descriptors (1K) | ? | 0.43 |
-| 1K FCHL19 descriptors+jacobian (1K) | ? | 0.62 |
+| 1K FCHL19 descriptors (1K) | N/A | 0.43 |
+| 1K FCHL19 descriptors+jacobian (1K) | N/A | 0.62 |
 | FCHL19 Local Gaussian scalar kernel (10K x 10K) | 76.81 | 18.15 |
 | FCHL19 Local Gaussian gradient kernel (1K x 2700K) | 32.54 | 1.52 |
 | FCHL19 Local Gaussian Hessian kernel (5400K x 5400K) | 29.68 | 2.05 |
@@ -136,16 +136,16 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Add FCHL19 descriptor with derivatives
   - [x] Add FCHL19 kernel Jacobian
   - [x] Add FCHL19 kernel Hessian (GDML-style)
-  - [ ] Improve FCHL19 kernel Jacobian performance (its poor)
+  - [ ] Improve FCHL19 kernel Jacobian performance (it's poor)
 - Finish the random Fourier features kernel and its Jacobian
   - [ ] Parallel random basis sampler
-  - [ ] RFF kernel for global descriptors
-  - [ ] SVD and QR solvers for rectangular matrices
-  - [ ] RFF kernel for local descriptors (FCHL19)
-  - [ ] RFF kernels with Cholesky solver and chunked DSYRK kernel updates
-  - [ ] RFF kernels with RFP format with chunked DSFRK kernel updates
-  - [ ] RFF kernel Jacobian for global descriptors
-  - [ ] RFF kernel Jacobian for local descriptors (FCHL19)
+  - [x] RFF kernel for global descriptors
+  - [x] SVD and QR solvers for rectangular matrices
+  - [x] RFF kernel for local descriptors (FCHL19)
+  - [x] RFF kernels with Cholesky solver and chunked DSYRK kernel updates
+  - [x] RFF kernels with RFP format with chunked DSFRK kernel updates
+  - [x] RFF kernel Jacobian for global descriptors
+  - [x] RFF kernel Jacobian for local descriptors (FCHL19)
 - [ ] Notebook with rMD17 random Fourier features examples
 
 - Science:
@@ -153,7 +153,7 @@ The goal is to remove pain-points of existing QML libraries
   - Both FCHL19 and inverse-distance matrix
 
 #### Todos:
-- Houskeeping:
+- Housekeeping:
   - [x] Pybind11 bindings and CMake build system
   - [x] Setup CI with GitHub Actions
   - [x] Rewrite existing kernels to C++ (no Fortran)
@@ -197,17 +197,17 @@ The goal is to remove pain-points of existing QML libraries
   - [ ] Full GPR kernel
   - [ ] Optimized GPR kernel with pre-computed terms for single inference/MD
 - FCHL18 support:
-  - [ ] Complete rewrite of FCHL18 analytical scalar kernel in C++
-  - [ ] Stretch goal 1: Add new analytical FCHL18 kernel Jacobian
-  - [ ] Stretch goal 2: Add new analytical FCHL18 kernel Hessian (+GPR/GDML-style)
+  - [x] Complete rewrite of FCHL18 analytical scalar kernel in C++
+  - [x] Stretch goal 1: Add new analytical FCHL18 kernel Jacobian
+  - [x] Stretch goal 2: Add new analytical FCHL18 kernel Hessian (+GPR/GDML-style)
   - [ ] Stretch goal 3: Attempt to optimize hyperparameters and cut-off functions
 - Add standard solvers:
   - [x] Cholesky in-place solver
     - [x] L2-reg kwarg
     - [x] Toggle destructive vs non-destructive
   - [x] RFP format in-place Cholesky solver
-  - [ ] QR and/or SVD for non-square matrices
-- Add moleular descriptors with derivatives:
+  - [x] QR and/or SVD for non-square matrices
+- Add molecular descriptors with derivatives:
   - [ ] Coulomb matrix + misc variants without derivatives
   - [x] FCHL19 + derivatives
   - [x] GDML-like inverse-distance matrix + derivatives
