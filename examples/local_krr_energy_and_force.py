@@ -37,9 +37,9 @@ from kernelforge.local_kernels import kernel_gaussian_full, kernel_gaussian_full
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-N_TRAIN = 500
+N_TRAIN = 1000
 N_TEST = 200
-SIGMA = 20.0
+SIGMA = 2.0
 L2 = 1e-9
 ELEMENTS = [1, 6, 8]  # H, C, O
 
@@ -56,11 +56,27 @@ def load_data(n_train: int, n_test: int):
 
     R = data["R"][:n_total]  # (n_total, 9, 3)
     E = data["E"][:n_total].ravel()  # (n_total,)
+    E = E - np.mean(E)  # zero-center energies for better numerical stability
     F = -data["F"][:n_total].reshape(n_total, -1)  # (n_total, naq=27)
 
     X_list, dX_list = [], []
     for r in R:
-        x, dx = generate_fchl_acsf_and_gradients(r, z, elements=ELEMENTS)
+      # x, dx = generate_fchl_acsf_and_gradients(r, z, elements=ELEMENTS)
+        x, dx = generate_fchl_acsf_and_gradients(                  
+            r, z,                                                  
+            elements=ELEMENTS,                                     
+            nRs2=13,                                               
+            nRs3=16,                                               
+            nFourier=2,                                            
+            eta2=2.664757627376702,                                
+            eta3=2.6588480261685987,                               
+            rcut=3.6433741741109893,                               
+            acut=8.942590456104261,                                
+            two_body_decay=1.0307535502842426,                     
+            three_body_decay=1.929616342566224,                    
+            three_body_weight=41.815151029954535,                  
+        )                                                          
+        
         X_list.append(x)
         dX_list.append(dx)
 

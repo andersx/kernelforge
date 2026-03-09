@@ -44,7 +44,7 @@ from kernelforge.kitchen_sinks import (
 # ---------------------------------------------------------------------------
 N_TRAIN = 500
 N_TEST = 200
-D_RFF = 2048  # number of random Fourier features
+D_RFF = 4096  # number of random Fourier features
 SIGMA = 20.0  # Gaussian kernel length-scale
 L2 = 1e-6  # L2 regularisation
 SEED = 42
@@ -195,13 +195,11 @@ def main():
     E_te_pred = y_te_pred[:N_TEST]
     F_te_pred = y_te_pred[N_TEST:].reshape(N_TEST, naq)
 
-    E_te_pred_c = E_te_pred - E_te_pred.mean()
-    E_te_c = E_te - E_te.mean()
-    test_mae_E = np.mean(np.abs(E_te_pred_c - E_te_c))
+    test_mae_E = np.mean(np.abs(E_te_pred - E_te))
     test_mae_F = np.mean(np.abs(F_te_pred - F_te))
 
     print(f"\n[6] Test results")
-    print(f"    Energy MAE (centred): {test_mae_E:.4f} kcal/mol")
+    print(f"    Energy MAE          : {test_mae_E:.4f} kcal/mol")
     print(f"    Force  MAE          : {test_mae_F:.4f} kcal/(mol·Å)")
 
     print("\n" + "=" * 65 + "\nDone.\n" + "=" * 65)
