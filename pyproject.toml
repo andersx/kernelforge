@@ -39,9 +39,6 @@ dev = [
     "pre-commit>=3.6.0",
     "qmllib",
 ]
-optimize = [
-    "optuna>=3.0",
-]
 
 [project.scripts]
 kernelbench = "kernelforge.cli:main"
@@ -52,9 +49,9 @@ Issues = "https://github.com/andersx/kernelforge/issues"
 
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = true
-wheel.packages = ["python/kernelforge"]
 cmake.build-type = "Release"
 build.verbose = true
+wheel.packages = ["python/kernelforge"]
 
 [tool.scikit-build.metadata.version]
 provider = "scikit_build_core.metadata.setuptools_scm"
