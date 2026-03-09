@@ -18,7 +18,7 @@ class BaseModel(ABC):
     Subclasses must implement _fit and _predict.  This base class handles:
       - Training mode inference from which of energies/forces are provided
       - Input validation and dtype coercion
-      - Energy mean-centering (subtracted before fit, added back after predict)
+      - Per-element energy baseline subtraction before fit, restored after predict
       - The save/load interface (delegating array serialization to subclasses)
     """
 
@@ -42,6 +42,10 @@ class BaseModel(ABC):
 
         Forces must be physical forces F = -dE/dR (NOT gradients +dE/dR).
         The sign convention is handled internally.
+
+        When energies are provided, a per-element energy baseline is fitted
+        via linear regression (E ~ sum_z count(z) * e_z) and subtracted
+        before training.  It is added back automatically at prediction time.
 
         Parameters
         ----------
@@ -72,13 +76,16 @@ class BaseModel(ABC):
         if forces is not None:
             F = _coerce_forces(forces)
 
-        # Centre energies — always subtract mean so the kernel doesn't have
-        # to fit a large constant offset.
+        # Fit and subtract per-element energy baseline when energies are available.
+        # For force-only training, store a zero baseline (no energies to regress).
         if E is not None:
-            self.energy_mean_: float = float(E.mean())
-            E = E - self.energy_mean_
+            baseline_elements, element_energies = _fit_element_baseline(z_list, E)
+            self.baseline_elements_: NDArray[np.int32] = baseline_elements
+            self.element_energies_: NDArray[np.float64] = element_energies
+            E = E - _build_composition_matrix(z_list, baseline_elements) @ element_energies
         else:
-            self.energy_mean_ = 0.0
+            self.baseline_elements_ = np.array([], dtype=np.int32)
+            self.element_energies_ = np.array([], dtype=np.float64)
 
         self._fit(coords_list, z_list, E, F)
         self.is_fitted_ = True
@@ -102,17 +109,18 @@ class BaseModel(ABC):
         -------
         energies : ndarray, shape (M,)
             Predicted molecular energies in the same units as training data.
-        forces : ndarray, shape (M, n_atoms*3) or (M, n_atoms, 3)
+        forces : ndarray, shape (M, n_atoms*3)
             Predicted physical forces F = -dE/dR.
-            Shape matches the per-molecule force shape used in training.
         """
         _check_fitted(self)
         coords_list, z_list = _validate_geometry(coords_list, z_list)
 
         E_pred, F_pred = self._predict(coords_list, z_list)
 
-        # Un-centre energies
-        E_pred = E_pred + self.energy_mean_
+        # Restore the per-element energy baseline.
+        if len(self.baseline_elements_) > 0:
+            A_te = _build_composition_matrix(z_list, self.baseline_elements_)
+            E_pred = E_pred + A_te @ self.element_energies_
 
         return E_pred, F_pred
 
@@ -171,7 +179,7 @@ class BaseModel(ABC):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-        """Internal predict. Returns (E_pred_centred, F_pred)."""
+        """Internal predict. Returns (E_pred_baseline_subtracted, F_pred)."""
 
     @abstractmethod
     def _arrays_to_save(self) -> dict[str, object]:
@@ -236,6 +244,43 @@ def _coerce_forces(
         fi = np.asarray(fi, dtype=np.float64)
         rows.append(fi.ravel())
     return np.array(rows, dtype=np.float64)
+
+
+def _build_composition_matrix(
+    z_list: list[NDArray[np.int32]],
+    elements: NDArray[np.int32],
+) -> NDArray[np.float64]:
+    """Build a composition matrix A of shape (n_mols, n_elements).
+
+    A[i, j] = number of atoms with nuclear charge elements[j] in molecule i.
+    """
+    n_mols = len(z_list)
+    n_elem = len(elements)
+    A = np.zeros((n_mols, n_elem), dtype=np.float64)
+    for i, z in enumerate(z_list):
+        for j, elem in enumerate(elements):
+            A[i, j] = float(np.sum(z == elem))
+    return A
+
+
+def _fit_element_baseline(
+    z_list: list[NDArray[np.int32]],
+    energies: NDArray[np.float64],
+) -> tuple[NDArray[np.int32], NDArray[np.float64]]:
+    """Fit per-element atomic energy contributions via least squares.
+
+    Solves  A @ e = energies  (no intercept) where A[i,j] is the count
+    of element j in molecule i.  Returns the unique elements (sorted) and
+    the fitted per-element energies.
+    """
+    elements: NDArray[np.int32] = np.array(
+        np.unique(np.concatenate([z.astype(np.int32) for z in z_list])),
+        dtype=np.int32,
+    )
+    A = _build_composition_matrix(z_list, elements)
+    # rcond=None uses the default (machine-precision) cutoff for singular values
+    e_raw, _residuals, _rank, _sv = np.linalg.lstsq(A, energies, rcond=None)
+    return elements, np.array(e_raw, dtype=np.float64)
 
 
 def _check_fitted(model: BaseModel) -> None:

@@ -22,6 +22,9 @@ which of `energies` / `forces` you pass to `fit`:
 
 Forces must be **physical forces** F = −dE/dR. Sign handling is done internally.
 
+Before fitting, a **per-element energy baseline** is automatically subtracted from
+the training energies and restored at prediction time (see below).
+
 ---
 
 ## Quick start
@@ -199,6 +202,34 @@ All three use the rMD17 ethanol dataset (split 01) and minimise
 uv pip install optuna
 uv run python examples/optimize_krr_fchl19.py --trials 100
 ```
+
+---
+
+## Per-element energy baseline
+
+When energies are provided, all three model classes automatically fit and subtract
+a composition-based energy baseline before training:
+
+```
+E_baseline[i] = sum_z  count(z, mol_i) * e_z
+```
+
+where `e_z` is the contribution per atom of element `z`, fitted by least-squares
+regression across all training molecules (no intercept term).
+
+This removes the dominant atom-count-dependent offset from the training targets,
+which improves both numerical conditioning of the kernel system and model accuracy.
+The baseline is added back automatically in `predict()`.
+
+After fitting, the baseline is accessible via:
+
+```python
+model.baseline_elements_   # int32 array of unique elements, sorted
+model.element_energies_    # float64 array of per-element energies, same order
+```
+
+For force-only training (no energies), both arrays are empty and no baseline
+is applied.
 
 ---
 

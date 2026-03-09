@@ -185,8 +185,6 @@ class FCHL18KRRModel(BaseModel):
                 x_te, self._x_tr, n_te, self._n_tr, nn_te, self._nn_tr, sigma=self.sigma, **kp
             )
             E_pred = K_e @ alpha
-            # Centre: energy-only model has no absolute offset
-            E_pred = E_pred - E_pred.mean()
 
             # Forces via per-molecule gradient kernel: G[n_atoms, 3, n_train]
             F_pred = np.zeros((n_test, naq), dtype=np.float64)
@@ -210,8 +208,6 @@ class FCHL18KRRModel(BaseModel):
                 self._R_tr, self._Z_tr, x_te, n_te, nn_te, sigma=self.sigma, **kp
             )
             E_pred = K_jt @ alpha
-            # Centre: force-only has no absolute energy offset
-            E_pred = E_pred - E_pred.mean()
 
         else:  # energy_and_force
             K_full = fchl18_kernel.kernel_gaussian_full(
@@ -244,7 +240,8 @@ class FCHL18KRRModel(BaseModel):
             "max_size": self.max_size,
             "kernel_params": json.dumps(self.kernel_params),
             "kp_fit": json.dumps(self._kp_fit),
-            "energy_mean": self.energy_mean_,
+            "baseline_elements": self.baseline_elements_,
+            "element_energies": self.element_energies_,
             "alpha": self._alpha,
             "x_tr": self._x_tr,
             "n_tr": self._n_tr,
@@ -259,7 +256,8 @@ class FCHL18KRRModel(BaseModel):
         self.max_size = int(data["max_size"])
         self.kernel_params = json.loads(str(data["kernel_params"]))
         self._kp_fit = json.loads(str(data["kp_fit"]))
-        self.energy_mean_ = float(data["energy_mean"])
+        self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
+        self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]
         self._alpha = data["alpha"]
         self._x_tr = data["x_tr"]

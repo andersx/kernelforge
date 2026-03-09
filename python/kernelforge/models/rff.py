@@ -183,8 +183,6 @@ class LocalRFFModel(BaseModel):
         if mode == "energy_only":
             Z_te = rff_features_elemental(X_te, Q_rff_te, W, b)  # (n_test, d_rff)
             E_pred = Z_te @ w
-            # Centre: energy-only has no absolute offset
-            E_pred = E_pred - E_pred.mean()
 
             G_te = rff_gradient_elemental(X_te, dX_te, Q_rff_te, W, b)  # (d_rff, n_test*naq)
             F_pred = (G_te.T @ w).reshape(n_test, naq)
@@ -195,8 +193,6 @@ class LocalRFFModel(BaseModel):
 
             Z_te = rff_features_elemental(X_te, Q_rff_te, W, b)  # (n_test, d_rff)
             E_pred = Z_te @ w
-            # Centre: force-only has no absolute energy offset
-            E_pred = E_pred - E_pred.mean()
 
         else:  # energy_and_force
             Z_full_te = rff_full_elemental(X_te, dX_te, Q_rff_te, W, b)  # (n_test*(1+naq), d_rff)
@@ -220,7 +216,8 @@ class LocalRFFModel(BaseModel):
             "seed": self.seed,
             "elements": np.array(self.elements, dtype=np.int32),
             "repr_params": json.dumps(self.repr_params),
-            "energy_mean": self.energy_mean_,
+            "baseline_elements": self.baseline_elements_,
+            "element_energies": self.element_energies_,
             "weights": self._weights,
             "W": self._W,
             "b": self._b,
@@ -233,7 +230,8 @@ class LocalRFFModel(BaseModel):
         self.seed = int(data["seed"])
         self.elements = data["elements"].tolist()
         self.repr_params = json.loads(str(data["repr_params"]))
-        self.energy_mean_ = float(data["energy_mean"])
+        self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
+        self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]
         self._weights = data["weights"]
         self._W = data["W"]

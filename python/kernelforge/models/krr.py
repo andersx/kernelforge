@@ -177,8 +177,6 @@ class LocalKRRModel(BaseModel):
             K_jt = local_kernels.kernel_gaussian_jacobian_t(
                 X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, self.sigma
             )
-            # Centre energy predictions (energy-only model has no absolute offset)
-            E_pred = E_pred - E_pred.mean()
             F_pred = -(K_jt @ alpha).reshape(n_test, naq)
 
         elif mode == "force_only":
@@ -195,8 +193,6 @@ class LocalKRRModel(BaseModel):
                 X_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
             )
             E_pred = -(K_j @ alpha)
-            # Centre: force-only model has no absolute energy offset
-            E_pred = E_pred - E_pred.mean()
 
         else:  # energy_and_force
             if dX_te is None or dX_tr is None:
@@ -224,7 +220,8 @@ class LocalKRRModel(BaseModel):
             "l2": self.l2,
             "elements": np.array(self.elements, dtype=np.int32),
             "repr_params": json.dumps(self.repr_params),
-            "energy_mean": self.energy_mean_,
+            "baseline_elements": self.baseline_elements_,
+            "element_energies": self.element_energies_,
             "alpha": self._alpha,
             "X_tr": self._X_tr,
             "Q_tr": self._Q_tr,
@@ -239,7 +236,8 @@ class LocalKRRModel(BaseModel):
         self.l2 = float(data["l2"])
         self.elements = data["elements"].tolist()
         self.repr_params = json.loads(str(data["repr_params"]))
-        self.energy_mean_ = float(data["energy_mean"])
+        self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
+        self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]
         self._alpha = data["alpha"]
         self._X_tr = data["X_tr"]

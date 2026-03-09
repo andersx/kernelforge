@@ -72,12 +72,15 @@ class TestLocalKRRModelEnergyOnly:
         np.testing.assert_allclose(E_load, E_orig, rtol=1e-10)
         np.testing.assert_allclose(F_load, F_orig, rtol=1e-10)
 
-    def test_energy_mean_restored(self, dataset: tuple) -> None:
-        """Predictions should include the training energy mean."""
+    def test_element_energies_fitted(self, dataset: tuple) -> None:
+        """Per-element energy baseline should be fitted and have the right shape."""
         coords_list, z_list, energies, _ = dataset
         model = LocalKRRModel(sigma=10.0, l2=1e-6, elements=ELEMENTS)
         model.fit(coords_list[:20], z_list[:20], energies=energies[:20])
-        assert model.energy_mean_ == pytest.approx(float(energies[:20].mean()))
+        # baseline_elements_ should be sorted unique elements in z_list
+        unique_z = sorted({int(zi) for z in z_list[:20] for zi in z})
+        assert list(model.baseline_elements_) == unique_z
+        assert model.element_energies_.shape == (len(unique_z),)
 
 
 # ---------------------------------------------------------------------------
