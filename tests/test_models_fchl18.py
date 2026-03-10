@@ -45,7 +45,7 @@ class TestFCHL18KRRModelEnergyOnly:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (8,)
-        assert F_pred.shape == (8, N_ATOMS * 3)
+        assert F_pred.shape == (8 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, energies, _ = dataset
@@ -86,7 +86,7 @@ class TestFCHL18KRRModelForceOnly:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (8,)
-        assert F_pred.shape == (8, N_ATOMS * 3)
+        assert F_pred.shape == (8 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, _, forces = dataset
@@ -137,7 +137,7 @@ class TestFCHL18KRRModelEnergyAndForce:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (8,)
-        assert F_pred.shape == (8, N_ATOMS * 3)
+        assert F_pred.shape == (8 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, energies, forces = dataset

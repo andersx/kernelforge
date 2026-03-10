@@ -42,7 +42,8 @@ class TestLocalRFFModelEnergyOnly:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (10,)
-        assert F_pred.shape == (10, N_ATOMS * 3)
+        # energy_only mode: forces are not predicted, returns empty (n_test, 0)
+        assert F_pred.shape == (10, 0)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, energies, _ = dataset
@@ -81,8 +82,10 @@ class TestLocalRFFModelEnergyOnly:
 
         E1, F1 = model1.predict(te, zte)
         E2, F2 = model2.predict(te, zte)
-        np.testing.assert_array_equal(E1, E2)
-        np.testing.assert_array_equal(F1, F2)
+        # Same seed → numerically identical up to floating-point non-determinism
+        # (MKL BLAS may reorder FP ops across runs); rtol=1e-6 is tight enough.
+        np.testing.assert_allclose(E1, E2, rtol=1e-6, atol=0)
+        np.testing.assert_allclose(F1, F2, rtol=1e-6, atol=0)
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +102,7 @@ class TestLocalRFFModelForceOnly:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (10,)
-        assert F_pred.shape == (10, N_ATOMS * 3)
+        assert F_pred.shape == (10 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, _, forces = dataset
@@ -139,7 +142,7 @@ class TestLocalRFFModelEnergyAndForce:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (10,)
-        assert F_pred.shape == (10, N_ATOMS * 3)
+        assert F_pred.shape == (10 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, energies, forces = dataset

@@ -99,7 +99,6 @@ class FCHL18KRRModel(BaseModel):
         # and cut_start >= 1.0 (ATM Hessian not implemented yet)
         kp = dict(self.kernel_params)
         if mode in ("force_only", "energy_and_force"):
-            kp["use_atm"] = False
             kp["cut_start"] = max(kp.get("cut_start", 1.0), 1.0)
 
         cut_distance = float(kp.get("cut_distance", 5.0))
@@ -127,6 +126,7 @@ class FCHL18KRRModel(BaseModel):
             )
             # Use kernelmath Cholesky for consistency; fall back to np.linalg.solve on failure
             K_tr[np.diag_indices_from(K_tr)] += self.l2
+            self._y_train = energies
             self._alpha = np.linalg.solve(K_tr, energies)
 
         elif mode == "force_only":
@@ -137,6 +137,7 @@ class FCHL18KRRModel(BaseModel):
             K_rfp = fchl18_kernel.kernel_gaussian_hessian_symm_rfp(
                 coords_f64, z_f64, sigma=self.sigma, **kp
             )
+            self._y_train = F_flat
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, F_flat, l2=self.l2)
 
         else:  # energy_and_force
@@ -151,7 +152,29 @@ class FCHL18KRRModel(BaseModel):
             y_tr = np.concatenate([energies, F_neg.ravel()])
             K = fchl18_kernel.kernel_gaussian_full_symm(coords_f64, z_f64, sigma=self.sigma, **kp)
             K[np.diag_indices_from(K)] += self.l2
+            self._y_train = y_tr
             self._alpha = np.linalg.solve(K, y_tr)
+
+    # ------------------------------------------------------------------
+    # Training score (cheap path — no kernel evaluation needed)
+    # ------------------------------------------------------------------
+
+    def _training_labels_and_predictions(
+        self,
+    ) -> dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]]:
+        # y_pred_train = y_train - l2 * alpha  (from (K + l2·I)·alpha = y_train)
+        y_pred = self._y_train - self.l2 * self._alpha
+        mode = self.training_mode_
+        n = self._n_train
+        if mode == "energy_only":
+            return {"energy": (self._y_train, y_pred)}
+        elif mode == "force_only":
+            return {"force": (self._y_train, y_pred)}
+        else:  # energy_and_force — y_train = [E; -F.ravel()], undo sign on forces
+            return {
+                "energy": (self._y_train[:n], y_pred[:n]),
+                "force": (-self._y_train[n:], -y_pred[n:]),
+            }
 
     # ------------------------------------------------------------------
     # Internal predict
@@ -170,10 +193,6 @@ class FCHL18KRRModel(BaseModel):
         coords_te = [np.asarray(r, dtype=np.float64) for r in coords_list]
         z_te = [np.asarray(z, dtype=np.int32) for z in z_list]
 
-        # Infer per-mol n_atoms for force reshaping (use first test mol's z)
-        n_atoms = len(z_te[0])
-        naq = n_atoms * 3
-
         alpha = self._alpha
 
         if mode == "energy_only":
@@ -186,19 +205,21 @@ class FCHL18KRRModel(BaseModel):
             )
             E_pred = K_e @ alpha
 
-            # Forces via per-molecule gradient kernel: G[n_atoms, 3, n_train]
-            F_pred = np.zeros((n_test, naq), dtype=np.float64)
-            for i, (coords_A, z_A) in enumerate(zip(coords_te, z_te, strict=True)):
+            # Forces via per-molecule gradient kernel: G[n_atoms_i, 3, n_train]
+            # Flat (sum(N_te)*3,) — works for variable-size molecules.
+            F_parts = []
+            for coords_A, z_A in zip(coords_te, z_te, strict=True):
                 G = fchl18_kernel.kernel_gaussian_gradient(
                     coords_A, z_A, self._x_tr, self._n_tr, self._nn_tr, sigma=self.sigma, **kp
-                )  # (n_atoms, 3, n_train)
-                F_pred[i] = -(G @ alpha).ravel()
+                )  # (n_atoms_i, 3, n_train)
+                F_parts.append(-(G @ alpha).ravel())
+            F_pred = np.concatenate(F_parts)
 
         elif mode == "force_only":
             K_hess = fchl18_kernel.kernel_gaussian_hessian(
                 coords_te, z_te, self._R_tr, self._Z_tr, sigma=self.sigma, **kp
             )
-            F_pred = (K_hess @ alpha).reshape(n_test, naq)
+            F_pred = K_hess @ alpha  # flat (sum(N_te)*3,)
 
             # Energy via Jacobian-transpose kernel: K_jt (n_test, n_train*naq)
             x_te, n_te, nn_te = fchl18_repr.generate(
@@ -215,8 +236,8 @@ class FCHL18KRRModel(BaseModel):
             )
             y_pred = K_full @ alpha
             E_pred = y_pred[:n_test]
-            # Negate back: training used -F as labels
-            F_pred = -y_pred[n_test:].reshape(n_test, naq)
+            # Negate back: training used -F as labels. Flat (sum(N_te)*3,).
+            F_pred = -y_pred[n_test:]
 
         return E_pred, F_pred
 
@@ -243,6 +264,7 @@ class FCHL18KRRModel(BaseModel):
             "baseline_elements": self.baseline_elements_,
             "element_energies": self.element_energies_,
             "alpha": self._alpha,
+            "y_train": self._y_train,
             "x_tr": self._x_tr,
             "n_tr": self._n_tr,
             "nn_tr": self._nn_tr,
@@ -260,6 +282,7 @@ class FCHL18KRRModel(BaseModel):
         self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]
         self._alpha = data["alpha"]
+        self._y_train = data["y_train"] if "y_train" in data else np.array([], dtype=np.float64)
         self._x_tr = data["x_tr"]
         self._n_tr = data["n_tr"]
         self._nn_tr = data["nn_tr"]

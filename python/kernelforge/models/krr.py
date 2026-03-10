@@ -104,6 +104,7 @@ class LocalKRRModel(BaseModel):
                 msg = "energies must be provided for energy_only mode"
                 raise ValueError(msg)
             K_rfp = local_kernels.kernel_gaussian_symm_rfp(X, Q_krr, N, self.sigma)
+            self._y_train = energies
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, energies, l2=self.l2)
 
         elif mode == "force_only":
@@ -115,6 +116,7 @@ class LocalKRRModel(BaseModel):
                 raise RuntimeError(msg)
             F_flat = forces.ravel()
             K_rfp = local_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, Q_krr, N, self.sigma)
+            self._y_train = F_flat
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, F_flat, l2=self.l2)
 
         else:  # energy_and_force
@@ -133,6 +135,7 @@ class LocalKRRModel(BaseModel):
             F_neg = -forces  # (n_train, n_atoms*3)  dE/dR = -F
             y_tr = np.concatenate([energies, F_neg.ravel()])
             K_rfp = local_kernels.kernel_gaussian_full_symm_rfp(X, dX, Q_krr, N, self.sigma)
+            self._y_train = y_tr
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, y_tr, l2=self.l2)
 
     # ------------------------------------------------------------------
@@ -146,18 +149,17 @@ class LocalKRRModel(BaseModel):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
 
-        # Always compute gradients: we predict forces in every mode, so dX_te is always needed.
+        # Gradients are only needed for force_only and energy_and_force modes.
+        need_grad = mode in ("force_only", "energy_and_force")
         X_te, dX_te, Q_te, _Q_rff_te, N_te = compute_fchl19(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=need_grad,
             repr_params=self.repr_params,
         )
 
         n_test = len(coords_list)
-        n_atoms = self._n_atoms
-        naq = n_atoms * 3
 
         X_tr = self._X_tr
         dX_tr = self._dX_tr
@@ -168,16 +170,8 @@ class LocalKRRModel(BaseModel):
         if mode == "energy_only":
             K_e = local_kernels.kernel_gaussian(X_te, X_tr, Q_te, Q_tr, N_te, N_tr, self.sigma)
             E_pred = K_e @ alpha  # (n_test,)
-
-            # Forces via Jacobian-transpose kernel: K_jt[i*naq+d, j] = dK(i,j)/dR_i[d]
-            # physical forces = -dE/dR = -(K_jt @ alpha)
-            if dX_te is None:
-                msg = "dX_te is None — internal error"
-                raise RuntimeError(msg)
-            K_jt = local_kernels.kernel_gaussian_jacobian_t(
-                X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, self.sigma
-            )
-            F_pred = -(K_jt @ alpha).reshape(n_test, naq)
+            # Forces are not predicted in energy_only mode — return empty array.
+            F_pred = np.empty((n_test, 0), dtype=np.float64)
 
         elif mode == "force_only":
             if dX_te is None or dX_tr is None:
@@ -186,7 +180,7 @@ class LocalKRRModel(BaseModel):
             K_hess = local_kernels.kernel_gaussian_hessian(
                 X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
             )
-            F_pred = (K_hess @ alpha).reshape(n_test, naq)
+            F_pred = K_hess @ alpha  # flat (sum(N_te)*3,)
 
             # Energy via Jacobian kernel: K_j[i, j*naq+d] = dK(i,j)/dR_j[d]
             K_j = local_kernels.kernel_gaussian_jacobian(
@@ -201,12 +195,34 @@ class LocalKRRModel(BaseModel):
             K_full = local_kernels.kernel_gaussian_full(
                 X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
             )
-            y_pred = K_full @ alpha  # (n_test*(1+naq),)
+            y_pred = K_full @ alpha  # (n_test + sum(N_te)*3,)
             E_pred = y_pred[:n_test]
-            # Negate back: we stored -F as training labels, so predictions are -F_pred
-            F_pred = -y_pred[n_test:].reshape(n_test, naq)
+            # Negate back: we stored -F as training labels, so predictions are -F_pred.
+            # Return flat (sum(N_te)*3,) — works for both fixed- and variable-size molecules.
+            F_pred = -y_pred[n_test:]
 
         return E_pred, F_pred
+
+    # ------------------------------------------------------------------
+    # Training score (cheap path — no kernel evaluation needed)
+    # ------------------------------------------------------------------
+
+    def _training_labels_and_predictions(
+        self,
+    ) -> dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]]:
+        # y_pred_train = y_train - l2 * alpha  (from (K + l2·I)·alpha = y_train)
+        y_pred = self._y_train - self.l2 * self._alpha
+        mode = self.training_mode_
+        n = self._n_train
+        if mode == "energy_only":
+            return {"energy": (self._y_train, y_pred)}
+        elif mode == "force_only":
+            return {"force": (self._y_train, y_pred)}
+        else:  # energy_and_force — y_train = [E; -F.ravel()], undo sign on forces
+            return {
+                "energy": (self._y_train[:n], y_pred[:n]),
+                "force": (-self._y_train[n:], -y_pred[n:]),
+            }
 
     # ------------------------------------------------------------------
     # Save / load
@@ -223,6 +239,7 @@ class LocalKRRModel(BaseModel):
             "baseline_elements": self.baseline_elements_,
             "element_energies": self.element_energies_,
             "alpha": self._alpha,
+            "y_train": self._y_train,
             "X_tr": self._X_tr,
             "Q_tr": self._Q_tr,
             "N_tr": self._N_tr,
@@ -240,6 +257,7 @@ class LocalKRRModel(BaseModel):
         self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]
         self._alpha = data["alpha"]
+        self._y_train = data["y_train"] if "y_train" in data else np.array([], dtype=np.float64)
         self._X_tr = data["X_tr"]
         self._Q_tr = data["Q_tr"]
         self._N_tr = data["N_tr"]

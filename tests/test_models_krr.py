@@ -46,7 +46,8 @@ class TestLocalKRRModelEnergyOnly:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (10,)
-        assert F_pred.shape == (10, N_ATOMS * 3)
+        # energy_only mode: forces are not predicted, returns empty (n_test, 0)
+        assert F_pred.shape == (10, 0)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, energies, _ = dataset
@@ -97,7 +98,7 @@ class TestLocalKRRModelForceOnly:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (10,)
-        assert F_pred.shape == (10, N_ATOMS * 3)
+        assert F_pred.shape == (10 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, _, forces = dataset
@@ -137,7 +138,7 @@ class TestLocalKRRModelEnergyAndForce:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (10,)
-        assert F_pred.shape == (10, N_ATOMS * 3)
+        assert F_pred.shape == (10 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, energies, forces = dataset
@@ -170,7 +171,7 @@ class TestLocalKRRModelEnergyAndForce:
         model.fit(coords_list[:10], z_list[:10], energies=energies[:10], forces=forces_3d)
         E_pred, F_pred = model.predict(coords_list[10:12], z_list[10:12])
         assert E_pred.shape == (2,)
-        assert F_pred.shape == (2, N_ATOMS * 3)
+        assert F_pred.shape == (2 * N_ATOMS * 3,)
 
 
 # ---------------------------------------------------------------------------

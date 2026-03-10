@@ -14,8 +14,12 @@ LocalRFFModel
 FCHL18KRRModel
     FCHL18 analytical Kernel Ridge Regression. Same training modes but uses
     the FCHL18 kernel which operates on raw Cartesian coordinates.
+ModelScore
+    Dataclass returned by model.score() containing MAE, Pearson r, slope,
+    and intercept for energy and/or force predictions.
 """
 
+from .base import ModelScore as ModelScore
 from .fchl18_krr import FCHL18KRRModel as FCHL18KRRModel
 from .krr import LocalKRRModel as LocalKRRModel
 from .rff import LocalRFFModel as LocalRFFModel
