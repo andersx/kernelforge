@@ -40,6 +40,7 @@ from numpy.typing import NDArray
 
 from kernelforge.cli import load_qm7b_raw_data
 from kernelforge.models import FCHL18KRRModel, LocalKRRModel, LocalRFFModel
+from kernelforge.models.base import _coerce_forces, _compute_score
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -575,12 +576,21 @@ def run(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 4. Score on test set
     # ------------------------------------------------------------------
-    score_energies = E_te if args.mode in ("energy_only", "energy_and_force") else None
-    score_forces = F_te if args.mode in ("force_only", "energy_and_force") else None
-
+    # Always score energies when available. For forces: score whenever reference
+    # forces exist and the model produced non-empty predictions. FCHL18 energy_only
+    # predicts forces via the gradient kernel; LocalKRR/RFF energy_only returns an
+    # empty array. We call predict() once and compute scores directly to avoid the
+    # base.score() guard that blocks force scoring in energy_only mode.
     t0 = time.perf_counter()
-    test_scores = model.score(coords_te, z_te, energies=score_energies, forces=score_forces)
+    E_pred, F_pred = model.predict(coords_te, z_te)
     score_time = time.perf_counter() - t0
+
+    test_scores: dict[str, object] = {}
+    if args.mode in ("energy_only", "energy_and_force"):
+        test_scores["energy"] = _compute_score(E_te, E_pred)
+    if F_te is not None and F_pred.size > 0:
+        F_ref = _coerce_forces(F_te)
+        test_scores["force"] = _compute_score(F_ref, F_pred)
 
     print(f"\n[3] Test set ({len(E_te)} molecules, scored in {score_time:.2f}s)")
     if "energy" in test_scores:
