@@ -15,6 +15,14 @@ Usage examples::
     kernelcli --dataset small_mols_mini --regressor krr --representation fchl18 \\
               --mode energy_and_force --sigma 2.5 --l2 1e-4
 
+Representation/kernel parameters can be overridden with ``--repr-param KEY=VALUE``
+(repeatable).  For FCHL19 these map to ``repr_params``; for FCHL18 they map to
+``kernel_params``.  Values are auto-cast to int, float, bool, or str::
+
+    kernelcli --dataset rmd17_ethanol --repr-param rcut=6.0 --repr-param nRs2=32
+    kernelcli --dataset rmd17_ethanol --representation fchl18 \\
+              --repr-param cut_distance=8.0 --repr-param two_body_width=0.15
+
 Entry point registered as ``kernelcli`` in pyproject.toml.
 """
 
@@ -62,6 +70,49 @@ SMALL_MOLS_TRAIN_NPZ = _EXAMPLES_DIR / "small_mols_mini_train.npz"
 SMALL_MOLS_TEST_NPZ = _EXAMPLES_DIR / "small_mols_mini_test.npz"
 
 VALID_DATASETS = ["qm7b", "small_mols_mini"] + [f"rmd17_{m}" for m in RMD17_MOLECULES]
+
+
+# ---------------------------------------------------------------------------
+# Repr/kernel param parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_repr_params(raw: list[str] | None) -> dict[str, Any]:
+    """Parse a list of ``KEY=VALUE`` strings into a typed dict.
+
+    Values are cast in order: int -> float -> bool (true/false) -> str.
+
+    Examples
+    --------
+    >>> _parse_repr_params(["nRs2=32", "rcut=6.0", "use_atm=false"])
+    {'nRs2': 32, 'rcut': 6.0, 'use_atm': False}
+    """
+    if not raw:
+        return {}
+    result: dict[str, Any] = {}
+    for item in raw:
+        if "=" not in item:
+            msg = f"--repr-param must be KEY=VALUE, got: {item!r}"
+            raise ValueError(msg)
+        key, _, val_str = item.partition("=")
+        key = key.strip()
+        val_str = val_str.strip()
+        # Try int first, then float, then bool, then keep as str
+        parsed: int | float | bool | str
+        try:
+            parsed = int(val_str)
+        except ValueError:
+            try:
+                parsed = float(val_str)
+            except ValueError:
+                if val_str.lower() == "true":
+                    parsed = True
+                elif val_str.lower() == "false":
+                    parsed = False
+                else:
+                    parsed = val_str
+        result[key] = parsed
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -258,8 +309,11 @@ def _build_model(
     seed: int,
     z_tr: list[NDArray[np.int32]],
     z_te: list[NDArray[np.int32]],
+    repr_params: dict[str, Any] | None = None,
 ) -> LocalKRRModel | LocalRFFModel | FCHL18KRRModel:
     """Construct and return the appropriate model instance."""
+    repr_params = repr_params or {}
+
     # Auto-detect elements from training data if not overridden
     if elements is None:
         all_z = np.unique(np.concatenate([z.astype(np.int32) for z in z_tr]))
@@ -270,13 +324,23 @@ def _build_model(
         max_size = max(len(z) for z in z_tr + z_te)
 
     if representation == "fchl18":
-        return FCHL18KRRModel(sigma=sigma, l2=l2, max_size=max_size)
+        # repr_params override kernel_params for FCHL18
+        return FCHL18KRRModel(
+            sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
+        )
 
-    # FCHL19 — KRR or RFF
+    # FCHL19 — KRR or RFF; repr_params forwarded to generate_fchl_acsf[_and_gradients]
     if regressor == "krr":
-        return LocalKRRModel(sigma=sigma, l2=l2, elements=elements)
+        return LocalKRRModel(sigma=sigma, l2=l2, elements=elements, repr_params=repr_params or None)
     # rff
-    return LocalRFFModel(sigma=sigma, l2=l2, d_rff=d_rff, seed=seed, elements=elements)
+    return LocalRFFModel(
+        sigma=sigma,
+        l2=l2,
+        d_rff=d_rff,
+        seed=seed,
+        elements=elements,
+        repr_params=repr_params or None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +363,10 @@ def _print_header(args: argparse.Namespace) -> None:
         print(f"  d_rff          : {args.d_rff}")
     if args.dataset.startswith("rmd17_"):
         print(f"  split          : {args.split}")
+    parsed_rp = _parse_repr_params(args.repr_param)
+    if parsed_rp:
+        for k, v in parsed_rp.items():
+            print(f"  repr-param     : {k}={v}")
     print("=" * 62)
 
 
@@ -387,6 +455,22 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Save fitted model to .npz file.",
     )
+    p.add_argument(
+        "--repr-param",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help=(
+            "Override a representation or kernel parameter (repeatable). "
+            "Values are auto-cast to int/float/bool/str. "
+            "For FCHL19: nRs2, nRs3, nFourier, eta2, eta3, zeta, rcut, acut, "
+            "two_body_decay, three_body_decay, three_body_weight. "
+            "For FCHL18: two_body_width, three_body_width, cut_distance, "
+            "two_body_scaling, three_body_scaling, two_body_power, "
+            "three_body_power, cut_start, fourier_order, use_atm. "
+            "Example: --repr-param rcut=6.0 --repr-param nRs2=32"
+        ),
+    )
     return p
 
 
@@ -448,6 +532,7 @@ def run(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 2. Build model
     # ------------------------------------------------------------------
+    repr_params = _parse_repr_params(args.repr_param)
     model = _build_model(
         regressor=args.regressor,
         representation=args.representation,
@@ -459,6 +544,7 @@ def run(args: argparse.Namespace) -> None:
         seed=args.seed,
         z_tr=z_tr,
         z_te=z_te,
+        repr_params=repr_params,
     )
     print(f"\n[2] Model: {type(model).__name__}")
 

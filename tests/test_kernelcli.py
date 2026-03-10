@@ -11,6 +11,7 @@ import pytest
 from kernelforge.kernelcli import (
     _build_model,
     _build_parser,
+    _parse_repr_params,
     _validate,
     load_small_mols_mini,
     run,
@@ -232,6 +233,7 @@ def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
         "elements": None,
         "max_size": None,
         "save": None,
+        "repr_param": None,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -285,4 +287,87 @@ class TestRunIntegration:
     def test_max_size_override(self, capsys):
         run(_make_args(representation="fchl18", sigma=2.5, l2=1e-4, max_size=25))
         out = capsys.readouterr().out
+        assert "Done" in out
+
+
+# ---------------------------------------------------------------------------
+# _parse_repr_params
+# ---------------------------------------------------------------------------
+
+
+class TestParseReprParams:
+    def test_empty(self):
+        assert _parse_repr_params(None) == {}
+        assert _parse_repr_params([]) == {}
+
+    def test_int(self):
+        assert _parse_repr_params(["nRs2=32"]) == {"nRs2": 32}
+        assert isinstance(_parse_repr_params(["nRs2=32"])["nRs2"], int)
+
+    def test_float(self):
+        assert _parse_repr_params(["rcut=6.0"]) == {"rcut": 6.0}
+        assert isinstance(_parse_repr_params(["rcut=6.0"])["rcut"], float)
+
+    def test_bool_true(self):
+        assert _parse_repr_params(["use_atm=true"]) == {"use_atm": True}
+        assert _parse_repr_params(["use_atm=True"]) == {"use_atm": True}
+
+    def test_bool_false(self):
+        assert _parse_repr_params(["use_atm=false"]) == {"use_atm": False}
+        assert _parse_repr_params(["use_atm=False"]) == {"use_atm": False}
+
+    def test_str_fallback(self):
+        result = _parse_repr_params(["name=gaussian"])
+        assert result == {"name": "gaussian"}
+        assert isinstance(result["name"], str)
+
+    def test_multiple(self):
+        result = _parse_repr_params(["nRs2=32", "rcut=6.0", "use_atm=false"])
+        assert result == {"nRs2": 32, "rcut": 6.0, "use_atm": False}
+
+    def test_missing_equals_raises(self):
+        with pytest.raises(ValueError, match="KEY=VALUE"):
+            _parse_repr_params(["nRs2"])
+
+    def test_argparse_repr_param_flag(self):
+        """--repr-param is parsed as a list by argparse."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--repr-param",
+                "nRs2=32",
+                "--repr-param",
+                "rcut=6.0",
+            ]
+        )
+        assert args.repr_param == ["nRs2=32", "rcut=6.0"]
+
+
+# ---------------------------------------------------------------------------
+# run() with repr_param
+# ---------------------------------------------------------------------------
+
+
+class TestRunReprParam:
+    def test_fchl19_repr_param_rcut(self, capsys):
+        """FCHL19 with a custom rcut should run without error."""
+        run(_make_args(repr_param=["rcut=6.0", "nRs2=16"]))
+        out = capsys.readouterr().out
+        assert "repr-param" in out
+        assert "Done" in out
+
+    def test_fchl18_repr_param_cut_distance(self, capsys):
+        """FCHL18 kernel_params overridden via --repr-param."""
+        run(
+            _make_args(
+                representation="fchl18",
+                sigma=2.5,
+                l2=1e-4,
+                repr_param=["cut_distance=6.0"],
+            )
+        )
+        out = capsys.readouterr().out
+        assert "repr-param" in out
         assert "Done" in out
