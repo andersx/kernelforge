@@ -99,6 +99,7 @@ class FCHL18KRRModel(BaseModel):
         # and cut_start >= 1.0 (ATM Hessian not implemented yet)
         kp = dict(self.kernel_params)
         if mode in ("force_only", "energy_and_force"):
+            kp["use_atm"] = False
             kp["cut_start"] = max(kp.get("cut_start", 1.0), 1.0)
 
         cut_distance = float(kp.get("cut_distance", 5.0))
