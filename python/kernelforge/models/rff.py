@@ -223,7 +223,7 @@ class LocalRFFModel(BaseModel):
             E_pred = Z_te @ w
             # Forces via gradient features: F = -dE/dR
             G_te = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b)  # (d_rff, n_test*naq)
-            F_pred = (G_te.T @ w)  # flat (sum(N_te)*3,)
+            F_pred = G_te.T @ w  # flat (sum(N_te)*3,)
 
         elif mode == "force_only":
             if dX_te is None:

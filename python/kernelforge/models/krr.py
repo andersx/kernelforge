@@ -177,7 +177,7 @@ class LocalKRRModel(BaseModel):
             K_jt = local_kernels.kernel_gaussian_jacobian_t(
                 X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, self.sigma
             )
-            F_pred = (K_jt @ alpha)  # flat (sum(N_te)*3,)
+            F_pred = K_jt @ alpha  # flat (sum(N_te)*3,)
 
         elif mode == "force_only":
             if dX_te is None or dX_tr is None:
