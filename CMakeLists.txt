@@ -206,6 +206,10 @@ kf_add_cpp_module(fchl19_repr
   SOURCES  src/fchl19_repr.cpp
   BINDINGS src/fchl19_repr_bindings.cpp)
 
+kf_add_cpp_module(fchl19v2_repr
+  SOURCES  src/fchl19v2_repr.cpp
+  BINDINGS src/fchl19v2_repr_bindings.cpp)
+
 kf_add_cpp_module(invdist_repr
   SOURCES  src/invdist_repr.cpp
   BINDINGS src/invdist_repr_bindings.cpp)
