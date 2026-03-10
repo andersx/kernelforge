@@ -46,8 +46,8 @@ class TestLocalKRRModelEnergyOnly:
 
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (10,)
-        # energy_only mode: forces are not predicted, returns empty (n_test, 0)
-        assert F_pred.shape == (10, 0)
+        # energy_only mode: forces predicted via Jacobian kernel, flat (n_test*N_ATOMS*3,)
+        assert F_pred.shape == (10 * N_ATOMS * 3,)
 
     def test_training_mode_inferred(self, dataset: tuple) -> None:
         coords_list, z_list, energies, _ = dataset
