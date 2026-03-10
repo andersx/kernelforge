@@ -42,6 +42,7 @@ dev = [
 
 [project.scripts]
 kernelbench = "kernelforge.cli:main"
+kernelcli = "kernelforge.kernelcli:main"
 
 [project.urls]
 Homepage = "https://github.com/andersx/kernelforge"
@@ -118,5 +119,8 @@ ignore = [
 ]
 
 "python/kernelforge/cli.py" = [
+    "T201",   # Print statements (CLI tool)
+]
+"python/kernelforge/kernelcli.py" = [
     "T201",   # Print statements (CLI tool)
 ]
