@@ -91,13 +91,12 @@ class LocalRFFModel(BaseModel):
         forces: NDArray[np.float64] | None,
     ) -> None:
         mode = self.training_mode_
-        need_grad = mode in ("force_only", "energy_and_force")
 
         X, dX, _Q_krr, Q_rff, _N = compute_fchl19(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=need_grad,
+            with_gradients=True,
             repr_params=self.repr_params,
         )
 
@@ -198,12 +197,11 @@ class LocalRFFModel(BaseModel):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
 
-        need_grad = mode in ("force_only", "energy_and_force")
         X_te, dX_te, _Q_krr_te, Q_rff_te, _N_te = compute_fchl19(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=need_grad,
+            with_gradients=True,
             repr_params=self.repr_params,
         )
 
@@ -215,10 +213,17 @@ class LocalRFFModel(BaseModel):
         w = self._weights
 
         if mode == "energy_only":
+            if dX_te is None:
+                msg = "dX_te is None in energy_only predict — internal error"
+                raise RuntimeError(msg)
+            dX_te_5d: NDArray[np.float64] = dX_te.reshape(
+                n_test, n_atoms_te, rep_size_te, n_atoms_te, 3
+            )
             Z_te = rff_features_elemental(X_te, Q_rff_te, W, b)  # (n_test, d_rff)
             E_pred = Z_te @ w
-            # Forces are not predicted in energy_only mode — return empty array.
-            F_pred = np.empty((n_test, 0), dtype=np.float64)
+            # Forces via gradient features: F = -dE/dR
+            G_te = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b)  # (d_rff, n_test*naq)
+            F_pred = G_te.T @ w  # flat (sum(N_te)*3,)
 
         elif mode == "force_only":
             if dX_te is None:

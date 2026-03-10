@@ -79,13 +79,12 @@ class LocalKRRModel(BaseModel):
         forces: NDArray[np.float64] | None,
     ) -> None:
         mode = self.training_mode_
-        need_grad = mode in ("force_only", "energy_and_force")
 
         X, dX, Q_krr, _Q_rff, N = compute_fchl19(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=need_grad,
+            with_gradients=True,
             repr_params=self.repr_params,
         )
 
@@ -149,13 +148,13 @@ class LocalKRRModel(BaseModel):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
 
-        # Gradients are only needed for force_only and energy_and_force modes.
-        need_grad = mode in ("force_only", "energy_and_force")
+        # Gradients are needed for all modes: force_only and energy_and_force need
+        # them directly; energy_only uses the Jacobian kernel to also predict forces.
         X_te, dX_te, Q_te, _Q_rff_te, N_te = compute_fchl19(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=need_grad,
+            with_gradients=True,
             repr_params=self.repr_params,
         )
 
@@ -168,10 +167,17 @@ class LocalKRRModel(BaseModel):
         alpha = self._alpha
 
         if mode == "energy_only":
+            if dX_te is None:
+                msg = "dX_te is None in energy_only predict — internal error"
+                raise RuntimeError(msg)
             K_e = local_kernels.kernel_gaussian(X_te, X_tr, Q_te, Q_tr, N_te, N_tr, self.sigma)
             E_pred = K_e @ alpha  # (n_test,)
-            # Forces are not predicted in energy_only mode — return empty array.
-            F_pred = np.empty((n_test, 0), dtype=np.float64)
+            # Forces via transposed Jacobian kernel: dK/dR_te, shape (n_test*naq, n_train)
+            # F = -dE/dR = -(K_jt @ alpha), flat (sum(N_te)*3,)
+            K_jt = local_kernels.kernel_gaussian_jacobian_t(
+                X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, self.sigma
+            )
+            F_pred = K_jt @ alpha  # flat (sum(N_te)*3,)
 
         elif mode == "force_only":
             if dX_te is None or dX_tr is None:
