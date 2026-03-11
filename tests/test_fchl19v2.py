@@ -753,3 +753,154 @@ class TestA5CosineSplitRNoATM:
                 rm = _m.generate(cm, Z_CH2, **kw)
                 fd_grad[:, :, a * 3 + d] = (rp - rm) / (2.0 * h)
         np.testing.assert_allclose(grad, fd_grad, rtol=5e-6, atol=5e-8)
+
+
+# ---------------------------------------------------------------------------
+# A6 — OddFourier + ElementResolved three-body
+# ---------------------------------------------------------------------------
+
+
+class TestA6OddFourierElementResolved:
+    TB = "log_normal"
+    AB = "odd_fourier_element_resolved"
+
+    def kw(self, **overrides: Any) -> dict[str, Any]:
+        return {**SPLITR_KW, "two_body_type": self.TB, "three_body_type": self.AB, **overrides}
+
+    def test_shape(self) -> None:
+        kw = self.kw()
+        rep = _m.generate(COORDS_CH2, Z_CH2, **kw)
+        n = len(Z_CH2)
+        nelements = len(kw["elements"])
+        nabasis = 2 * kw["nFourier"]
+        nRs3 = kw["nRs3"]
+        nRs3_minus = kw["nRs3_minus"]
+        # diagonal (B==C) blocks + off-diagonal ordered (B!=C) blocks
+        three_body_size = (
+            nelements * nRs3 * nRs3_minus * nabasis
+            + nelements * (nelements - 1) * nRs3 * nRs3 * nabasis
+        )
+        expected = nelements * kw["nRs2"] + three_body_size
+        assert rep.shape == (n, expected)
+
+    def test_translation_invariance(self) -> None:
+        kw = self.kw()
+        coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 0.8, 0.0]], dtype=np.float64)
+        z = np.array([1, 1, 1], dtype=np.int32)
+        rep1 = _m.generate(
+            coords, z, elements=[1], **{k: v for k, v in kw.items() if k != "elements"}
+        )
+        shift = np.array([7.3, -2.1, 5.0])
+        rep2 = _m.generate(
+            coords + shift, z, elements=[1], **{k: v for k, v in kw.items() if k != "elements"}
+        )
+        np.testing.assert_allclose(rep1, rep2, rtol=1e-10, atol=1e-12)
+
+    def test_three_body_nonzero(self) -> None:
+        kw = self.kw()
+        rep = _m.generate(COORDS_CH2, Z_CH2, **kw)
+        two_body_size = len(kw["elements"]) * kw["nRs2"]
+        assert np.linalg.norm(rep[:, two_body_size:]) > 0.0
+
+    def test_generate_matches_generate_and_gradients(self) -> None:
+        kw = self.kw()
+        rep_only = _m.generate(COORDS_CH2, Z_CH2, **kw)
+        rep_both, grad = _m.generate_and_gradients(COORDS_CH2, Z_CH2, **kw)
+        np.testing.assert_allclose(rep_only, rep_both, rtol=1e-12, atol=1e-14)
+        n, rep_size = rep_only.shape
+        assert grad.shape == (n, rep_size, n * 3)
+
+    def test_analytic_grad_matches_fd(self) -> None:
+        kw = self.kw()
+        rep, grad = _m.generate_and_gradients(COORDS_CH2, Z_CH2, **kw)
+        n, rep_size = rep.shape
+        h = 1e-6
+        fd_grad = np.zeros((n, rep_size, n * 3), dtype=np.float64)
+        for a in range(n):
+            for d in range(3):
+                cp = COORDS_CH2.copy()
+                cm = COORDS_CH2.copy()
+                cp[a, d] += h
+                cm[a, d] -= h
+                rp = _m.generate(cp, Z_CH2, **kw)
+                rm = _m.generate(cm, Z_CH2, **kw)
+                fd_grad[:, :, a * 3 + d] = (rp - rm) / (2.0 * h)
+        np.testing.assert_allclose(grad, fd_grad, rtol=5e-6, atol=5e-8)
+
+
+# ---------------------------------------------------------------------------
+# A7 — CosineSeries + ElementResolved three-body
+# ---------------------------------------------------------------------------
+
+
+class TestA7CosineElementResolved:
+    TB = "log_normal"
+    AB = "cosine_element_resolved"
+
+    def kw(self, **overrides: Any) -> dict[str, Any]:
+        return {
+            **SPLITR_KW,
+            "two_body_type": self.TB,
+            "three_body_type": self.AB,
+            "nCosine": 4,
+            **overrides,
+        }
+
+    def test_shape(self) -> None:
+        kw = self.kw()
+        rep = _m.generate(COORDS_CH2, Z_CH2, **kw)
+        n = len(Z_CH2)
+        nelements = len(kw["elements"])
+        nCosine = kw["nCosine"]
+        nRs3 = kw["nRs3"]
+        nRs3_minus = kw["nRs3_minus"]
+        three_body_size = (
+            nelements * nRs3 * nRs3_minus * nCosine
+            + nelements * (nelements - 1) * nRs3 * nRs3 * nCosine
+        )
+        expected = nelements * kw["nRs2"] + three_body_size
+        assert rep.shape == (n, expected)
+
+    def test_translation_invariance(self) -> None:
+        kw = self.kw()
+        coords = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 0.8, 0.0]], dtype=np.float64)
+        z = np.array([1, 1, 1], dtype=np.int32)
+        rep1 = _m.generate(
+            coords, z, elements=[1], **{k: v for k, v in kw.items() if k != "elements"}
+        )
+        shift = np.array([7.3, -2.1, 5.0])
+        rep2 = _m.generate(
+            coords + shift, z, elements=[1], **{k: v for k, v in kw.items() if k != "elements"}
+        )
+        np.testing.assert_allclose(rep1, rep2, rtol=1e-10, atol=1e-12)
+
+    def test_three_body_nonzero(self) -> None:
+        kw = self.kw()
+        rep = _m.generate(COORDS_CH2, Z_CH2, **kw)
+        two_body_size = len(kw["elements"]) * kw["nRs2"]
+        assert np.linalg.norm(rep[:, two_body_size:]) > 0.0
+
+    def test_generate_matches_generate_and_gradients(self) -> None:
+        kw = self.kw()
+        rep_only = _m.generate(COORDS_CH2, Z_CH2, **kw)
+        rep_both, grad = _m.generate_and_gradients(COORDS_CH2, Z_CH2, **kw)
+        np.testing.assert_allclose(rep_only, rep_both, rtol=1e-12, atol=1e-14)
+        n, rep_size = rep_only.shape
+        assert grad.shape == (n, rep_size, n * 3)
+
+    def test_analytic_grad_matches_fd(self) -> None:
+        kw = self.kw()
+        rep, grad = _m.generate_and_gradients(COORDS_CH2, Z_CH2, **kw)
+        n, rep_size = rep.shape
+        h = 1e-6
+        fd_grad = np.zeros((n, rep_size, n * 3), dtype=np.float64)
+        for a in range(n):
+            for d in range(3):
+                cp = COORDS_CH2.copy()
+                cm = COORDS_CH2.copy()
+                cp[a, d] += h
+                cm[a, d] -= h
+                rp = _m.generate(cp, Z_CH2, **kw)
+                rm = _m.generate(cm, Z_CH2, **kw)
+                fd_grad[:, :, a * 3 + d] = (rp - rm) / (2.0 * h)
+        np.testing.assert_allclose(grad, fd_grad, rtol=5e-6, atol=5e-8)

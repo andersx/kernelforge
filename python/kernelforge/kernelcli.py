@@ -1,8 +1,8 @@
 """kernelcli — command-line interface for testing kernelforge ML potentials.
 
 Supports three datasets (rMD17, QM7b, small_mols_mini), three model classes
-(LocalKRRModel, LocalRFFModel, FCHL18KRRModel), two representations (FCHL19,
-FCHL18), and three training modes (energy_only, force_only, energy_and_force).
+(LocalKRRModel, LocalRFFModel, FCHL18KRRModel), three representations (FCHL19,
+FCHL19v2, FCHL18), and three training modes (energy_only, force_only, energy_and_force).
 
 Usage examples::
 
@@ -15,13 +15,18 @@ Usage examples::
     kernelcli --dataset small_mols_mini --regressor krr --representation fchl18 \\
               --mode energy_and_force --sigma 2.5 --l2 1e-4
 
+    kernelcli --dataset rmd17_ethanol --representation fchl19v2 \\
+              --repr-param two_body_type=bessel --repr-param three_body_type=cosine_rbar
+
 Representation/kernel parameters can be overridden with ``--repr-param KEY=VALUE``
-(repeatable).  For FCHL19 these map to ``repr_params``; for FCHL18 they map to
-``kernel_params``.  Values are auto-cast to int, float, bool, or str::
+(repeatable).  For FCHL19/FCHL19v2 these map to ``repr_params``; for FCHL18 they
+map to ``kernel_params``.  Values are auto-cast to int, float, bool, or str::
 
     kernelcli --dataset rmd17_ethanol --repr-param rcut=6.0 --repr-param nRs2=32
     kernelcli --dataset rmd17_ethanol --representation fchl18 \\
               --repr-param cut_distance=8.0 --repr-param two_body_width=0.15
+    kernelcli --dataset rmd17_ethanol --representation fchl19v2 \\
+              --repr-param two_body_type=bessel --repr-param nCosine=4
 
 Entry point registered as ``kernelcli`` in pyproject.toml.
 """
@@ -330,9 +335,19 @@ def _build_model(
             sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
         )
 
-    # FCHL19 — KRR or RFF; repr_params forwarded to generate_fchl_acsf[_and_gradients]
+    # FCHL19 or FCHL19v2 — KRR or RFF
+    # repr_params forwarded to generate_fchl_acsf[_and_gradients] (v1)
+    # or generate[_and_gradients] (v2); extra v2 params (two_body_type, etc.)
+    # are passed through repr_params unchanged.
+    repr_name = representation  # "fchl19" or "fchl19v2"
     if regressor == "krr":
-        return LocalKRRModel(sigma=sigma, l2=l2, elements=elements, repr_params=repr_params or None)
+        return LocalKRRModel(
+            sigma=sigma,
+            l2=l2,
+            elements=elements,
+            repr_params=repr_params or None,
+            representation=repr_name,
+        )
     # rff
     return LocalRFFModel(
         sigma=sigma,
@@ -341,6 +356,7 @@ def _build_model(
         seed=seed,
         elements=elements,
         repr_params=repr_params or None,
+        representation=repr_name,
     )
 
 
@@ -413,7 +429,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--representation",
         default="fchl19",
-        choices=["fchl19", "fchl18"],
+        choices=["fchl19", "fchl19v2", "fchl18"],
         help="Molecular representation.",
     )
     p.add_argument(
@@ -466,6 +482,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "Values are auto-cast to int/float/bool/str. "
             "For FCHL19: nRs2, nRs3, nFourier, eta2, eta3, zeta, rcut, acut, "
             "two_body_decay, three_body_decay, three_body_weight. "
+            "For FCHL19v2: same as FCHL19 plus two_body_type, three_body_type, "
+            "nCosine, nRs3_minus, eta3_minus. "
             "For FCHL18: two_body_width, three_body_width, cut_distance, "
             "two_body_scaling, three_body_scaling, two_body_power, "
             "three_body_power, cut_start, fourier_order, use_atm. "
@@ -480,7 +498,7 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
     if args.representation == "fchl18" and args.regressor == "rff":
         parser.error(
             "RFF regressor is not supported with the FCHL18 representation. "
-            "Use --regressor krr or --representation fchl19."
+            "Use --regressor krr or --representation fchl19/fchl19v2."
         )
     if args.dataset == "qm7b" and args.mode in ("force_only", "energy_and_force"):
         parser.error(

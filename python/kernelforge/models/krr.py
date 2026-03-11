@@ -1,4 +1,4 @@
-"""LocalKRRModel: FCHL19-based local Kernel Ridge Regression model."""
+"""LocalKRRModel: FCHL19/FCHL19v2-based local Kernel Ridge Regression model."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 from kernelforge import kernelmath, local_kernels
 
 from .base import BaseModel, TrainingMode
-from .representations import compute_fchl19
+from .representations import compute_fchl19, compute_fchl19v2
 
 # Default FCHL19 representation hyperparameters (same as the examples)
 _DEFAULT_REPR_PARAMS: dict[str, Any] = {}
@@ -21,7 +21,7 @@ _DEFAULT_ELEMENTS: list[int] = [1, 6, 7, 8, 16]
 
 
 class LocalKRRModel(BaseModel):
-    """Kernel Ridge Regression model using FCHL19 local representations.
+    """Kernel Ridge Regression model using FCHL19 or FCHL19v2 local representations.
 
     Supports three training modes (inferred automatically from inputs):
       - ``energy_only``      — train on energies, predict E + F via Jacobian kernel
@@ -41,9 +41,12 @@ class LocalKRRModel(BaseModel):
         Sorted list of atomic numbers present in the dataset.
         Used to build element-indexed Q arrays.
     repr_params : dict, optional
-        Extra keyword arguments forwarded to
-        :func:`~kernelforge.fchl19_repr.generate_fchl_acsf_and_gradients`,
+        Extra keyword arguments forwarded to the representation generator,
         e.g. ``nRs2``, ``nRs3``, ``rcut``, ``eta2``, ...
+        For ``fchl19v2``: also accepts ``two_body_type``, ``three_body_type``,
+        ``nCosine``, ``nRs3_minus``, ``eta3_minus``.
+    representation : str
+        Which representation to use: ``"fchl19"`` (default) or ``"fchl19v2"``.
 
     Examples
     --------
@@ -60,11 +63,16 @@ class LocalKRRModel(BaseModel):
         l2: float = 1e-9,
         elements: list[int] | None = None,
         repr_params: dict[str, Any] | None = None,
+        representation: str = "fchl19",
     ) -> None:
+        if representation not in ("fchl19", "fchl19v2"):
+            msg = f"representation must be 'fchl19' or 'fchl19v2', got {representation!r}"
+            raise ValueError(msg)
         self.sigma = sigma
         self.l2 = l2
         self.elements: list[int] = sorted(elements) if elements is not None else _DEFAULT_ELEMENTS
         self.repr_params: dict[str, Any] = repr_params if repr_params is not None else {}
+        self.representation = representation
         self.is_fitted_ = False
 
     # ------------------------------------------------------------------
@@ -80,7 +88,8 @@ class LocalKRRModel(BaseModel):
     ) -> None:
         mode = self.training_mode_
 
-        X, dX, Q_krr, _Q_rff, N = compute_fchl19(
+        _compute_repr = compute_fchl19v2 if self.representation == "fchl19v2" else compute_fchl19
+        X, dX, Q_krr, _Q_rff, N = _compute_repr(
             coords_list,
             z_list,
             self.elements,
@@ -150,7 +159,8 @@ class LocalKRRModel(BaseModel):
 
         # Gradients are needed for all modes: force_only and energy_and_force need
         # them directly; energy_only uses the Jacobian kernel to also predict forces.
-        X_te, dX_te, Q_te, _Q_rff_te, N_te = compute_fchl19(
+        _compute_repr = compute_fchl19v2 if self.representation == "fchl19v2" else compute_fchl19
+        X_te, dX_te, Q_te, _Q_rff_te, N_te = _compute_repr(
             coords_list,
             z_list,
             self.elements,
@@ -242,6 +252,7 @@ class LocalKRRModel(BaseModel):
             "l2": self.l2,
             "elements": np.array(self.elements, dtype=np.int32),
             "repr_params": json.dumps(self.repr_params),
+            "representation": self.representation,
             "baseline_elements": self.baseline_elements_,
             "element_energies": self.element_energies_,
             "alpha": self._alpha,
@@ -259,6 +270,8 @@ class LocalKRRModel(BaseModel):
         self.l2 = float(data["l2"])
         self.elements = data["elements"].tolist()
         self.repr_params = json.loads(str(data["repr_params"]))
+        # representation key may be absent in older saved models — default to fchl19
+        self.representation = str(data["representation"]) if "representation" in data else "fchl19"
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]

@@ -9,11 +9,13 @@ from numpy.typing import NDArray
 #   "bessel"            - T5: radial Bessel basis sin(k*pi*r/rcut)/r
 
 # Three-body type strings:
-#   "odd_fourier_rbar"        - A1: odd Fourier (cos+sin), r_bar radial (baseline)
-#   "cosine_rbar"             - A2: full cosine series, r_bar radial
-#   "odd_fourier_split_r"     - A3: odd Fourier, split r_plus/r_minus radial
-#   "cosine_split_r"          - A4: full cosine series, split r_plus/r_minus radial
-#   "cosine_split_r_no_atm"   - A5: full cosine series, split radial, no ATM factor
+#   "odd_fourier_rbar"           - A1: odd Fourier (cos+sin), r_bar radial (baseline)
+#   "cosine_rbar"                - A2: full cosine series, r_bar radial
+#   "odd_fourier_split_r"        - A3: odd Fourier, split r_plus/r_minus radial
+#   "cosine_split_r"             - A4: full cosine series, split r_plus/r_minus radial
+#   "cosine_split_r_no_atm"      - A5: full cosine series, split radial, no ATM factor
+#   "odd_fourier_element_resolved" - A6: odd Fourier, element-resolved (r_ij,r_ik) basis
+#   "cosine_element_resolved"      - A7: full cosine series, element-resolved (r_ij,r_ik) basis
 
 def compute_rep_size(
     nelements: int,
