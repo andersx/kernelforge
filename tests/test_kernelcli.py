@@ -93,6 +93,28 @@ class TestValidation:
         )
         _validate(args, parser)  # Should not raise
 
+    def test_valid_fchl19v2_krr_passes(self):
+        """FCHL19v2 + KRR is valid."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["--dataset", "small_mols_mini", "--representation", "fchl19v2", "--regressor", "krr"]
+        )
+        _validate(args, parser)  # Should not raise
+
+    def test_valid_fchl19v2_rff_passes(self):
+        """FCHL19v2 + RFF is valid."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["--dataset", "small_mols_mini", "--representation", "fchl19v2", "--regressor", "rff"]
+        )
+        _validate(args, parser)  # Should not raise
+
+    def test_invalid_representation_rejected(self):
+        """Unknown representation should be rejected by argparse."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--dataset", "small_mols_mini", "--representation", "fchl99"])
+
     def test_invalid_dataset_rejected(self):
         """Unknown dataset should be rejected by argparse."""
         parser = _build_parser()
@@ -139,6 +161,24 @@ class TestBuildModel:
             "krr", "fchl18", 2.5, 1e-4, None, None, 512, 42, self._z_tr(), self._z_tr()
         )
         assert isinstance(model, FCHL18KRRModel)
+
+    def test_krr_fchl19v2(self):
+        from kernelforge.models import LocalKRRModel
+
+        model = _build_model(
+            "krr", "fchl19v2", 20.0, 1e-8, None, None, 512, 42, self._z_tr(), self._z_tr()
+        )
+        assert isinstance(model, LocalKRRModel)
+        assert model.representation == "fchl19v2"
+
+    def test_rff_fchl19v2(self):
+        from kernelforge.models import LocalRFFModel
+
+        model = _build_model(
+            "rff", "fchl19v2", 20.0, 1e-8, None, None, 512, 42, self._z_tr(), self._z_tr()
+        )
+        assert isinstance(model, LocalRFFModel)
+        assert model.representation == "fchl19v2"
 
     def test_auto_elements(self):
         from kernelforge.models import LocalKRRModel
@@ -278,6 +318,38 @@ class TestRunIntegration:
         run(_make_args(save=save_path))
         assert Path(save_path).exists()
         capsys.readouterr()
+
+    def test_krr_fchl19v2_energy_and_force(self, capsys):
+        run(_make_args(representation="fchl19v2"))
+        out = capsys.readouterr().out
+        assert "energy" in out
+        assert "force" in out
+        assert "Done" in out
+
+    def test_krr_fchl19v2_energy_only(self, capsys):
+        run(_make_args(representation="fchl19v2", mode="energy_only"))
+        out = capsys.readouterr().out
+        assert "energy" in out
+        assert "Done" in out
+
+    def test_rff_fchl19v2_energy_and_force(self, capsys):
+        run(_make_args(representation="fchl19v2", regressor="rff", d_rff=64))
+        out = capsys.readouterr().out
+        assert "energy" in out
+        assert "force" in out
+        assert "Done" in out
+
+    def test_krr_fchl19v2_repr_params(self, capsys):
+        """v2-specific repr_params forwarded correctly."""
+        run(
+            _make_args(
+                representation="fchl19v2",
+                repr_param=["two_body_type=bessel", "three_body_type=cosine_rbar"],
+            )
+        )
+        out = capsys.readouterr().out
+        assert "repr-param" in out
+        assert "Done" in out
 
     def test_elements_override(self, capsys):
         run(_make_args(elements=[1, 6, 7, 8]))
