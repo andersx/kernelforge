@@ -1,4 +1,4 @@
-"""LocalRFFModel: FCHL19-based local Random Fourier Features regression model."""
+"""LocalRFFModel: FCHL19/FCHL19v2-based local Random Fourier Features regression model."""
 
 from __future__ import annotations
 
@@ -19,13 +19,13 @@ from kernelforge.kitchen_sinks import (
 )
 
 from .base import BaseModel, TrainingMode
-from .representations import compute_fchl19
+from .representations import compute_fchl19, compute_fchl19v2
 
 _DEFAULT_ELEMENTS: list[int] = [1, 6, 7, 8, 16]
 
 
 class LocalRFFModel(BaseModel):
-    """Random Fourier Features regression model using FCHL19 local representations.
+    """Random Fourier Features regression model using FCHL19 or FCHL19v2 local representations.
 
     Approximates the local Gaussian kernel via the Bochner / Rahimi-Recht
     elemental feature mapping, maintaining separate random weights per element
@@ -50,8 +50,11 @@ class LocalRFFModel(BaseModel):
     elements : list[int]
         Sorted list of atomic numbers present in the dataset.
     repr_params : dict, optional
-        Extra keyword arguments forwarded to
-        :func:`~kernelforge.fchl19_repr.generate_fchl_acsf_and_gradients`.
+        Extra keyword arguments forwarded to the representation generator.
+        For ``fchl19v2``: also accepts ``two_body_type``, ``three_body_type``,
+        ``nCosine``, ``nRs3_minus``, ``eta3_minus``.
+    representation : str
+        Which representation to use: ``"fchl19"`` (default) or ``"fchl19v2"``.
 
     Examples
     --------
@@ -70,13 +73,18 @@ class LocalRFFModel(BaseModel):
         seed: int = 42,
         elements: list[int] | None = None,
         repr_params: dict[str, Any] | None = None,
+        representation: str = "fchl19",
     ) -> None:
+        if representation not in ("fchl19", "fchl19v2"):
+            msg = f"representation must be 'fchl19' or 'fchl19v2', got {representation!r}"
+            raise ValueError(msg)
         self.sigma = sigma
         self.l2 = l2
         self.d_rff = d_rff
         self.seed = seed
         self.elements: list[int] = sorted(elements) if elements is not None else _DEFAULT_ELEMENTS
         self.repr_params: dict[str, Any] = repr_params if repr_params is not None else {}
+        self.representation = representation
         self.is_fitted_ = False
 
     # ------------------------------------------------------------------
@@ -92,11 +100,12 @@ class LocalRFFModel(BaseModel):
     ) -> None:
         mode = self.training_mode_
 
-        X, dX, _Q_krr, Q_rff, _N = compute_fchl19(
+        _compute_repr = compute_fchl19v2 if self.representation == "fchl19v2" else compute_fchl19
+        X, dX, _Q_krr, Q_rff, _N = _compute_repr(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=(mode != "energy_only"),
             repr_params=self.repr_params,
         )
 
@@ -197,11 +206,12 @@ class LocalRFFModel(BaseModel):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
 
-        X_te, dX_te, _Q_krr_te, Q_rff_te, _N_te = compute_fchl19(
+        _compute_repr = compute_fchl19v2 if self.representation == "fchl19v2" else compute_fchl19
+        X_te, dX_te, _Q_krr_te, Q_rff_te, N_te = _compute_repr(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=(mode != "energy_only"),
             repr_params=self.repr_params,
         )
 
@@ -213,17 +223,11 @@ class LocalRFFModel(BaseModel):
         w = self._weights
 
         if mode == "energy_only":
-            if dX_te is None:
-                msg = "dX_te is None in energy_only predict — internal error"
-                raise RuntimeError(msg)
-            dX_te_5d: NDArray[np.float64] = dX_te.reshape(
-                n_test, n_atoms_te, rep_size_te, n_atoms_te, 3
-            )
             Z_te = rff_features_elemental(X_te, Q_rff_te, W, b)  # (n_test, d_rff)
             E_pred = Z_te @ w
-            # Forces via gradient features: F = -dE/dR
-            G_te = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b)  # (d_rff, n_test*naq)
-            F_pred = G_te.T @ w  # flat (sum(N_te)*3,)
+            # Forces are not available without Jacobian — return zeros.
+            n_force_components = int(np.sum(N_te) * 3)
+            F_pred = np.zeros(n_force_components, dtype=np.float64)
 
         elif mode == "force_only":
             if dX_te is None:
@@ -266,6 +270,7 @@ class LocalRFFModel(BaseModel):
             "seed": self.seed,
             "elements": np.array(self.elements, dtype=np.int32),
             "repr_params": json.dumps(self.repr_params),
+            "representation": self.representation,
             "baseline_elements": self.baseline_elements_,
             "element_energies": self.element_energies_,
             "weights": self._weights,
@@ -283,6 +288,8 @@ class LocalRFFModel(BaseModel):
         self.seed = int(data["seed"])
         self.elements = data["elements"].tolist()
         self.repr_params = json.loads(str(data["repr_params"]))
+        # representation key may be absent in older saved models — default to fchl19
+        self.representation = str(data["representation"]) if "representation" in data else "fchl19"
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]
