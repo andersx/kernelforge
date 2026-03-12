@@ -16,6 +16,9 @@ from numpy.typing import NDArray
 #   "cosine_split_r_no_atm"      - A5: full cosine series, split radial, no ATM factor
 #   "odd_fourier_element_resolved" - A6: odd Fourier, element-resolved (r_ij,r_ik) basis
 #   "cosine_element_resolved"      - A7: full cosine series, element-resolved (r_ij,r_ik) basis
+#   "legendre_bessel_joint"        - A8: Legendre P_l angular + Bessel radial, joint coupling
+#     nFourier -> Lmax (nabasis = nFourier+1), zeta -> angular decay gamma,
+#     eta3_minus -> Bessel per-mode decay alpha3. Rep size: n_pairs * 2 * nRs3 * (nFourier+1)
 
 def compute_rep_size(
     nelements: int,
@@ -45,6 +48,9 @@ def generate(
     three_body_weight: float = 13.4,
     two_body_type: str = "log_normal",
     three_body_type: str = "odd_fourier_rbar",
+    use_two_body: bool = True,
+    use_three_body: bool = True,
+    use_atm: bool = True,
 ) -> NDArray[np.float64]: ...
 def generate_and_gradients(
     coords: NDArray[np.float64],
@@ -66,4 +72,7 @@ def generate_and_gradients(
     three_body_weight: float = 13.4,
     two_body_type: str = "log_normal",
     three_body_type: str = "odd_fourier_rbar",
+    use_two_body: bool = True,
+    use_three_body: bool = True,
+    use_atm: bool = True,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...

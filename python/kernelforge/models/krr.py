@@ -93,7 +93,7 @@ class LocalKRRModel(BaseModel):
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=(mode != "energy_only"),
             repr_params=self.repr_params,
         )
 
@@ -157,14 +157,14 @@ class LocalKRRModel(BaseModel):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
 
-        # Gradients are needed for all modes: force_only and energy_and_force need
-        # them directly; energy_only uses the Jacobian kernel to also predict forces.
+        # energy_only prediction skips Jacobian computation entirely — forces are
+        # returned as zeros. All other modes need gradients.
         _compute_repr = compute_fchl19v2 if self.representation == "fchl19v2" else compute_fchl19
         X_te, dX_te, Q_te, _Q_rff_te, N_te = _compute_repr(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=(mode != "energy_only"),
             repr_params=self.repr_params,
         )
 
@@ -177,17 +177,11 @@ class LocalKRRModel(BaseModel):
         alpha = self._alpha
 
         if mode == "energy_only":
-            if dX_te is None:
-                msg = "dX_te is None in energy_only predict — internal error"
-                raise RuntimeError(msg)
             K_e = local_kernels.kernel_gaussian(X_te, X_tr, Q_te, Q_tr, N_te, N_tr, self.sigma)
             E_pred = K_e @ alpha  # (n_test,)
-            # Forces via transposed Jacobian kernel: dK/dR_te, shape (n_test*naq, n_train)
-            # F = -dE/dR = -(K_jt @ alpha), flat (sum(N_te)*3,)
-            K_jt = local_kernels.kernel_gaussian_jacobian_t(
-                X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, self.sigma
-            )
-            F_pred = K_jt @ alpha  # flat (sum(N_te)*3,)
+            # Forces are not available without Jacobian — return zeros.
+            n_force_components = int(np.sum(N_te) * 3)
+            F_pred = np.zeros(n_force_components, dtype=np.float64)
 
         elif mode == "force_only":
             if dX_te is None or dX_tr is None:

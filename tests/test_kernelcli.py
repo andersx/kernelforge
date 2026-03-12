@@ -443,3 +443,117 @@ class TestRunReprParam:
         out = capsys.readouterr().out
         assert "repr-param" in out
         assert "Done" in out
+
+    def test_krr_fchl19v2_odd_fourier_element_resolved(self, capsys):
+        """A6 (odd_fourier_element_resolved) runs end-to-end with nRs3_minus supplied."""
+        run(
+            _make_args(
+                representation="fchl19v2",
+                repr_param=[
+                    "three_body_type=odd_fourier_element_resolved",
+                    "nRs3_minus=10",
+                ],
+            )
+        )
+        out = capsys.readouterr().out
+        assert "repr-param" in out
+        assert "Done" in out
+
+    def test_rff_fchl19v2_cosine_element_resolved(self, capsys):
+        """A7 (cosine_element_resolved) runs end-to-end via RFF with nRs3_minus supplied."""
+        run(
+            _make_args(
+                representation="fchl19v2",
+                regressor="rff",
+                d_rff=64,
+                repr_param=[
+                    "three_body_type=cosine_element_resolved",
+                    "nRs3_minus=10",
+                ],
+            )
+        )
+        out = capsys.readouterr().out
+        assert "repr-param" in out
+        assert "Done" in out
+
+
+class TestValidationElementResolved:
+    """Validation tests for element-resolved three-body types requiring nRs3_minus."""
+
+    def test_odd_fourier_element_resolved_missing_nrs3_minus_error(self):
+        """A6 without nRs3_minus should raise a clean parser error."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl19v2",
+                "--repr-param",
+                "three_body_type=odd_fourier_element_resolved",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+
+    def test_cosine_element_resolved_missing_nrs3_minus_error(self):
+        """A7 without nRs3_minus should raise a clean parser error."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl19v2",
+                "--repr-param",
+                "three_body_type=cosine_element_resolved",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+
+    def test_odd_fourier_split_r_missing_nrs3_minus_error(self):
+        """A3 without nRs3_minus should also raise a clean parser error."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl19v2",
+                "--repr-param",
+                "three_body_type=odd_fourier_split_r",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+
+    def test_element_resolved_with_nrs3_minus_passes(self):
+        """A6 with nRs3_minus=10 should not raise."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl19v2",
+                "--repr-param",
+                "three_body_type=odd_fourier_element_resolved",
+                "--repr-param",
+                "nRs3_minus=10",
+            ]
+        )
+        _validate(args, parser)  # Should not raise
+
+    def test_default_three_body_type_no_nrs3_minus_passes(self):
+        """Default type (odd_fourier_rbar) does not require nRs3_minus."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl19v2",
+            ]
+        )
+        _validate(args, parser)  # Should not raise

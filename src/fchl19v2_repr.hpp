@@ -23,7 +23,8 @@ enum class ThreeBodyType {
     CosineSeries_SplitR,           // A4: full cosine series, r_plus/r_minus radial
     CosineSeries_SplitR_NoATM,     // A5: full cosine series, r_plus/r_minus, no ATM factor
     OddFourier_ElementResolved,    // A6: odd harmonics; B!=C: (r_ij,r_ik) ordered; B==C: SplitR
-    CosineSeries_ElementResolved   // A7: cosine series;  B!=C: (r_ij,r_ik) ordered; B==C: SplitR
+    CosineSeries_ElementResolved,  // A7: cosine series;  B!=C: (r_ij,r_ik) ordered; B==C: SplitR
+    Legendre_BesselJoint           // A8: Legendre P_l angular + Bessel radial + diagonal joint coupling
 };
 
 // ==================== Utility ====================
@@ -48,7 +49,7 @@ void generate(
     double eta3, double eta3_minus, double zeta, double rcut, double acut,
     double two_body_decay, double three_body_decay, double three_body_weight,
     TwoBodyType two_body_type, ThreeBodyType three_body_type, int nabasis,
-    std::vector<double> &rep
+    bool use_two_body, bool use_three_body, bool use_atm, std::vector<double> &rep
 );
 
 // Forward + Jacobian: compute representation and its gradient wrt coordinates
@@ -59,7 +60,8 @@ void generate_and_gradients(
     double eta3, double eta3_minus, double zeta, double rcut, double acut,
     double two_body_decay, double three_body_decay, double three_body_weight,
     TwoBodyType two_body_type, ThreeBodyType three_body_type, int nabasis,
-    std::vector<double> &rep, std::vector<double> &grad
+    bool use_two_body, bool use_three_body, bool use_atm, std::vector<double> &rep,
+    std::vector<double> &grad
 );
 
 }  // namespace fchl19v2

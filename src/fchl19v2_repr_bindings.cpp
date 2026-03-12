@@ -74,11 +74,17 @@ static void build_grids(
 static int compute_nabasis(
     const std::string &three_body_type, int nFourier, int nCosine
 ) {
-    // Cosine variants use nCosine (if >0), else nFourier as fallback
-    if (three_body_type == "odd_fourier_rbar" || three_body_type == "odd_fourier_split_r") {
+    // OddFourier variants: cos+sin for each harmonic → 2*nFourier channels
+    if (three_body_type == "odd_fourier_rbar" || three_body_type == "odd_fourier_split_r" ||
+        three_body_type == "odd_fourier_element_resolved") {
         return 2 * nFourier;
     }
-    // CosineSeries variants
+    // Legendre_BesselJoint: P_0 through P_{nFourier} → nFourier+1 channels
+    // nFourier is reused as Lmax; zeta is reused as the angular decay gamma
+    if (three_body_type == "legendre_bessel_joint") {
+        return nFourier + 1;
+    }
+    // CosineSeries variants: use nCosine (if >0), else nFourier as fallback
     return (nCosine > 0) ? nCosine : 2 * nFourier;
 }
 
@@ -102,7 +108,10 @@ static py::array_t<double> generate_py(
     double three_body_decay,
     double three_body_weight,
     const std::string &two_body_type_str,
-    const std::string &three_body_type_str
+    const std::string &three_body_type_str,
+    bool use_two_body,
+    bool use_three_body,
+    bool use_atm
 ) {
     const size_t natoms = static_cast<size_t>(nuclear_z.cast<py::array>().shape(0));
     if (natoms == 0) throw std::invalid_argument("n_atoms must be > 0");
@@ -130,7 +139,8 @@ static py::array_t<double> generate_py(
         py::gil_scoped_release release;
         kf::fchl19v2::generate(
             coords_v, z_v, elements, Rs2_v, Rs3_v, Rs3_minus_v, eta2, eta3, eta3_minus, zeta,
-            rcut, acut, two_body_decay, three_body_decay, w3, tb_type, ab_type, nabasis, rep
+            rcut, acut, two_body_decay, three_body_decay, w3, tb_type, ab_type, nabasis,
+            use_two_body, use_three_body, use_atm, rep
         );
     }
 
@@ -164,7 +174,10 @@ static py::tuple generate_and_gradients_py(
     double three_body_decay,
     double three_body_weight,
     const std::string &two_body_type_str,
-    const std::string &three_body_type_str
+    const std::string &three_body_type_str,
+    bool use_two_body,
+    bool use_three_body,
+    bool use_atm
 ) {
     const size_t natoms = static_cast<size_t>(nuclear_z.cast<py::array>().shape(0));
     if (natoms == 0) throw std::invalid_argument("n_atoms must be > 0");
@@ -192,7 +205,8 @@ static py::tuple generate_and_gradients_py(
         py::gil_scoped_release release;
         kf::fchl19v2::generate_and_gradients(
             coords_v, z_v, elements, Rs2_v, Rs3_v, Rs3_minus_v, eta2, eta3, eta3_minus, zeta,
-            rcut, acut, two_body_decay, three_body_decay, w3, tb_type, ab_type, nabasis, rep, grad
+            rcut, acut, two_body_decay, three_body_decay, w3, tb_type, ab_type, nabasis,
+            use_two_body, use_three_body, use_atm, rep, grad
         );
     }
 
@@ -266,12 +280,29 @@ PYBIND11_MODULE(fchl19v2_repr, m) {
         py::arg("three_body_weight") = 13.4,
         py::arg("two_body_type") = "log_normal",
         py::arg("three_body_type") = "odd_fourier_rbar",
+        py::arg("use_two_body") = true,
+        py::arg("use_three_body") = true,
+        py::arg("use_atm") = true,
         R"pbdoc(
 Generate FCHL19v2 representation.
 
 two_body_type: "log_normal" | "gaussian_r" | "gaussian_log_r" | "gaussian_r_no_pow" | "bessel"
 three_body_type: "odd_fourier_rbar" | "cosine_rbar" | "odd_fourier_split_r" |
-                 "cosine_split_r" | "cosine_split_r_no_atm"
+                 "cosine_split_r" | "cosine_split_r_no_atm" |
+                 "odd_fourier_element_resolved" | "cosine_element_resolved" |
+                 "legendre_bessel_joint"
+
+Note: three_body_types A3-A7 (split_r and element_resolved variants) require nRs3_minus > 0.
+A8 (legendre_bessel_joint) does NOT require nRs3_minus; it uses nRs3 for both legs.
+  - nFourier is reused as Lmax (nabasis = nFourier+1 Legendre terms P_0..P_{nFourier})
+  - zeta is reused as angular decay gamma: w_l = exp(-zeta * l*(l+1))
+  - eta3_minus is reused as Bessel per-mode decay: phi_n *= exp(-eta3_minus * n^2)
+  - Rep size: n_pairs * 2 * nRs3 * (nFourier+1)  [2 subchannels A and B]
+
+use_two_body: if False, the two-body section of the representation is zeroed (default True).
+use_three_body: if False, the three-body section is zeroed (default True).
+use_atm: if False, the Axilrod-Teller-Muto factor is omitted from three-body terms (default True).
+         Has no effect for cosine_split_r_no_atm (A5) which never uses ATM.
 
 Returns ndarray shape (n_atoms, rep_size).
 )pbdoc"
@@ -299,8 +330,29 @@ Returns ndarray shape (n_atoms, rep_size).
         py::arg("three_body_weight") = 13.4,
         py::arg("two_body_type") = "log_normal",
         py::arg("three_body_type") = "odd_fourier_rbar",
+        py::arg("use_two_body") = true,
+        py::arg("use_three_body") = true,
+        py::arg("use_atm") = true,
         R"pbdoc(
 Generate FCHL19v2 representation and its Jacobian wrt atomic coordinates.
+
+two_body_type: "log_normal" | "gaussian_r" | "gaussian_log_r" | "gaussian_r_no_pow" | "bessel"
+three_body_type: "odd_fourier_rbar" | "cosine_rbar" | "odd_fourier_split_r" |
+                 "cosine_split_r" | "cosine_split_r_no_atm" |
+                 "odd_fourier_element_resolved" | "cosine_element_resolved" |
+                 "legendre_bessel_joint"
+
+Note: three_body_types A3-A7 (split_r and element_resolved variants) require nRs3_minus > 0.
+A8 (legendre_bessel_joint) does NOT require nRs3_minus; it uses nRs3 for both legs.
+  - nFourier is reused as Lmax (nabasis = nFourier+1 Legendre terms P_0..P_{nFourier})
+  - zeta is reused as angular decay gamma: w_l = exp(-zeta * l*(l+1))
+  - eta3_minus is reused as Bessel per-mode decay: phi_n *= exp(-eta3_minus * n^2)
+  - Rep size: n_pairs * 2 * nRs3 * (nFourier+1)  [2 subchannels A and B]
+
+use_two_body: if False, the two-body section of the representation is zeroed (default True).
+use_three_body: if False, the three-body section is zeroed (default True).
+use_atm: if False, the Axilrod-Teller-Muto factor is omitted from three-body terms (default True).
+         Has no effect for cosine_split_r_no_atm (A5) which never uses ATM.
 
 Returns (rep, grad) with shapes (n_atoms, rep_size) and (n_atoms, rep_size, n_atoms*3).
 )pbdoc"

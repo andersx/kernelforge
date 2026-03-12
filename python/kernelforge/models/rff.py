@@ -105,7 +105,7 @@ class LocalRFFModel(BaseModel):
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=(mode != "energy_only"),
             repr_params=self.repr_params,
         )
 
@@ -207,11 +207,11 @@ class LocalRFFModel(BaseModel):
         mode = self.training_mode_
 
         _compute_repr = compute_fchl19v2 if self.representation == "fchl19v2" else compute_fchl19
-        X_te, dX_te, _Q_krr_te, Q_rff_te, _N_te = _compute_repr(
+        X_te, dX_te, _Q_krr_te, Q_rff_te, N_te = _compute_repr(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=(mode != "energy_only"),
             repr_params=self.repr_params,
         )
 
@@ -223,17 +223,11 @@ class LocalRFFModel(BaseModel):
         w = self._weights
 
         if mode == "energy_only":
-            if dX_te is None:
-                msg = "dX_te is None in energy_only predict — internal error"
-                raise RuntimeError(msg)
-            dX_te_5d: NDArray[np.float64] = dX_te.reshape(
-                n_test, n_atoms_te, rep_size_te, n_atoms_te, 3
-            )
             Z_te = rff_features_elemental(X_te, Q_rff_te, W, b)  # (n_test, d_rff)
             E_pred = Z_te @ w
-            # Forces via gradient features: F = -dE/dR
-            G_te = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b)  # (d_rff, n_test*naq)
-            F_pred = G_te.T @ w  # flat (sum(N_te)*3,)
+            # Forces are not available without Jacobian — return zeros.
+            n_force_components = int(np.sum(N_te) * 3)
+            F_pred = np.zeros(n_force_components, dtype=np.float64)
 
         elif mode == "force_only":
             if dX_te is None:

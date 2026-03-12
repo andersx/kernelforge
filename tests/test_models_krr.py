@@ -268,3 +268,20 @@ class TestLocalKRRModelFCHL19v2:
     def test_invalid_representation_raises(self) -> None:
         with pytest.raises(ValueError, match="representation"):
             LocalKRRModel(sigma=10.0, l2=1e-6, elements=ELEMENTS, representation="unknown")
+
+    def test_odd_fourier_element_resolved(self, dataset: tuple) -> None:
+        """A6 (odd_fourier_element_resolved) works end-to-end with nRs3_minus > 0."""
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:10], coords_list[10:12]
+        ztr, zte = z_list[:10], z_list[10:12]
+
+        model = LocalKRRModel(
+            sigma=10.0,
+            l2=1e-6,
+            elements=ELEMENTS,
+            representation="fchl19v2",
+            repr_params={"three_body_type": "odd_fourier_element_resolved", "nRs3_minus": 10},
+        )
+        model.fit(tr, ztr, energies=energies[:10])
+        E_pred, _ = model.predict(te, zte)
+        assert E_pred.shape == (2,)

@@ -18,6 +18,10 @@ Usage examples::
     kernelcli --dataset rmd17_ethanol --representation fchl19v2 \\
               --repr-param two_body_type=bessel --repr-param three_body_type=cosine_rbar
 
+    kernelcli --dataset rmd17_ethanol --representation fchl19v2 \\
+              --repr-param three_body_type=odd_fourier_element_resolved \\
+              --repr-param nRs3_minus=10
+
 Representation/kernel parameters can be overridden with ``--repr-param KEY=VALUE``
 (repeatable).  For FCHL19/FCHL19v2 these map to ``repr_params``; for FCHL18 they
 map to ``kernel_params``.  Values are auto-cast to int, float, bool, or str::
@@ -373,7 +377,9 @@ def _print_header(args: argparse.Namespace) -> None:
     print(f"  dataset        : {args.dataset}")
     print(f"  regressor      : {args.regressor.upper()}")
     print(f"  representation : {args.representation.upper()}")
-    print(f"  mode           : {args.mode}")
+    no_forces = getattr(args, "no_forces", False)
+    mode_suffix = " [--no-forces: energy_only]" if no_forces and args.mode != "energy_only" else ""
+    print(f"  mode           : {args.mode}{mode_suffix}")
     print(f"  sigma          : {args.sigma}")
     print(f"  l2             : {args.l2}")
     if args.regressor == "rff":
@@ -473,6 +479,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Save fitted model to .npz file.",
     )
     p.add_argument(
+        "--no-forces",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip Jacobian computation entirely — equivalent to forcing --mode energy_only "
+            "regardless of the --mode flag. Much faster for large representations "
+            "(e.g. element_resolved). Force MAE is not reported."
+        ),
+    )
+    p.add_argument(
         "--repr-param",
         action="append",
         default=None,
@@ -480,17 +496,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Override a representation or kernel parameter (repeatable). "
             "Values are auto-cast to int/float/bool/str. "
-            "For FCHL19: nRs2, nRs3, nFourier, eta2, eta3, zeta, rcut, acut, "
-            "two_body_decay, three_body_decay, three_body_weight. "
-            "For FCHL19v2: same as FCHL19 plus two_body_type, three_body_type, "
-            "nCosine, nRs3_minus, eta3_minus. "
-            "For FCHL18: two_body_width, three_body_width, cut_distance, "
+            "FCHL19/FCHL19v2 numeric params: nRs2 (def 24), nRs3 (def 20), "
+            "nRs3_minus (def 0; required >0 for split_r/element_resolved types), "
+            "nFourier (def 1), nCosine (def 0), "
+            "eta2 (def 0.32), eta3 (def 2.7), eta3_minus (def 2.7), "
+            "zeta (def pi), rcut (def 8.0), acut (def 8.0), "
+            "two_body_decay (def 1.8), three_body_decay (def 0.57), "
+            "three_body_weight (def 13.4). "
+            "FCHL19v2 two_body_type: "
+            "log_normal (default) | gaussian_r | gaussian_log_r | "
+            "gaussian_r_no_pow | bessel. "
+            "FCHL19v2 three_body_type: "
+            "odd_fourier_rbar (default) | cosine_rbar | "
+            "odd_fourier_split_r* | cosine_split_r* | cosine_split_r_no_atm* | "
+            "odd_fourier_element_resolved* | cosine_element_resolved* "
+            "(* requires nRs3_minus > 0). "
+            "FCHL19v2 bool flags (default True): "
+            "use_two_body (enable/disable two-body contribution), "
+            "use_three_body (enable/disable three-body contribution), "
+            "use_atm (enable/disable Axilrod-Teller-Muto factor; no-op for cosine_split_r_no_atm). "
+            "FCHL18 params: two_body_width, three_body_width, cut_distance, "
             "two_body_scaling, three_body_scaling, two_body_power, "
             "three_body_power, cut_start, fourier_order, use_atm. "
             "Example: --repr-param rcut=6.0 --repr-param nRs2=32"
         ),
     )
     return p
+
+
+_THREE_BODY_TYPES_REQUIRING_NRS3_MINUS = frozenset(
+    {
+        "odd_fourier_split_r",
+        "cosine_split_r",
+        "cosine_split_r_no_atm",
+        "odd_fourier_element_resolved",
+        "cosine_element_resolved",
+    }
+)
 
 
 def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
@@ -509,6 +551,16 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
             "small_mols_mini training in force_only mode is not supported via kernelcli. "
             "Use energy_only or energy_and_force."
         )
+    if args.representation == "fchl19v2":
+        repr_params = _parse_repr_params(args.repr_param)
+        tbt = repr_params.get("three_body_type", "odd_fourier_rbar")
+        if tbt in _THREE_BODY_TYPES_REQUIRING_NRS3_MINUS:
+            nrs3_minus = repr_params.get("nRs3_minus", 0)
+            if not isinstance(nrs3_minus, int) or nrs3_minus <= 0:
+                parser.error(
+                    f"--repr-param nRs3_minus=N (N > 0) is required when "
+                    f"three_body_type={tbt!r}. Example: --repr-param nRs3_minus=10"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -570,8 +622,9 @@ def run(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 3. Fit
     # ------------------------------------------------------------------
-    fit_energies = E_tr if args.mode in ("energy_only", "energy_and_force") else None
-    fit_forces = F_tr if args.mode in ("force_only", "energy_and_force") else None
+    effective_mode = "energy_only" if getattr(args, "no_forces", False) else args.mode
+    fit_energies = E_tr if effective_mode in ("energy_only", "energy_and_force") else None
+    fit_forces = F_tr if effective_mode in ("force_only", "energy_and_force") else None
 
     t0 = time.perf_counter()
     model.fit(coords_tr, z_tr, energies=fit_energies, forces=fit_forces)
@@ -604,7 +657,7 @@ def run(args: argparse.Namespace) -> None:
     score_time = time.perf_counter() - t0
 
     test_scores: dict[str, object] = {}
-    if args.mode in ("energy_only", "energy_and_force"):
+    if effective_mode in ("energy_only", "energy_and_force"):
         test_scores["energy"] = _compute_score(E_te, E_pred)
     if F_te is not None and F_pred.size > 0:
         F_ref = _coerce_forces(F_te)
