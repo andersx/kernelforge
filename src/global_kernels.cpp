@@ -2157,4 +2157,186 @@ void kernel_gaussian_full_symm_rfp(
     aligned_free_64(C);
 }
 
+// ============================================================================
+// J^T·α Trick Implementation
+// ============================================================================
+
+void kernel_gaussian_compute_alpha_desc(
+    const double *dX, const double *alpha, std::size_t N, std::size_t D, std::size_t M,
+    double *alpha_desc
+) {
+    if (!dX || !alpha || !alpha_desc) throw std::invalid_argument("null pointer");
+    if (N == 0 || D == 0 || M == 0) throw std::invalid_argument("empty dimension");
+
+    // Compute α̃[m] = J[m]^T · α[m] for each training sample.
+    // dX[m] is (D, M) row-major, alpha[m] is (D,).
+    // DGEMV(Trans, D, M): y(M) = A^T(M×D) · x(D)
+    int saved_blas_threads = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t m = 0; m < N; ++m) {
+        const double *dX_m = dX + m * D * M;
+        const double *alpha_m = alpha + m * D;
+        double *alpha_desc_m = alpha_desc + m * M;
+
+        cblas_dgemv(
+            CblasRowMajor, CblasTrans, static_cast<blas_int>(D), static_cast<blas_int>(M), 1.0,
+            dX_m, static_cast<blas_int>(M), alpha_m, 1, 0.0, alpha_desc_m, 1
+        );
+    }
+
+    kf_blas_set_num_threads(saved_blas_threads);
+}
+
+// Efficient force prediction via Hessian kernel matvec using the J^T·α trick.
+//
+// The Gaussian Hessian kernel between query a and training point m is:
+//     H[a,m] = (K/σ²) · J_a · J_m^T  −  (K/σ⁴) · (J_a · δ) · (J_m · δ)^T
+// where δ = x_a − x_m and K = exp(−||δ||²/(2σ²)).
+//
+// Multiplying H by α and summing over m, then using α̃_m = J_m^T · α_m:
+//     F_a = J_a^T · G_a
+// where G_a (in descriptor space, size M) is:
+//     G_a = Σ_m [ C[a,m] · α̃_m  −  C4[a,m] · (x_a · α̃_m − x_m · α̃_m) · (x_a − x_m) ]
+//         = Σ_m C[a,m] · α̃_m                        (term 1)
+//           + Σ_m C4[a,m] · inner[a,m] · x_m         (term 2a: positive x_m part)
+//           − (Σ_m C4[a,m] · inner[a,m]) · x_a       (term 2b: factored x_a part)
+// where inner[a,m] = x_a · α̃_m − x_m · α̃_m  (= δ_am · α̃_m as a scalar).
+void kernel_gaussian_hessian_matvec(
+    const double *__restrict X_q, const double *__restrict dX_q,
+    const double *__restrict X_t, const double *__restrict alpha_desc, std::size_t N_q,
+    std::size_t N_t, std::size_t M, std::size_t D, double sigma, double *__restrict F_out
+) {
+    if (!X_q || !dX_q || !X_t || !alpha_desc || !F_out)
+        throw std::invalid_argument("null pointer");
+    if (N_q == 0 || N_t == 0 || M == 0 || D == 0) throw std::invalid_argument("empty dimension");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
+
+    const double inv_s2 = 1.0 / (sigma * sigma);
+    const double inv_s4 = inv_s2 * inv_s2;
+
+    // Phase 1: self_cross[m] = X_t[m] · α̃[m]
+    std::vector<double> self_cross(N_t);
+#pragma omp parallel for schedule(static)
+    for (std::size_t m = 0; m < N_t; ++m) {
+        self_cross[m] =
+            cblas_ddot(static_cast<blas_int>(M), X_t + m * M, 1, alpha_desc + m * M, 1);
+    }
+
+    // Phase 2: Squared norms
+    std::vector<double> nq(N_q), nt(N_t);
+#pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N_q; ++a) {
+        const double *x = X_q + a * M;
+        double s = 0.0;
+#pragma omp simd reduction(+ : s)
+        for (std::size_t i = 0; i < M; ++i) s += x[i] * x[i];
+        nq[a] = s;
+    }
+#pragma omp parallel for schedule(static)
+    for (std::size_t m = 0; m < N_t; ++m) {
+        const double *x = X_t + m * M;
+        double s = 0.0;
+#pragma omp simd reduction(+ : s)
+        for (std::size_t i = 0; i < M; ++i) s += x[i] * x[i];
+        nt[m] = s;
+    }
+
+    // Phase 3: C_raw(N_q × N_t) = X_q @ X_t^T, then transform to C = K/σ²
+    double *C = aligned_alloc_64(N_q * N_t);
+    cblas_dgemm(
+        CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(N_q),
+        static_cast<blas_int>(N_t), static_cast<blas_int>(M), -2.0, X_q,
+        static_cast<blas_int>(M), X_t, static_cast<blas_int>(M), 0.0, C,
+        static_cast<blas_int>(N_t)
+    );
+
+#pragma omp parallel for collapse(2) schedule(static)
+    for (std::size_t a = 0; a < N_q; ++a) {
+        for (std::size_t m = 0; m < N_t; ++m) {
+            const double sq = nq[a] + nt[m] + C[a * N_t + m];
+            C[a * N_t + m] = std::exp(-0.5 * inv_s2 * sq) * inv_s2;
+        }
+    }
+
+    // Phase 4: cross(N_q × N_t) = X_q @ α̃^T, then compute weight
+    double *cross = aligned_alloc_64(N_q * N_t);
+    cblas_dgemm(
+        CblasRowMajor, CblasNoTrans, CblasTrans, static_cast<blas_int>(N_q),
+        static_cast<blas_int>(N_t), static_cast<blas_int>(M), 1.0, X_q,
+        static_cast<blas_int>(M), alpha_desc, static_cast<blas_int>(M), 0.0, cross,
+        static_cast<blas_int>(N_t)
+    );
+
+    // Compute weight[a,m] = (C[a,m]/σ²) · (cross[a,m] − self_cross[m])
+    // and term2_scalars[a] = Σ_m weight[a,m]
+    // Reuse cross buffer for weight (same size, no longer needed after)
+    double *weight = cross;
+    std::vector<double> term2_scalars(N_q, 0.0);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N_q; ++a) {
+        double row_sum = 0.0;
+        for (std::size_t m = 0; m < N_t; ++m) {
+            const double w = C[a * N_t + m] * inv_s2 * (cross[a * N_t + m] - self_cross[m]);
+            weight[a * N_t + m] = w;
+            row_sum += w;
+        }
+        term2_scalars[a] = row_sum;
+    }
+
+    // Phase 5: Accumulate G_all(N_q × M)
+    // G_all = C @ α̃ + weight @ X_t − diag(term2_scalars) · X_q
+    std::vector<double> G_all(N_q * M, 0.0);
+
+    // 5a: G_all += C @ α̃
+    cblas_dgemm(
+        CblasRowMajor, CblasNoTrans, CblasNoTrans, static_cast<blas_int>(N_q),
+        static_cast<blas_int>(M), static_cast<blas_int>(N_t), 1.0, C,
+        static_cast<blas_int>(N_t), alpha_desc, static_cast<blas_int>(M), 0.0, G_all.data(),
+        static_cast<blas_int>(M)
+    );
+
+    // 5b: G_all += weight @ X_t
+    cblas_dgemm(
+        CblasRowMajor, CblasNoTrans, CblasNoTrans, static_cast<blas_int>(N_q),
+        static_cast<blas_int>(M), static_cast<blas_int>(N_t), 1.0, weight,
+        static_cast<blas_int>(N_t), X_t, static_cast<blas_int>(M), 1.0, G_all.data(),
+        static_cast<blas_int>(M)
+    );
+
+    // 5c: G_all[a,:] -= term2_scalars[a] · X_q[a,:]
+#pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N_q; ++a) {
+        cblas_daxpy(
+            static_cast<blas_int>(M), -term2_scalars[a], X_q + a * M, 1, G_all.data() + a * M, 1
+        );
+    }
+
+    // Phase 6: Back-project to Cartesian forces: F[a] = dX_q[a] @ G_all[a]
+    // dX_q[a] is (D, M) row-major, G_a is (M,), F_a is (D,)
+    // NoTrans: y(D) = A(D×M) · x(M)
+    int saved_blas_threads = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t a = 0; a < N_q; ++a) {
+        const double *J_a = dX_q + a * D * M;
+        const double *G_a = G_all.data() + a * M;
+        double *F_a = F_out + a * D;
+
+        cblas_dgemv(
+            CblasRowMajor, CblasNoTrans, static_cast<blas_int>(D), static_cast<blas_int>(M), 1.0,
+            J_a, static_cast<blas_int>(M), G_a, 1, 0.0, F_a, 1
+        );
+    }
+
+    kf_blas_set_num_threads(saved_blas_threads);
+
+    // Cleanup
+    aligned_free_64(weight);  // == cross
+    aligned_free_64(C);
+}
+
 }  // namespace kf

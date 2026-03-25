@@ -541,6 +541,79 @@ static py::array_t<double> kernel_gaussian_full_symm_rfp_py(
     return K_rfp;
 }
 
+// ---- J^T·α trick: compute_alpha_desc ----
+static py::array_t<double> compute_alpha_desc_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX,   // (N, D, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> alpha  // (N, D)
+) {
+    if (dX.ndim() != 3) throw std::invalid_argument("dX must be 3D (N,D,M).");
+    if (alpha.ndim() != 2) throw std::invalid_argument("alpha must be 2D (N,D).");
+
+    const auto N = static_cast<std::size_t>(dX.shape(0));
+    const auto D = static_cast<std::size_t>(dX.shape(1));
+    const auto M = static_cast<std::size_t>(dX.shape(2));
+
+    if (static_cast<std::size_t>(alpha.shape(0)) != N)
+        throw std::invalid_argument("alpha.shape[0] must equal dX.shape[0] (N).");
+    if (static_cast<std::size_t>(alpha.shape(1)) != D)
+        throw std::invalid_argument("alpha.shape[1] must equal dX.shape[1] (D).");
+
+    const double *dXp = dX.unchecked<3>().data(0, 0, 0);
+    const double *alphap = alpha.unchecked<2>().data(0, 0);
+
+    // Output (N, M)
+    py::array_t<double> alpha_desc({static_cast<py::ssize_t>(N), static_cast<py::ssize_t>(M)});
+    auto ad = alpha_desc.mutable_unchecked<2>();
+
+    kf::kernel_gaussian_compute_alpha_desc(dXp, alphap, N, D, M, ad.mutable_data(0, 0));
+    return alpha_desc;
+}
+
+// ---- J^T·α trick: hessian_matvec ----
+static py::array_t<double> hessian_matvec_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> X_q,          // (N_q, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> dX_q,         // (N_q, D, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> X_t,          // (N_t, M)
+    py::array_t<double, py::array::c_style | py::array::forcecast> alpha_desc,   // (N_t, M)
+    double sigma
+) {
+    if (X_q.ndim() != 2) throw std::invalid_argument("X_q must be 2D (N_q,M).");
+    if (dX_q.ndim() != 3) throw std::invalid_argument("dX_q must be 3D (N_q,D,M).");
+    if (X_t.ndim() != 2) throw std::invalid_argument("X_t must be 2D (N_t,M).");
+    if (alpha_desc.ndim() != 2) throw std::invalid_argument("alpha_desc must be 2D (N_t,M).");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0.");
+
+    const auto N_q = static_cast<std::size_t>(X_q.shape(0));
+    const auto M = static_cast<std::size_t>(X_q.shape(1));
+    const auto N_t = static_cast<std::size_t>(X_t.shape(0));
+    const auto D = static_cast<std::size_t>(dX_q.shape(1));
+
+    if (static_cast<std::size_t>(X_t.shape(1)) != M)
+        throw std::invalid_argument("X_t.shape[1] must equal X_q.shape[1] (M).");
+    if (static_cast<std::size_t>(dX_q.shape(0)) != N_q)
+        throw std::invalid_argument("dX_q.shape[0] must equal N_q.");
+    if (static_cast<std::size_t>(dX_q.shape(2)) != M)
+        throw std::invalid_argument("dX_q.shape[2] must equal M.");
+    if (static_cast<std::size_t>(alpha_desc.shape(0)) != N_t)
+        throw std::invalid_argument("alpha_desc.shape[0] must equal N_t.");
+    if (static_cast<std::size_t>(alpha_desc.shape(1)) != M)
+        throw std::invalid_argument("alpha_desc.shape[1] must equal M.");
+
+    const double *X_qp = X_q.unchecked<2>().data(0, 0);
+    const double *dX_qp = dX_q.unchecked<3>().data(0, 0, 0);
+    const double *X_tp = X_t.unchecked<2>().data(0, 0);
+    const double *adp = alpha_desc.unchecked<2>().data(0, 0);
+
+    // Output (N_q, D)
+    py::array_t<double> F({static_cast<py::ssize_t>(N_q), static_cast<py::ssize_t>(D)});
+    auto Fv = F.mutable_unchecked<2>();
+
+    kf::kernel_gaussian_hessian_matvec(
+        X_qp, dX_qp, X_tp, adp, N_q, N_t, M, D, sigma, Fv.mutable_data(0, 0)
+    );
+    return F;
+}
+
 PYBIND11_MODULE(global_kernels, m) {
     m.doc() = "Global (structure-wise) Gaussian kernels via BLAS (row-major), with 64-byte aligned "
               "output buffer.";
@@ -658,5 +731,26 @@ PYBIND11_MODULE(global_kernels, m) {
         "Compute full combined energy+force kernel (symmetric RFP format).\n"
         "Shapes: X(N,M), dX(N,D,M) -> 1D RFP array of length N*(1+D)*(N*(1+D)+1)/2.\n"
         "Saves ~50% memory vs full symmetric matrix."
+    );
+    m.def(
+        "kernel_gaussian_compute_alpha_desc",
+        &compute_alpha_desc_py,
+        py::arg("dX"),
+        py::arg("alpha"),
+        "Pre-compute descriptor-space force coefficients for J^T*alpha trick.\n"
+        "Shapes: dX(N,D,M) Jacobians, alpha(N,D) force coefficients -> alpha_desc(N,M).\n"
+        "Use with kernel_gaussian_hessian_matvec for O(M) inference cost."
+    );
+    m.def(
+        "kernel_gaussian_hessian_matvec",
+        &hessian_matvec_py,
+        py::arg("X_q"),
+        py::arg("dX_q"),
+        py::arg("X_t"),
+        py::arg("alpha_desc"),
+        py::arg("sigma"),
+        "Predict forces via Hessian kernel matvec using J^T*alpha trick.\n"
+        "Cost: O(N_q*N_t*M + N_q*D*M) vs O(N_q*N_t*D*M) for full matrix.\n"
+        "Shapes: X_q(N_q,M), dX_q(N_q,D,M), X_t(N_t,M), alpha_desc(N_t,M) -> F(N_q,D)."
     );
 }

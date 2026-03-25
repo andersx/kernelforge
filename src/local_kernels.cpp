@@ -2799,5 +2799,238 @@ void kernel_gaussian_full_symm_rfp(
     }  // b
 }
 
+// ============================================================================
+// J^T·α Trick Implementation for Local (FCHL19) Hessian Kernel
+// ============================================================================
+
+void kernel_gaussian_local_compute_alpha_desc(
+    const std::vector<double> &dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const std::vector<int> &q2,      // (nm2, max_atoms2)
+    const std::vector<int> &n2,      // (nm2)
+    int nm2, int max_atoms2, int rep_size,
+    const double *alpha,  // (naq2,) where naq2 = 3*sum(n2)
+    double *alpha_desc    // (nm2, max_atoms2, rep_size) output
+) {
+    if (!dx2.data() || !q2.data() || !n2.data() || !alpha || !alpha_desc)
+        throw std::invalid_argument("null pointer");
+    if (nm2 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
+        throw std::invalid_argument("dimensions must be positive");
+
+    const size_t dx2N = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
+    const size_t q2N = (size_t)nm2 * max_atoms2;
+    const size_t n2N = (size_t)nm2;
+
+    if (dx2.size() != dx2N) throw std::invalid_argument("dx2 size mismatch");
+    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
+    if (n2.size() != n2N) throw std::invalid_argument("n2 size mismatch");
+
+    // Compute offsets: offs2[b] = 3 * sum(n2[0..b-1])
+    std::vector<int> offs2(nm2);
+    int acc = 0;
+    for (int b = 0; b < nm2; ++b) {
+        offs2[b] = acc;
+        acc += 3 * std::max(0, std::min(n2[b], max_atoms2));
+    }
+
+    const int lda = 3 * max_atoms2;
+    
+    // Initialize output to zero
+    std::fill(alpha_desc, alpha_desc + (size_t)nm2 * max_atoms2 * rep_size, 0.0);
+    
+    int saved_blas_threads = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
+
+#pragma omp parallel for schedule(static)
+    for (int b = 0; b < nm2; ++b) {
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        if (nb == 0) continue;
+        const int ncols_b = 3 * nb;
+
+        // alpha for the entire molecule b: shape (ncols_b,)
+        const double *alpha_mol_b = alpha + offs2[b];
+
+        for (int i2 = 0; i2 < nb; ++i2) {
+            const double *dx_bi2 = &dx2[(size_t)b * max_atoms2 * rep_size * lda +
+                                        (size_t)i2 * rep_size * lda];
+            double *alpha_desc_bi2 = alpha_desc + ((size_t)b * max_atoms2 + i2) * rep_size;
+
+            // alpha_desc[b,i2,:] = dx2[b,i2,:,:ncols_b] @ alpha[offs2[b]:offs2[b]+ncols_b]
+            // A (rep_size x ncols_b, row-major with lda) times x (ncols_b,) -> y (rep_size,)
+            cblas_dgemv(
+                CblasRowMajor,
+                CblasNoTrans,
+                static_cast<blas_int>(rep_size),
+                static_cast<blas_int>(ncols_b),
+                1.0,
+                dx_bi2,
+                static_cast<blas_int>(lda),
+                alpha_mol_b,
+                static_cast<blas_int>(1),
+                0.0,
+                alpha_desc_bi2,
+                static_cast<blas_int>(1)
+            );
+        }
+    }
+
+    kf_blas_set_num_threads(saved_blas_threads);
+}
+
+void kernel_gaussian_local_hessian_matvec(
+    const std::vector<double> &x1,    // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &dx1,   // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double> &x2,    // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &alpha_desc,  // (nm2, max_atoms2, rep_size)
+    const std::vector<int> &q1,       // (nm1, max_atoms1)
+    const std::vector<int> &q2,       // (nm2, max_atoms2)
+    const std::vector<int> &n1,       // (nm1)
+    const std::vector<int> &n2,       // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    int naq1,  // must equal 3 * sum(n1)
+    double sigma,
+    double *F  // (naq1,) output
+) {
+    if (!x1.data() || !dx1.data() || !x2.data() || !alpha_desc.data() || !q1.data() ||
+        !q2.data() || !n1.data() || !n2.data() || !F)
+        throw std::invalid_argument("null pointer");
+    if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
+        throw std::invalid_argument("dimensions must be positive");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
+
+    const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
+    const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t dx1N = (size_t)nm1 * max_atoms1 * rep_size * (3 * (size_t)max_atoms1);
+    const size_t alpha_desc_N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t q1N = (size_t)nm1 * max_atoms1;
+    const size_t q2N = (size_t)nm2 * max_atoms2;
+
+    if (x1.size() != x1N) throw std::invalid_argument("x1 size mismatch");
+    if (x2.size() != x2N) throw std::invalid_argument("x2 size mismatch");
+    if (dx1.size() != dx1N) throw std::invalid_argument("dx1 size mismatch");
+    if (alpha_desc.size() != alpha_desc_N) throw std::invalid_argument("alpha_desc size mismatch");
+    if (q1.size() != q1N) throw std::invalid_argument("q1 size mismatch");
+    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
+    if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
+    if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
+
+    // Compute offsets for both sets
+    std::vector<int> offs1(nm1), offs2(nm2);
+    int sum1 = 0;
+    for (int a = 0; a < nm1; ++a) {
+        offs1[a] = sum1;
+        sum1 += 3 * std::max(0, std::min(n1[a], max_atoms1));
+    }
+    int sum2 = 0;
+    for (int b = 0; b < nm2; ++b) {
+        offs2[b] = sum2;
+        sum2 += 3 * std::max(0, std::min(n2[b], max_atoms2));
+    }
+    if (naq1 != sum1) throw std::invalid_argument("naq1 != 3*sum(n1)");
+
+    // Zero output
+    std::fill(F, F + naq1, 0.0);
+
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma4 = -1.0 / (sigma * sigma * sigma * sigma);
+
+    // Build per-molecule label -> indices mapping for set-2
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_i2(nm2);
+    for (int b = 0; b < nm2; ++b) {
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        auto &m = lab_to_i2[b];
+        m.reserve(64);
+        for (int i2 = 0; i2 < nb; ++i2) {
+            m[q2[(size_t)b * max_atoms2 + i2]].push_back(i2);
+        }
+    }
+
+    const int lda1 = 3 * max_atoms1;
+    int saved_blas_threads = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
+
+#pragma omp parallel for schedule(dynamic)
+    for (int a = 0; a < nm1; ++a) {
+        const int na = std::max(0, std::min(n1[a], max_atoms1));
+        if (na == 0) continue;
+
+        const int ncols_a = 3 * na;
+        const int col_off_a = offs1[a];
+
+        // Thread-local: descriptor-space accumulator per query atom
+        std::vector<double> G_acc(rep_size);
+
+        // For each query atom i1 in molecule a
+        for (int i1 = 0; i1 < na; ++i1) {
+            const int label = q1[(size_t)a * max_atoms1 + i1];
+            const double *x_ai1 = &x1[((size_t)a * max_atoms1 + i1) * rep_size];
+            const double *dx_ai1 = &dx1[((size_t)a * max_atoms1 + i1) * rep_size * lda1];
+
+            // Zero accumulator for this query atom
+            std::fill(G_acc.begin(), G_acc.end(), 0.0);
+
+            // Find all matching training atoms (b, i2) with same label
+            for (int b = 0; b < nm2; ++b) {
+                auto it = lab_to_i2[b].find(label);
+                if (it == lab_to_i2[b].end() || it->second.empty()) continue;
+
+                const auto &i2_list = it->second;
+                const int nb = std::max(0, std::min(n2[b], max_atoms2));
+
+                for (int i2 : i2_list) {
+                    if (i2 < 0 || i2 >= nb) continue;  // Safety check
+
+                    const double *x_bi2 = &x2[((size_t)b * max_atoms2 + i2) * rep_size];
+                    const double *alpha_desc_bi2 =
+                        &alpha_desc[((size_t)b * max_atoms2 + i2) * rep_size];
+
+                    // Compute d = x_ai1 - x_bi2
+                    double l2 = 0.0;
+                    std::vector<double> d(rep_size);
+                    for (int k = 0; k < rep_size; ++k) {
+                        d[k] = x_ai1[k] - x_bi2[k];
+                        l2 += d[k] * d[k];
+                    }
+
+                    // Kernel scalars
+                    const double exp_base = std::exp(l2 * inv_2sigma2);
+                    const double expdiag = exp_base / (sigma * sigma);
+                    const double expd = inv_sigma4 * exp_base;
+
+                    // Accumulate: G_acc += expdiag * alpha_desc + expd * inner * d
+                    double inner = 0.0;
+                    for (int k = 0; k < rep_size; ++k) {
+                        inner += d[k] * alpha_desc_bi2[k];
+                    }
+
+#pragma omp simd
+                    for (int k = 0; k < rep_size; ++k) {
+                        G_acc[k] += expdiag * alpha_desc_bi2[k] + expd * inner * d[k];
+                    }
+                }
+            }
+
+            // Back-project: F[col_off_a : col_off_a+ncols_a] += dx_ai1^T @ G_acc
+            // dx_ai1 is (rep_size, lda1) row-major (Trans DGEMV: output has ncols_a elements)
+            // y[d1] = sum_k dx1[a,i1,k,d1] * G_acc[k]
+            cblas_dgemv(
+                CblasRowMajor,
+                CblasTrans,
+                static_cast<blas_int>(rep_size),
+                static_cast<blas_int>(ncols_a),
+                1.0,
+                dx_ai1,
+                static_cast<blas_int>(lda1),
+                G_acc.data(),
+                static_cast<blas_int>(1),
+                1.0,
+                F + col_off_a,
+                static_cast<blas_int>(1)
+            );
+        }
+    }
+
+    kf_blas_set_num_threads(saved_blas_threads);
+}
+
 }  // namespace fchl19
 }  // namespace kf
