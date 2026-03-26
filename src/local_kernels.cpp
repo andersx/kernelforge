@@ -2849,28 +2849,29 @@ void kernel_gaussian_local_compute_alpha_desc(
         // alpha for the entire molecule b: shape (ncols_b,)
         const double *alpha_mol_b = alpha + offs2[b];
 
-        for (int i2 = 0; i2 < nb; ++i2) {
-            const double *dx_bi2 = &dx2[(size_t)b * max_atoms2 * rep_size * lda +
-                                        (size_t)i2 * rep_size * lda];
-            double *alpha_desc_bi2 = alpha_desc + ((size_t)b * max_atoms2 + i2) * rep_size;
+        // Process all nb atoms of molecule b in a single DGEMV call by flattening
+        // the (i2, k) indices into one row dimension:
+        //   dx2[b, i2, k, d] is at offset (i2*rep_size + k)*lda + d from dx_b
+        //   => row m = i2*rep_size + k has the same lda as before
+        //   alpha_desc[b, 0:nb, :] is C-contiguous (stride = rep_size between atoms)
+        //   => output y[m] = alpha_desc_b[m] writes all nb atoms in one shot
+        const double *dx_b = &dx2[(size_t)b * max_atoms2 * rep_size * lda];
+        double *alpha_desc_b = alpha_desc + (size_t)b * max_atoms2 * rep_size;
 
-            // alpha_desc[b,i2,:] = dx2[b,i2,:,:ncols_b] @ alpha[offs2[b]:offs2[b]+ncols_b]
-            // A (rep_size x ncols_b, row-major with lda) times x (ncols_b,) -> y (rep_size,)
-            cblas_dgemv(
-                CblasRowMajor,
-                CblasNoTrans,
-                static_cast<blas_int>(rep_size),
-                static_cast<blas_int>(ncols_b),
-                1.0,
-                dx_bi2,
-                static_cast<blas_int>(lda),
-                alpha_mol_b,
-                static_cast<blas_int>(1),
-                0.0,
-                alpha_desc_bi2,
-                static_cast<blas_int>(1)
-            );
-        }
+        cblas_dgemv(
+            CblasRowMajor,
+            CblasNoTrans,
+            static_cast<blas_int>(nb * rep_size),  // M = nb * rep_size rows
+            static_cast<blas_int>(ncols_b),         // N = 3*nb cols
+            1.0,
+            dx_b,
+            static_cast<blas_int>(lda),
+            alpha_mol_b,
+            static_cast<blas_int>(1),
+            0.0,
+            alpha_desc_b,
+            static_cast<blas_int>(1)
+        );
     }
 
     kf_blas_set_num_threads(saved_blas_threads);
