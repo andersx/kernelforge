@@ -183,5 +183,50 @@ void kernel_gaussian_local_hessian_matvec(
     double *F  // (naq1,) output, row-major
 );
 
+// Efficient energy prediction via local Jacobian kernel matvec using J^T·α trick.
+//
+// Computes E[a] = Σ_{b,r} K_jac[a, offs2[b]+r] · alpha_F[offs2[b]+r] without forming K_jac.
+// Requires alpha_desc = kernel_gaussian_local_compute_alpha_desc(dX2, q2, n2, ..., alpha_F).
+//
+// Shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep),
+//         alpha_desc(nm2,max_atoms2,rep) -> E_out(nm1,)
+void kernel_gaussian_local_jacobian_t_matvec(
+    const std::vector<double> &x1,          // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &x2,          // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &alpha_desc,  // (nm2, max_atoms2, rep_size) precomputed
+    const std::vector<int> &q1,             // (nm1, max_atoms1)
+    const std::vector<int> &q2,             // (nm2, max_atoms2)
+    const std::vector<int> &n1,             // (nm1)
+    const std::vector<int> &n2,             // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    double sigma,
+    double *E_out  // (nm1,) output energies
+);
+
+// Efficient combined energy+force prediction via full local kernel matvec using J^T·α trick.
+//
+// Given alpha_E(nm2,) and alpha_desc_F = compute_alpha_desc(dX2, alpha_F),
+// computes E(nm1,) and F(naq1,) predictions simultaneously.
+//
+// Shapes: x1(nm1,max_atoms1,rep), dx1(nm1,max_atoms1,rep,3*max_atoms1),
+//         x2(nm2,max_atoms2,rep), alpha_E(nm2,), alpha_desc_F(nm2,max_atoms2,rep)
+//         -> E_out(nm1,), F_out(naq1,)
+void kernel_gaussian_local_full_matvec(
+    const std::vector<double> &x1,           // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &dx1,          // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double> &x2,           // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &alpha_desc_F, // (nm2, max_atoms2, rep_size) precomputed
+    const double *alpha_E,                   // (nm2,) energy coefficients
+    const std::vector<int> &q1,              // (nm1, max_atoms1)
+    const std::vector<int> &q2,              // (nm2, max_atoms2)
+    const std::vector<int> &n1,              // (nm1)
+    const std::vector<int> &n2,              // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    int naq1,  // must equal 3 * sum(n1)
+    double sigma,
+    double *E_out,  // (nm1,) output energies
+    double *F_out   // (naq1,) output forces
+);
+
 }  // namespace fchl19
 }  // namespace kf

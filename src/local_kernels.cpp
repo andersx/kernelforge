@@ -2878,14 +2878,14 @@ void kernel_gaussian_local_compute_alpha_desc(
 }
 
 void kernel_gaussian_local_hessian_matvec(
-    const std::vector<double> &x1,    // (nm1, max_atoms1, rep_size)
-    const std::vector<double> &dx1,   // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    const std::vector<double> &x2,    // (nm2, max_atoms2, rep_size)
-    const std::vector<double> &alpha_desc,  // (nm2, max_atoms2, rep_size)
-    const std::vector<int> &q1,       // (nm1, max_atoms1)
-    const std::vector<int> &q2,       // (nm2, max_atoms2)
-    const std::vector<int> &n1,       // (nm1)
-    const std::vector<int> &n2,       // (nm2)
+    const std::vector<double> &x1,          // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &dx1,          // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double> &x2,           // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &alpha_desc,   // (nm2, max_atoms2, rep_size)
+    const std::vector<int> &q1,              // (nm1, max_atoms1)
+    const std::vector<int> &q2,              // (nm2, max_atoms2)
+    const std::vector<int> &n1,              // (nm1)
+    const std::vector<int> &n2,              // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum(n1)
     double sigma,
@@ -2914,25 +2914,385 @@ void kernel_gaussian_local_hessian_matvec(
     if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
     if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
 
-    // Compute offsets for both sets
-    std::vector<int> offs1(nm1), offs2(nm2);
+    std::vector<int> offs1(nm1);
     int sum1 = 0;
     for (int a = 0; a < nm1; ++a) {
         offs1[a] = sum1;
         sum1 += 3 * std::max(0, std::min(n1[a], max_atoms1));
     }
-    int sum2 = 0;
+    if (naq1 != sum1) throw std::invalid_argument("naq1 != 3*sum(n1)");
+
+    std::fill(F, F + naq1, 0.0);
+
+    const double inv_2s2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_s2 = 1.0 / (sigma * sigma);
+    const double inv_s4 = -1.0 / (sigma * sigma * sigma * sigma);  // negative
+
+    // =========================================================================
+    // STEP 1: Pack training atoms by label (contiguous B, Bd, nB, scB per label).
+    // =========================================================================
+
+    struct LD {
+        std::vector<double> B;    // (S, M) training descriptors
+        std::vector<double> Bd;   // (S, M) alpha_desc
+        std::vector<double> nB;   // (S,)   squared norms
+        std::vector<double> scB;  // (S,)   B[j]·Bd[j]
+        int S = 0;
+    };
+
+    std::unordered_map<int, LD> ldata;
+    ldata.reserve(128);
+
     for (int b = 0; b < nm2; ++b) {
-        offs2[b] = sum2;
-        sum2 += 3 * std::max(0, std::min(n2[b], max_atoms2));
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        for (int i2 = 0; i2 < nb; ++i2) {
+            const int lbl = q2[(size_t)b * max_atoms2 + i2];
+            LD &ld = ldata[lbl];
+            const double *xb = &x2[((size_t)b * max_atoms2 + i2) * rep_size];
+            const double *adb = &alpha_desc[((size_t)b * max_atoms2 + i2) * rep_size];
+            ld.B.insert(ld.B.end(), xb, xb + rep_size);
+            ld.Bd.insert(ld.Bd.end(), adb, adb + rep_size);
+            double nb_val = 0.0, sc_val = 0.0;
+#pragma omp simd reduction(+ : nb_val, sc_val)
+            for (int k = 0; k < rep_size; ++k) {
+                nb_val += xb[k] * xb[k];
+                sc_val += xb[k] * adb[k];
+            }
+            ld.nB.push_back(nb_val);
+            ld.scB.push_back(sc_val);
+            ++ld.S;
+        }
+    }
+
+    // =========================================================================
+    // STEP 2: Pack ALL query atoms by label across ALL molecules.
+    //
+    // Key insight: instead of one small DGEMM per (molecule, label) with M=r≈3
+    // rows (BLAS-inefficient), we build one large matrix A_L (R_q × M) per label
+    // containing every query atom of that label.  R_q = nm1 × atoms_per_label
+    // (e.g. 100 mols × 3 atoms/label = 300), giving a proper DGEMM that BLAS
+    // can saturate with threads.
+    // =========================================================================
+
+    struct QL {
+        std::vector<double> A;    // (R, M) query descriptors
+        std::vector<double> nA;   // (R,)   squared norms
+        std::vector<int> mol_idx; // (R,)   molecule index
+        std::vector<int> atm_idx; // (R,)   atom index within molecule
+        int R = 0;
+    };
+
+    std::unordered_map<int, QL> qdata;
+    qdata.reserve(128);
+
+    for (int a = 0; a < nm1; ++a) {
+        const int na = std::max(0, std::min(n1[a], max_atoms1));
+        for (int i1 = 0; i1 < na; ++i1) {
+            const int lbl = q1[(size_t)a * max_atoms1 + i1];
+            QL &ql = qdata[lbl];
+            const double *xa = &x1[((size_t)a * max_atoms1 + i1) * rep_size];
+            ql.A.insert(ql.A.end(), xa, xa + rep_size);
+            double n = 0.0;
+#pragma omp simd reduction(+ : n)
+            for (int k = 0; k < rep_size; ++k) n += xa[k] * xa[k];
+            ql.nA.push_back(n);
+            ql.mol_idx.push_back(a);
+            ql.atm_idx.push_back(i1);
+            ++ql.R;
+        }
+    }
+
+    // =========================================================================
+    // STEP 3: One large DGEMM pass per label.
+    //
+    //   A (R×M) = all query atoms of label L across all molecules
+    //   B (S×M) = all training atoms of label L (pre-packed)
+    //
+    //   DGEMM1: dist (R×S) = −2·A @ B^T       [distances]
+    //   DGEMM2: S_ad (R×S) = A @ Bd^T         [x_q · alpha_desc cross terms]
+    //   Elementwise: exp_C (→dist), weight (→S_ad), sum_weight
+    //   DGEMM3: G (R×M)  = exp_C @ Bd          (term 1: K/σ² · alpha_desc)
+    //   DGEMM4: G (R×M) -= weight @ B           (term 2b: −weight · x_t)
+    //   Self-corr: G[i,:] += sum_weight[i] · A[i,:]  (term 2a)
+    //   Back-project (sequential): F[offs[a]:] += J[a,i1]^T @ G[i,:]
+    //
+    // BLAS handles all threading via multi-threaded DGEMMs.  No OMP outer loop.
+    // =========================================================================
+
+    const int lda1 = 3 * max_atoms1;
+
+    for (auto &[lbl, ql] : qdata) {
+        auto it = ldata.find(lbl);
+        if (it == ldata.end()) continue;
+        const LD &ld = it->second;
+        if (ql.R == 0 || ld.S == 0) continue;
+
+        const int R = ql.R;
+        const int S = ld.S;
+
+        // ---- DGEMM1: dist (R×S) = −2·A @ B^T ----
+        std::vector<double> dist(static_cast<size_t>(R) * S);
+        cblas_dgemm(
+            CblasRowMajor, CblasNoTrans, CblasTrans,
+            static_cast<blas_int>(R), static_cast<blas_int>(S),
+            static_cast<blas_int>(rep_size), -2.0,
+            ql.A.data(), static_cast<blas_int>(rep_size),
+            ld.B.data(), static_cast<blas_int>(rep_size),
+            0.0, dist.data(), static_cast<blas_int>(S)
+        );
+
+        // ---- DGEMM2: S_ad (R×S) = A @ Bd^T ----
+        std::vector<double> S_ad(static_cast<size_t>(R) * S);
+        cblas_dgemm(
+            CblasRowMajor, CblasNoTrans, CblasTrans,
+            static_cast<blas_int>(R), static_cast<blas_int>(S),
+            static_cast<blas_int>(rep_size), 1.0,
+            ql.A.data(), static_cast<blas_int>(rep_size),
+            ld.Bd.data(), static_cast<blas_int>(rep_size),
+            0.0, S_ad.data(), static_cast<blas_int>(S)
+        );
+
+        // ---- Elementwise: exp_C (→dist), weight (→S_ad), sum_weight ----
+        // Each row i is independent; inner j loop writes to distinct ij offsets.
+        std::vector<double> sum_weight(R, 0.0);
+        for (int i = 0; i < R; ++i) {
+            double sw = 0.0;
+            for (int j = 0; j < S; ++j) {
+                const size_t ij = static_cast<size_t>(i) * S + j;
+                const double l2 = ql.nA[i] + ld.nB[j] + dist[ij];
+                const double eb = std::exp(l2 * inv_2s2);
+                dist[ij] = eb * inv_s2;
+                const double w = eb * inv_s4 * (S_ad[ij] - ld.scB[j]);
+                S_ad[ij] = w;
+                sw += w;
+            }
+            sum_weight[i] = sw;
+        }
+
+        // ---- DGEMM3: G (R×M) = exp_C @ Bd  (beta=0) ----
+        std::vector<double> G(static_cast<size_t>(R) * rep_size);
+        cblas_dgemm(
+            CblasRowMajor, CblasNoTrans, CblasNoTrans,
+            static_cast<blas_int>(R), static_cast<blas_int>(rep_size),
+            static_cast<blas_int>(S), 1.0,
+            dist.data(), static_cast<blas_int>(S),
+            ld.Bd.data(), static_cast<blas_int>(rep_size),
+            0.0, G.data(), static_cast<blas_int>(rep_size)
+        );
+
+        // ---- DGEMM4: G -= weight @ B  (alpha=−1, beta=1) ----
+        cblas_dgemm(
+            CblasRowMajor, CblasNoTrans, CblasNoTrans,
+            static_cast<blas_int>(R), static_cast<blas_int>(rep_size),
+            static_cast<blas_int>(S), -1.0,
+            S_ad.data(), static_cast<blas_int>(S),
+            ld.B.data(), static_cast<blas_int>(rep_size),
+            1.0, G.data(), static_cast<blas_int>(rep_size)
+        );
+
+        // ---- Self-correction: G[i,:] += sum_weight[i] · A[i,:] ----
+        for (int i = 0; i < R; ++i) {
+            cblas_daxpy(
+                static_cast<blas_int>(rep_size), sum_weight[i],
+                ql.A.data() + i * rep_size, 1,
+                G.data() + i * rep_size, 1
+            );
+        }
+
+        // ---- Back-project: F[offs1[a]:] += J_q[a,i1]^T @ G[i,:]
+        // Different molecules write to disjoint F regions; same molecule's atoms
+        // accumulate into the same region — process sequentially per molecule.
+        // Cost is tiny: R × rep × ncols FLOPs.
+        for (int i = 0; i < R; ++i) {
+            const int a = ql.mol_idx[i];
+            const int i1 = ql.atm_idx[i];
+            const int na = std::max(0, std::min(n1[a], max_atoms1));
+            const int ncols_a = 3 * na;
+            const double *dx_ai1 = &dx1[((size_t)a * max_atoms1 + i1) * rep_size * lda1];
+            cblas_dgemv(
+                CblasRowMajor, CblasTrans,
+                static_cast<blas_int>(rep_size), static_cast<blas_int>(ncols_a),
+                1.0, dx_ai1, static_cast<blas_int>(lda1),
+                G.data() + i * rep_size, 1,
+                1.0, F + offs1[a], 1
+            );
+        }
+    }
+}
+
+// Efficient energy prediction via Jacobian kernel matvec using J^T·α trick.
+//
+// Computes E[a] = Σ_{b,r} K_jac[a, offs2[b]+r] · alpha_F[offs2[b]+r]
+// where K_jac[a, offs2[b]+r] is the local Jacobian kernel (Jacobians on training/set-2 side).
+//
+// Using precomputed alpha_desc[b,i2,k] = Σ_r dX2[b,i2,k,r] * alpha_F[offs2[b]+r]:
+//   E[a] = Σ_{b,i1,i2 (matching label)} C[a,i1;b,i2] · (x1[a,i1] − x2[b,i2]) · α̃[b,i2]
+// where C = exp(−||d||²/(2σ²)) / σ².
+void kernel_gaussian_local_jacobian_t_matvec(
+    const std::vector<double> &x1,           // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &x2,           // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &alpha_desc,   // (nm2, max_atoms2, rep_size)
+    const std::vector<int> &q1,              // (nm1, max_atoms1)
+    const std::vector<int> &q2,             // (nm2, max_atoms2)
+    const std::vector<int> &n1,              // (nm1)
+    const std::vector<int> &n2,              // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    double sigma,
+    double *E_out  // (nm1,) output energies
+) {
+    if (!x1.data() || !x2.data() || !alpha_desc.data() || !q1.data() || !q2.data() ||
+        !n1.data() || !n2.data() || !E_out)
+        throw std::invalid_argument("null pointer");
+    if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
+        throw std::invalid_argument("dimensions must be positive");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
+
+    const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
+    const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t alpha_desc_N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t q1N = (size_t)nm1 * max_atoms1;
+    const size_t q2N = (size_t)nm2 * max_atoms2;
+
+    if (x1.size() != x1N) throw std::invalid_argument("x1 size mismatch");
+    if (x2.size() != x2N) throw std::invalid_argument("x2 size mismatch");
+    if (alpha_desc.size() != alpha_desc_N) throw std::invalid_argument("alpha_desc size mismatch");
+    if (q1.size() != q1N) throw std::invalid_argument("q1 size mismatch");
+    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
+    if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
+    if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
+
+    // Zero output
+    std::fill(E_out, E_out + nm1, 0.0);
+
+    const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
+    const double inv_sigma2 = 1.0 / (sigma * sigma);
+
+    // Build per-molecule label -> indices mapping for set-2
+    std::vector<std::unordered_map<int, std::vector<int>>> lab_to_i2(nm2);
+    for (int b = 0; b < nm2; ++b) {
+        const int nb = std::max(0, std::min(n2[b], max_atoms2));
+        auto &m = lab_to_i2[b];
+        m.reserve(64);
+        for (int i2 = 0; i2 < nb; ++i2) {
+            m[q2[(size_t)b * max_atoms2 + i2]].push_back(i2);
+        }
+    }
+
+    int saved_blas_threads = kf_blas_get_num_threads();
+    kf_blas_set_num_threads(1);
+
+#pragma omp parallel for schedule(dynamic)
+    for (int a = 0; a < nm1; ++a) {
+        const int na = std::max(0, std::min(n1[a], max_atoms1));
+        if (na == 0) continue;
+
+        double E_a = 0.0;
+
+        for (int i1 = 0; i1 < na; ++i1) {
+            const int label = q1[(size_t)a * max_atoms1 + i1];
+            const double *x_ai1 = &x1[((size_t)a * max_atoms1 + i1) * rep_size];
+
+            for (int b = 0; b < nm2; ++b) {
+                auto it = lab_to_i2[b].find(label);
+                if (it == lab_to_i2[b].end() || it->second.empty()) continue;
+
+                const auto &i2_list = it->second;
+                const int nb = std::max(0, std::min(n2[b], max_atoms2));
+
+                for (int i2 : i2_list) {
+                    if (i2 < 0 || i2 >= nb) continue;
+
+                    const double *x_bi2 = &x2[((size_t)b * max_atoms2 + i2) * rep_size];
+                    const double *alpha_desc_bi2 =
+                        &alpha_desc[((size_t)b * max_atoms2 + i2) * rep_size];
+
+                    // d = x1[a,i1] - x2[b,i2], compute ||d||² and dot(d, alpha_desc)
+                    double l2 = 0.0, inner = 0.0;
+#pragma omp simd reduction(+ : l2, inner)
+                    for (int k = 0; k < rep_size; ++k) {
+                        const double dk = x_ai1[k] - x_bi2[k];
+                        l2 += dk * dk;
+                        inner += dk * alpha_desc_bi2[k];
+                    }
+
+                    // E[a] += C * dot(d, alpha_desc[b,i2]) = expdiag * inner
+                    const double exp_base = std::exp(l2 * inv_2sigma2);
+                    E_a += exp_base * inv_sigma2 * inner;
+                }
+            }
+        }
+
+        E_out[a] = E_a;
+    }
+
+    kf_blas_set_num_threads(saved_blas_threads);
+}
+
+// Efficient combined energy+force prediction via full local kernel matvec using J^T·α trick.
+//
+// Given alpha_E (nm2,) and alpha_desc_F = compute_alpha_desc(dX2, alpha_F):
+//
+//   E[a]    = Σ_b K[a,b]*alpha_E[b]  +  Σ_{b,r} K_jac[a,offs2[b]+r]*alpha_F[offs2[b]+r]
+//   F[offs1[a]:] = Σ_b K_jt[...]*alpha_E[b]  +  Σ_{b,r} H[...]*alpha_F[...]
+//
+// All terms are computed in one loop over atom pairs, sharing kernel evaluations.
+void kernel_gaussian_local_full_matvec(
+    const std::vector<double> &x1,           // (nm1, max_atoms1, rep_size)
+    const std::vector<double> &dx1,          // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const std::vector<double> &x2,           // (nm2, max_atoms2, rep_size)
+    const std::vector<double> &alpha_desc_F, // (nm2, max_atoms2, rep_size) precomputed
+    const double *alpha_E,                   // (nm2,) energy coefficients
+    const std::vector<int> &q1,              // (nm1, max_atoms1)
+    const std::vector<int> &q2,              // (nm2, max_atoms2)
+    const std::vector<int> &n1,              // (nm1)
+    const std::vector<int> &n2,              // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    int naq1,  // must equal 3 * sum(n1)
+    double sigma,
+    double *E_out,  // (nm1,) output energies
+    double *F_out   // (naq1,) output forces
+) {
+    if (!x1.data() || !dx1.data() || !x2.data() || !alpha_desc_F.data() || !alpha_E ||
+        !q1.data() || !q2.data() || !n1.data() || !n2.data() || !E_out || !F_out)
+        throw std::invalid_argument("null pointer");
+    if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
+        throw std::invalid_argument("dimensions must be positive");
+    if (!(sigma > 0.0)) throw std::invalid_argument("sigma must be > 0");
+
+    const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
+    const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t dx1N = (size_t)nm1 * max_atoms1 * rep_size * (3 * (size_t)max_atoms1);
+    const size_t alpha_desc_N = (size_t)nm2 * max_atoms2 * rep_size;
+    const size_t q1N = (size_t)nm1 * max_atoms1;
+    const size_t q2N = (size_t)nm2 * max_atoms2;
+
+    if (x1.size() != x1N) throw std::invalid_argument("x1 size mismatch");
+    if (x2.size() != x2N) throw std::invalid_argument("x2 size mismatch");
+    if (dx1.size() != dx1N) throw std::invalid_argument("dx1 size mismatch");
+    if (alpha_desc_F.size() != alpha_desc_N)
+        throw std::invalid_argument("alpha_desc_F size mismatch");
+    if (q1.size() != q1N) throw std::invalid_argument("q1 size mismatch");
+    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
+    if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
+    if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
+
+    // Compute offsets for set-1
+    std::vector<int> offs1(nm1);
+    int sum1 = 0;
+    for (int a = 0; a < nm1; ++a) {
+        offs1[a] = sum1;
+        sum1 += 3 * std::max(0, std::min(n1[a], max_atoms1));
     }
     if (naq1 != sum1) throw std::invalid_argument("naq1 != 3*sum(n1)");
 
-    // Zero output
-    std::fill(F, F + naq1, 0.0);
+    // Zero outputs
+    std::fill(E_out, E_out + nm1, 0.0);
+    std::fill(F_out, F_out + naq1, 0.0);
 
     const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
-    const double inv_sigma4 = -1.0 / (sigma * sigma * sigma * sigma);
+    const double inv_sigma2 = 1.0 / (sigma * sigma);
+    const double inv_sigma4 = inv_sigma2 * inv_sigma2;
+    const double sigma2 = sigma * sigma;
 
     // Build per-molecule label -> indices mapping for set-2
     std::vector<std::unordered_map<int, std::vector<int>>> lab_to_i2(nm2);
@@ -2956,78 +3316,85 @@ void kernel_gaussian_local_hessian_matvec(
 
         const int ncols_a = 3 * na;
         const int col_off_a = offs1[a];
+        double E_a = 0.0;
 
         // Thread-local: descriptor-space accumulator per query atom
         std::vector<double> G_acc(rep_size);
 
-        // For each query atom i1 in molecule a
         for (int i1 = 0; i1 < na; ++i1) {
             const int label = q1[(size_t)a * max_atoms1 + i1];
             const double *x_ai1 = &x1[((size_t)a * max_atoms1 + i1) * rep_size];
             const double *dx_ai1 = &dx1[((size_t)a * max_atoms1 + i1) * rep_size * lda1];
 
-            // Zero accumulator for this query atom
+            // Zero accumulator
             std::fill(G_acc.begin(), G_acc.end(), 0.0);
+            double w_E_scalar = 0.0;  // accumulated C * alpha_E[b] (for jacobian_t correction)
 
-            // Find all matching training atoms (b, i2) with same label
             for (int b = 0; b < nm2; ++b) {
                 auto it = lab_to_i2[b].find(label);
                 if (it == lab_to_i2[b].end() || it->second.empty()) continue;
 
                 const auto &i2_list = it->second;
                 const int nb = std::max(0, std::min(n2[b], max_atoms2));
+                const double aE_b = alpha_E[b];
 
                 for (int i2 : i2_list) {
-                    if (i2 < 0 || i2 >= nb) continue;  // Safety check
+                    if (i2 < 0 || i2 >= nb) continue;
 
                     const double *x_bi2 = &x2[((size_t)b * max_atoms2 + i2) * rep_size];
                     const double *alpha_desc_bi2 =
-                        &alpha_desc[((size_t)b * max_atoms2 + i2) * rep_size];
+                        &alpha_desc_F[((size_t)b * max_atoms2 + i2) * rep_size];
 
-                    // Compute d = x_ai1 - x_bi2
-                    double l2 = 0.0;
+                    // Compute d = x1[a,i1] - x2[b,i2], ||d||², inner_F = d·alpha_desc
+                    double l2 = 0.0, inner_F = 0.0;
                     std::vector<double> d(rep_size);
+#pragma omp simd reduction(+ : l2, inner_F)
                     for (int k = 0; k < rep_size; ++k) {
                         d[k] = x_ai1[k] - x_bi2[k];
                         l2 += d[k] * d[k];
+                        inner_F += d[k] * alpha_desc_bi2[k];
                     }
 
-                    // Kernel scalars
                     const double exp_base = std::exp(l2 * inv_2sigma2);
-                    const double expdiag = exp_base / (sigma * sigma);
-                    const double expd = inv_sigma4 * exp_base;
+                    const double expdiag = exp_base * inv_sigma2;   // C = K/sigma^2
+                    const double expd = -exp_base * inv_sigma4;     // -K/sigma^4
 
-                    // Accumulate: G_acc += expdiag * alpha_desc + expd * inner * d
-                    double inner = 0.0;
-                    for (int k = 0; k < rep_size; ++k) {
-                        inner += d[k] * alpha_desc_bi2[k];
-                    }
+                    // Energy contributions:
+                    // scalar part: exp_base * alpha_E[b]
+                    // jacobian part: expdiag * inner_F
+                    E_a += exp_base * aE_b + expdiag * inner_F;
+
+                    // Force accumulator:
+                    // hessian part:  expdiag * alpha_desc_F[b,i2] + expd * inner_F * d
+                    // jacobian_E part: expdiag * alpha_E[b] * x2[b,i2]
+                    // (the -expdiag * alpha_E[b] * x1[a,i1] part is added below via w_E_scalar)
+                    const double expd_inner = expd * inner_F;
+                    const double expdiag_aE = expdiag * aE_b;
+                    w_E_scalar += expdiag_aE;
 
 #pragma omp simd
                     for (int k = 0; k < rep_size; ++k) {
-                        G_acc[k] += expdiag * alpha_desc_bi2[k] + expd * inner * d[k];
+                        G_acc[k] += expdiag * alpha_desc_bi2[k] + expd_inner * d[k]
+                                    + expdiag_aE * x_bi2[k];
                     }
                 }
             }
 
-            // Back-project: F[col_off_a : col_off_a+ncols_a] += dx_ai1^T @ G_acc
-            // dx_ai1 is (rep_size, lda1) row-major (Trans DGEMV: output has ncols_a elements)
-            // y[d1] = sum_k dx1[a,i1,k,d1] * G_acc[k]
+            // Subtract self-correction: G_acc -= w_E_scalar * x1[a,i1]
+#pragma omp simd
+            for (int k = 0; k < rep_size; ++k) {
+                G_acc[k] -= w_E_scalar * x_ai1[k];
+            }
+
+            // Back-project G_acc to forces: F[col_off_a:col_off_a+ncols_a] += dx_ai1^T @ G_acc
             cblas_dgemv(
-                CblasRowMajor,
-                CblasTrans,
-                static_cast<blas_int>(rep_size),
-                static_cast<blas_int>(ncols_a),
-                1.0,
-                dx_ai1,
-                static_cast<blas_int>(lda1),
-                G_acc.data(),
-                static_cast<blas_int>(1),
-                1.0,
-                F + col_off_a,
-                static_cast<blas_int>(1)
+                CblasRowMajor, CblasTrans, static_cast<blas_int>(rep_size),
+                static_cast<blas_int>(ncols_a), 1.0, dx_ai1, static_cast<blas_int>(lda1),
+                G_acc.data(), 1, 1.0, F_out + col_off_a, 1
             );
         }
+
+        E_out[a] = E_a;
     }
 
     kf_blas_set_num_threads(saved_blas_threads);

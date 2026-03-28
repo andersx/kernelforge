@@ -119,4 +119,30 @@ void kernel_gaussian_hessian_matvec(
     double *__restrict F_out  // (N_q, D) output forces
 );
 
+// Efficient energy prediction via Jacobian-T kernel matvec using J^T·α trick.
+// Cost: O(N_q·N_t·M) vs O(N_q·N_t·D·M) for full matrix.
+// Shapes: X_q(N_q,M), X_t(N_t,M), alpha_desc(N_t,M) -> E_out(N_q,)
+void kernel_gaussian_jacobian_t_matvec(
+    const double *__restrict X_q,         // (N_q, M) query descriptors
+    const double *__restrict X_t,         // (N_t, M) training descriptors
+    const double *__restrict alpha_desc,  // (N_t, M) pre-computed J^T·α coefficients
+    std::size_t N_q, std::size_t N_t, std::size_t M, double sigma,
+    double *__restrict E_out  // (N_q,) output energies
+);
+
+// Efficient combined energy+force prediction via full kernel matvec using J^T·α trick.
+// Requires alpha_desc_F = kernel_gaussian_compute_alpha_desc(dX_t, alpha_F) (precomputed).
+// Shapes: X_q(N_q,M), dX_q(N_q,D,M), X_t(N_t,M),
+//         alpha_E(N_t,), alpha_desc_F(N_t,M) -> E_out(N_q,), F_out(N_q,D)
+void kernel_gaussian_full_matvec(
+    const double *__restrict X_q,           // (N_q, M) query descriptors
+    const double *__restrict dX_q,          // (N_q, D, M) query Jacobians
+    const double *__restrict X_t,           // (N_t, M) training descriptors
+    const double *__restrict alpha_E,       // (N_t,) energy coefficients
+    const double *__restrict alpha_desc_F,  // (N_t, M) pre-computed J^T·alpha_F coefficients
+    std::size_t N_q, std::size_t N_t, std::size_t M, std::size_t D, double sigma,
+    double *__restrict E_out,  // (N_q,) output energies
+    double *__restrict F_out   // (N_q, D) output forces
+);
+
 }  // namespace kf
