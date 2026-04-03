@@ -58,13 +58,12 @@ def _load_ethanol(n: int):
 def test_full_asymm_scalar_block(N1, N2):
     """Scalar (energy-energy) sub-block matches standalone kernel_gaussian."""
     sigma = 2.0
-    alpha = -1.0 / (2.0 * sigma**2)
 
     X1, dX1 = _load_ethanol(N1)
     X2, dX2 = _load_ethanol(N2)
 
     K_full = kernel_gaussian_full(X1, dX1, X2, dX2, sigma)
-    K_scalar_ref = kernel_gaussian(X1, X2, alpha)
+    K_scalar_ref = kernel_gaussian(X1, X2, sigma)
 
     np.testing.assert_allclose(
         K_full[:N1, :N2],
@@ -204,11 +203,10 @@ def test_full_asymm_error_invalid_sigma():
 def test_full_symm_scalar_block(N):
     """Scalar block of symmetric full kernel matches standalone kernel_gaussian."""
     sigma = 2.0
-    alpha = -1.0 / (2.0 * sigma**2)
     X, dX = _load_ethanol(N)
 
     K_full = kernel_gaussian_full_symm(X, dX, sigma)
-    K_scalar_ref = kernel_gaussian(X, X, alpha)
+    K_scalar_ref = kernel_gaussian(X, X, sigma)
 
     # Symm fills both upper and lower of scalar block
     np.testing.assert_allclose(
@@ -538,13 +536,13 @@ def test_cho_solve_rfp_basic():
     # Use well-spread random X so the kernel is well-conditioned (not near-singular).
     rng = np.random.default_rng(42)
     X = rng.standard_normal((N, 36)) * 50.0  # large spread → off-diagonal kernel values near 0
-    alpha_scalar = -1.0 / (2.0 * 1.0**2)
+    sigma = 1.0
 
     # Build a small SPD kernel in RFP format
     from kernelforge.global_kernels import kernel_gaussian_symm, kernel_gaussian_symm_rfp
 
-    K_rfp = kernel_gaussian_symm_rfp(X, alpha_scalar)
-    K_full = kernel_gaussian_symm(X, alpha_scalar)
+    K_rfp = kernel_gaussian_symm_rfp(X, sigma)
+    K_full = kernel_gaussian_symm(X, sigma)
 
     y = rng.standard_normal(N)
 
@@ -568,8 +566,8 @@ def test_cho_solve_rfp_zero_l2():
     X = rng.standard_normal((N, 36)) * 50.0
     from kernelforge.global_kernels import kernel_gaussian_symm, kernel_gaussian_symm_rfp
 
-    K_rfp = kernel_gaussian_symm_rfp(X, -1.0 / (2.0 * 1.0**2))
-    K_full = kernel_gaussian_symm(X, -1.0 / (2.0 * 1.0**2))
+    K_rfp = kernel_gaussian_symm_rfp(X, 1.0)
+    K_full = kernel_gaussian_symm(X, 1.0)
 
     y = rng.standard_normal(N)
 

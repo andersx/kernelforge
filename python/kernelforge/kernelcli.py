@@ -39,7 +39,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from kernelforge.cli import load_qm7b_raw_data
-from kernelforge.models import FCHL18KRRModel, LocalKRRModel, LocalRFFModel
+from kernelforge.models import (
+    FCHL18KRRModel,
+    GlobalKRRModel,
+    GlobalRFFModel,
+    LocalKRRModel,
+    LocalRFFModel,
+)
 from kernelforge.models.base import _coerce_forces, _compute_score
 
 # ---------------------------------------------------------------------------
@@ -311,9 +317,16 @@ def _build_model(
     z_tr: list[NDArray[np.int32]],
     z_te: list[NDArray[np.int32]],
     repr_params: dict[str, Any] | None = None,
-) -> LocalKRRModel | LocalRFFModel | FCHL18KRRModel:
+) -> LocalKRRModel | LocalRFFModel | FCHL18KRRModel | GlobalKRRModel | GlobalRFFModel:
     """Construct and return the appropriate model instance."""
     repr_params = repr_params or {}
+
+    # Inverse-distance global descriptor (no element list or atom-padding needed)
+    if representation == "invdist":
+        if regressor == "krr":
+            return GlobalKRRModel(sigma=sigma, l2=l2)
+        # rff
+        return GlobalRFFModel(sigma=sigma, l2=l2, d_rff=d_rff, seed=seed)
 
     # Auto-detect elements from training data if not overridden
     if elements is None:
@@ -413,7 +426,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--representation",
         default="fchl19",
-        choices=["fchl19", "fchl18"],
+        choices=["fchl19", "fchl18", "invdist"],
         help="Molecular representation.",
     )
     p.add_argument(
@@ -481,6 +494,11 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
         parser.error(
             "RFF regressor is not supported with the FCHL18 representation. "
             "Use --regressor krr or --representation fchl19."
+        )
+    if args.representation == "invdist" and args.dataset in ("qm7b", "small_mols_mini"):
+        parser.error(
+            f"--representation invdist requires all molecules to have the same atom count. "
+            f"Dataset '{args.dataset}' has variable-size molecules. Use an rMD17 dataset."
         )
     if args.dataset == "qm7b" and args.mode in ("force_only", "energy_and_force"):
         parser.error(
