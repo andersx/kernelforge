@@ -261,7 +261,7 @@ class LocalKRRModel(BaseModel):
         self.repr_params = json.loads(str(data["repr_params"]))
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
-        self.training_mode_: TrainingMode = str(data["training_mode"])  # type: ignore[assignment]
+        self.training_mode_: TrainingMode = str(data["training_mode"])
         self._alpha = data["alpha"]
         self._y_train = data["y_train"] if "y_train" in data else np.array([], dtype=np.float64)
         self._X_tr = data["X_tr"]
