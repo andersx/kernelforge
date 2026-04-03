@@ -30,6 +30,8 @@ The existing `fchl19_repr` module is left **untouched** as the baseline.
 | A3 | Odd Fourier | Split r_plus/r_minus | Yes |
 | A4 | Full cosine series | Split r_plus/r_minus | Yes |
 | A5 | Full cosine series | Split r_plus/r_minus | No |
+| A6 | Odd Fourier | Element-resolved ordered (r_ij, r_ik) | Yes |
+| A7 | Full cosine series | Element-resolved ordered (r_ij, r_ik) | Yes |
 
 ### Dataset: rMD17
 
@@ -62,7 +64,8 @@ The existing `fchl19_repr` module is left **untouched** as the baseline.
 ```cpp
 enum class TwoBodyType { LogNormal, GaussianR, GaussianLogR, GaussianRNoPow, Bessel };
 enum class ThreeBodyType { OddFourier_Rbar, CosineSeries_Rbar, OddFourier_SplitR,
-                           CosineSeries_SplitR, CosineSeries_SplitR_NoATM };
+                           CosineSeries_SplitR, CosineSeries_SplitR_NoATM,
+                           OddFourier_ElementResolved, CosineSeries_ElementResolved };
 ```
 
 ### Rep size formula
@@ -71,6 +74,9 @@ enum class ThreeBodyType { OddFourier_Rbar, CosineSeries_Rbar, OddFourier_SplitR
 - Three-body block:
   - Rbar variants: `n_pairs * nbasis3 * nabasis`
   - SplitR variants: `n_pairs * nbasis3_plus * nbasis3_minus * nabasis`
+  - ElementResolved variants:
+    - Diagonal (B==C) blocks: `nelements * nbasis3 * nbasis3_minus * nabasis`
+    - Off-diagonal ordered (B!=C) blocks: `nelements*(nelements-1) * nbasis3 * nbasis3 * nabasis`
 - Where `n_pairs = nelements * (nelements + 1) / 2`
 - And `nabasis`:
   - OddFourier: `2 * nFourier` (cos+sin pairs for odd harmonics)
@@ -93,17 +99,19 @@ f_c(r, r_c) = 0.5 * (cos(pi * r / r_c) + 1)
 
 Each step includes forward pass + analytic gradient + tests.
 
-1. **Scaffolding**: header, bindings, CMake, stubs, empty test file
-2. **T1**: LogNormal two-body (port from existing) — baseline validation
-3. **T2**: GaussianR two-body
-4. **T3**: GaussianLogR two-body
-5. **T4**: GaussianRNoPow two-body
-6. **T5**: Bessel two-body
-7. **A1**: OddFourier + Rbar three-body (port from existing) — baseline validation
-8. **A2**: CosineSeries + Rbar three-body
-9. **A3**: OddFourier + SplitR three-body
-10. **A4**: CosineSeries + SplitR three-body
-11. **A5**: CosineSeries + SplitR + NoATM three-body
+1. **Scaffolding**: header, bindings, CMake, stubs, empty test file ✓
+2. **T1**: LogNormal two-body (port from existing) — baseline validation ✓
+3. **T2**: GaussianR two-body ✓
+4. **T3**: GaussianLogR two-body ✓
+5. **T4**: GaussianRNoPow two-body ✓
+6. **T5**: Bessel two-body ✓
+7. **A1**: OddFourier + Rbar three-body (port from existing) — baseline validation ✓
+8. **A2**: CosineSeries + Rbar three-body ✓
+9. **A3**: OddFourier + SplitR three-body ✓
+10. **A4**: CosineSeries + SplitR three-body ✓
+11. **A5**: CosineSeries + SplitR + NoATM three-body ✓
+12. **A6**: OddFourier + ElementResolved three-body ✓
+13. **A7**: CosineSeries + ElementResolved three-body ✓
 
 ### Tests per variant
 
@@ -174,6 +182,32 @@ phi_l = exp(-eta3 * (r_bar - Rs3[l])^2),  r_bar = (r_ij + r_ik) / 2
 phi_{l1,l2} = exp(-eta3 * (r_plus - Rs3_plus[l1])^2) * exp(-eta3_minus * (r_minus - Rs3_minus[l2])^2)
 r_plus = r_ij + r_ik,  r_minus = |r_ij - r_ik|
 ```
+
+**ElementResolved (A6/A7):**
+
+For each center atom i and neighbor pair (j, k) with `k > j`:
+
+- **B == C** (elem_j == elem_k, diagonal block): same SplitR basis as A3/A4
+  ```
+  phi_{l1,l2} = exp(-eta3 * (r_plus - Rs3[l1])^2) * exp(-eta3_minus * (r_minus - Rs3_minus[l2])^2)
+  ```
+  stored in diagonal block indexed by `elem_j`, size `nbasis3 * nbasis3_minus * nabasis`
+
+- **B != C** (elem_j != elem_k, off-diagonal ordered blocks): independent Gaussians in r_ij, r_ik
+  ```
+  phi_{l1,l2}^{(ej,ek)} = exp(-eta3 * (r_ij - Rs3[l1])^2) * exp(-eta3 * (r_ik - Rs3[l2])^2)
+  phi_{l1,l2}^{(ek,ej)} = exp(-eta3 * (r_ik - Rs3[l1])^2) * exp(-eta3 * (r_ij - Rs3[l2])^2)
+  ```
+  Both ordered blocks `(elem_j, elem_k)` and `(elem_k, elem_j)` are populated from the same
+  triplet (with r_ij and r_ik swapped), making "H at 2Å, O at 5Å" distinguishable from
+  "H at 5Å, O at 2Å". Each off-diagonal block has size `nbasis3 * nbasis3 * nabasis`.
+
+The block layout within the three-body section:
+```
+[diag block 0] [diag block 1] ... [diag block N-1]
+[off-diag block (0,1)] [off-diag block (0,2)] ... [off-diag block (N-1,N-2)]
+```
+where diagonal blocks use `nbasis3_minus` (SplitR) and off-diagonal use `nbasis3` (square grid).
 
 ### ATM factor
 

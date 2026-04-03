@@ -17,11 +17,13 @@ enum class TwoBodyType {
 };
 
 enum class ThreeBodyType {
-    OddFourier_Rbar,           // A1: odd cos+sin harmonics, r_bar radial
-    CosineSeries_Rbar,         // A2: full cosine series, r_bar radial
-    OddFourier_SplitR,        // A3: odd cos+sin harmonics, r_plus/r_minus radial
-    CosineSeries_SplitR,       // A4: full cosine series, r_plus/r_minus radial
-    CosineSeries_SplitR_NoATM  // A5: full cosine series, r_plus/r_minus, no ATM factor
+    OddFourier_Rbar,               // A1: odd cos+sin harmonics, r_bar radial
+    CosineSeries_Rbar,             // A2: full cosine series, r_bar radial
+    OddFourier_SplitR,             // A3: odd cos+sin harmonics, r_plus/r_minus radial
+    CosineSeries_SplitR,           // A4: full cosine series, r_plus/r_minus radial
+    CosineSeries_SplitR_NoATM,     // A5: full cosine series, r_plus/r_minus, no ATM factor
+    OddFourier_ElementResolved,    // A6: odd harmonics; B!=C: (r_ij,r_ik) ordered; B==C: SplitR
+    CosineSeries_ElementResolved   // A7: cosine series;  B!=C: (r_ij,r_ik) ordered; B==C: SplitR
 };
 
 // ==================== Utility ====================

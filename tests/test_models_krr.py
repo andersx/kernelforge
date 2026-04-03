@@ -198,3 +198,73 @@ class TestLocalKRRModelErrors:
         path = tmp_path / "no_ext"
         model.save(path)
         assert (tmp_path / "no_ext.npz").exists()
+
+
+# ---------------------------------------------------------------------------
+# Tests: FCHL19v2 representation
+# ---------------------------------------------------------------------------
+class TestLocalKRRModelFCHL19v2:
+    """Smoke tests verifying the fchl19v2 representation path works end-to-end."""
+
+    def test_energy_only_shapes(self, dataset: tuple) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:15], coords_list[15:20]
+        ztr, zte = z_list[:15], z_list[15:20]
+
+        model = LocalKRRModel(sigma=10.0, l2=1e-6, elements=ELEMENTS, representation="fchl19v2")
+        model.fit(tr, ztr, energies=energies[:15])
+
+        E_pred, F_pred = model.predict(te, zte)
+        assert E_pred.shape == (5,)
+        assert F_pred.shape == (5 * N_ATOMS * 3,)
+
+    def test_energy_and_force_shapes(self, dataset: tuple) -> None:
+        coords_list, z_list, energies, forces = dataset
+        tr, te = coords_list[:15], coords_list[15:20]
+        ztr, zte = z_list[:15], z_list[15:20]
+
+        model = LocalKRRModel(sigma=10.0, l2=1e-7, elements=ELEMENTS, representation="fchl19v2")
+        model.fit(tr, ztr, energies=energies[:15], forces=forces[:15])
+
+        E_pred, F_pred = model.predict(te, zte)
+        assert E_pred.shape == (5,)
+        assert F_pred.shape == (5 * N_ATOMS * 3,)
+
+    def test_repr_params_forwarded(self, dataset: tuple) -> None:
+        """v2-specific repr_params (two_body_type, three_body_type) are accepted."""
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:10], coords_list[10:12]
+        ztr, zte = z_list[:10], z_list[10:12]
+
+        model = LocalKRRModel(
+            sigma=10.0,
+            l2=1e-6,
+            elements=ELEMENTS,
+            representation="fchl19v2",
+            repr_params={"two_body_type": "bessel", "three_body_type": "cosine_rbar"},
+        )
+        model.fit(tr, ztr, energies=energies[:10])
+        E_pred, _ = model.predict(te, zte)
+        assert E_pred.shape == (2,)
+
+    def test_save_load_roundtrip(self, dataset: tuple, tmp_path) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:15], coords_list[15:20]
+        ztr, zte = z_list[:15], z_list[15:20]
+
+        model = LocalKRRModel(sigma=10.0, l2=1e-6, elements=ELEMENTS, representation="fchl19v2")
+        model.fit(tr, ztr, energies=energies[:15])
+        E_orig, F_orig = model.predict(te, zte)
+
+        path = tmp_path / "krr_v2.npz"
+        model.save(path)
+        loaded = LocalKRRModel.load(path)
+        assert isinstance(loaded, LocalKRRModel)
+        assert loaded.representation == "fchl19v2"
+        E_load, F_load = loaded.predict(te, zte)
+        np.testing.assert_allclose(E_load, E_orig, rtol=1e-10)
+        np.testing.assert_allclose(F_load, F_orig, rtol=1e-10)
+
+    def test_invalid_representation_raises(self) -> None:
+        with pytest.raises(ValueError, match="representation"):
+            LocalKRRModel(sigma=10.0, l2=1e-6, elements=ELEMENTS, representation="unknown")
