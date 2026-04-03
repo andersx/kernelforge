@@ -13,12 +13,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  code-quality:
-    uses: ./.github/workflows/code-quality.yml
+  lint:
+    name: code-quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install code quality tools
+        run: uv pip install --system ruff==0.15.5 ty==0.0.28 numpy pytest
+
+      - name: Check formatting with Ruff
+        run: ruff format --check python/ tests/
+
+      - name: Lint with Ruff
+        run: ruff check python/ tests/
+
+      - name: Type check with ty
+        run: ty check python/ tests/
 
   test:
     name: pytest (${{ matrix.os }} / py${{ matrix.python-version }})
-    needs: code-quality
+    needs: lint
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
