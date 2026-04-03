@@ -241,7 +241,7 @@ class BaseModel(ABC):
         if path.suffix != ".npz":
             path = path.with_suffix(".npz")
         arrays = self._arrays_to_save()
-        np.savez(path, **arrays)  # type: ignore[arg-type]
+        np.savez(path, **arrays)  # type: ignore[ty:invalid-argument-type]
 
     @classmethod
     def load(cls, path: str | Path) -> BaseModel:
