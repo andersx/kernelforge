@@ -3003,20 +3003,23 @@ void kernel_gaussian_local_hessian_matvec(
     }
 
     // =========================================================================
-    // STEP 3: One large DGEMM pass per label.
+    // STEP 3: One large DGEMM pass per label — hybrid transposed layout.
     //
-    //   A (R×M) = all query atoms of label L across all molecules
-    //   B (S×M) = all training atoms of label L (pre-packed)
+    // Strategy: use transposed layout (S×R / M×R) for DGEMM1–4 so BLAS always
+    // sees the large dimension in M (most threads useful), then explicitly
+    // transpose G_T (M×R) → G (R×M) before self-correction and back-projection
+    // so those steps use stride-1 (cache-friendly) access.
     //
-    //   DGEMM1: dist (R×S) = −2·A @ B^T       [distances]
-    //   DGEMM2: S_ad (R×S) = A @ Bd^T         [x_q · alpha_desc cross terms]
-    //   Elementwise: exp_C (→dist), weight (→S_ad), sum_weight
-    //   DGEMM3: G (R×M)  = exp_C @ Bd          (term 1: K/σ² · alpha_desc)
-    //   DGEMM4: G (R×M) -= weight @ B           (term 2b: −weight · x_t)
-    //   Self-corr: G[i,:] += sum_weight[i] · A[i,:]  (term 2a)
-    //   Back-project (sequential): F[offs[a]:] += J[a,i1]^T @ G[i,:]
+    // DGEMM1 (S×R = B @ A^T):      M=S≈3000 → all threads ✓
+    // DGEMM2 (S×R = Bd @ A^T):     M=S≈3000 → all threads ✓
+    // DGEMM3 (M×R = Bd^T @ dist_T): M=M_rep=384 → adequate threading ✓
+    // DGEMM4 (M×R = B^T @ S_ad_T):  M=M_rep=384 → adequate threading ✓
+    // Transpose G_T → G:            O(R·M) = cheap (e.g. 3×384 = 1152 ops)
+    // Self-correction G[i,:] +=...: stride-1 daxpy ✓
+    // Back-project J^T @ G[i,:]:   stride-1 dgemv ✓
     //
-    // BLAS handles all threading via multi-threaded DGEMMs.  No OMP outer loop.
+    // This avoids the stride-R cache penalty that the pure transposed layout
+    // suffered in self-correction and back-projection.
     // =========================================================================
 
     const int lda1 = 3 * max_atoms1;
@@ -3030,67 +3033,76 @@ void kernel_gaussian_local_hessian_matvec(
         const int R = ql.R;
         const int S = ld.S;
 
-        // ---- DGEMM1: dist (R×S) = −2·A @ B^T ----
-        std::vector<double> dist(static_cast<size_t>(R) * S);
+        // ---- DGEMM1: dist_T (S×R) = −2·B @ A^T  [M=S, large] ----
+        std::vector<double> dist_T(static_cast<size_t>(S) * R);
         cblas_dgemm(
             CblasRowMajor, CblasNoTrans, CblasTrans,
-            static_cast<blas_int>(R), static_cast<blas_int>(S),
+            static_cast<blas_int>(S), static_cast<blas_int>(R),
             static_cast<blas_int>(rep_size), -2.0,
-            ql.A.data(), static_cast<blas_int>(rep_size),
             ld.B.data(), static_cast<blas_int>(rep_size),
-            0.0, dist.data(), static_cast<blas_int>(S)
+            ql.A.data(), static_cast<blas_int>(rep_size),
+            0.0, dist_T.data(), static_cast<blas_int>(R)
         );
 
-        // ---- DGEMM2: S_ad (R×S) = A @ Bd^T ----
-        std::vector<double> S_ad(static_cast<size_t>(R) * S);
+        // ---- DGEMM2: S_ad_T (S×R) = Bd @ A^T  [M=S, large] ----
+        std::vector<double> S_ad_T(static_cast<size_t>(S) * R);
         cblas_dgemm(
             CblasRowMajor, CblasNoTrans, CblasTrans,
-            static_cast<blas_int>(R), static_cast<blas_int>(S),
+            static_cast<blas_int>(S), static_cast<blas_int>(R),
             static_cast<blas_int>(rep_size), 1.0,
-            ql.A.data(), static_cast<blas_int>(rep_size),
             ld.Bd.data(), static_cast<blas_int>(rep_size),
-            0.0, S_ad.data(), static_cast<blas_int>(S)
+            ql.A.data(), static_cast<blas_int>(rep_size),
+            0.0, S_ad_T.data(), static_cast<blas_int>(R)
         );
 
-        // ---- Elementwise: exp_C (→dist), weight (→S_ad), sum_weight ----
-        // Each row i is independent; inner j loop writes to distinct ij offsets.
+        // ---- Elementwise: exp_C (→dist_T), weight (→S_ad_T), sum_weight ----
+        // j-outer, i-inner: dist_T[j*R+i] is stride-1 in the i loop → cache-friendly.
         std::vector<double> sum_weight(R, 0.0);
-        for (int i = 0; i < R; ++i) {
-            double sw = 0.0;
-            for (int j = 0; j < S; ++j) {
-                const size_t ij = static_cast<size_t>(i) * S + j;
-                const double l2 = ql.nA[i] + ld.nB[j] + dist[ij];
+        for (int j = 0; j < S; ++j) {
+            for (int i = 0; i < R; ++i) {
+                const size_t ji = static_cast<size_t>(j) * R + i;
+                const double l2 = ql.nA[i] + ld.nB[j] + dist_T[ji];
                 const double eb = std::exp(l2 * inv_2s2);
-                dist[ij] = eb * inv_s2;
-                const double w = eb * inv_s4 * (S_ad[ij] - ld.scB[j]);
-                S_ad[ij] = w;
-                sw += w;
+                dist_T[ji] = eb * inv_s2;                         // exp_C
+                const double w = eb * inv_s4 * (S_ad_T[ji] - ld.scB[j]);
+                S_ad_T[ji] = w;                                    // weight
+                sum_weight[i] += w;
             }
-            sum_weight[i] = sw;
         }
 
-        // ---- DGEMM3: G (R×M) = exp_C @ Bd  (beta=0) ----
-        std::vector<double> G(static_cast<size_t>(R) * rep_size);
+        // ---- DGEMM3: G_T (M_rep×R) = Bd^T @ dist_T  [M=M_rep, adequate] ----
+        // Bd stored (S×M_rep): CblasTrans treats it as Bd^T (M_rep×S).
+        std::vector<double> G_T(static_cast<size_t>(rep_size) * R);
         cblas_dgemm(
-            CblasRowMajor, CblasNoTrans, CblasNoTrans,
-            static_cast<blas_int>(R), static_cast<blas_int>(rep_size),
+            CblasRowMajor, CblasTrans, CblasNoTrans,
+            static_cast<blas_int>(rep_size), static_cast<blas_int>(R),
             static_cast<blas_int>(S), 1.0,
-            dist.data(), static_cast<blas_int>(S),
             ld.Bd.data(), static_cast<blas_int>(rep_size),
-            0.0, G.data(), static_cast<blas_int>(rep_size)
+            dist_T.data(), static_cast<blas_int>(R),
+            0.0, G_T.data(), static_cast<blas_int>(R)
         );
 
-        // ---- DGEMM4: G -= weight @ B  (alpha=−1, beta=1) ----
+        // ---- DGEMM4: G_T -= B^T @ S_ad_T  [M=M_rep, adequate] ----
         cblas_dgemm(
-            CblasRowMajor, CblasNoTrans, CblasNoTrans,
-            static_cast<blas_int>(R), static_cast<blas_int>(rep_size),
+            CblasRowMajor, CblasTrans, CblasNoTrans,
+            static_cast<blas_int>(rep_size), static_cast<blas_int>(R),
             static_cast<blas_int>(S), -1.0,
-            S_ad.data(), static_cast<blas_int>(S),
             ld.B.data(), static_cast<blas_int>(rep_size),
-            1.0, G.data(), static_cast<blas_int>(rep_size)
+            S_ad_T.data(), static_cast<blas_int>(R),
+            1.0, G_T.data(), static_cast<blas_int>(R)
         );
 
-        // ---- Self-correction: G[i,:] += sum_weight[i] · A[i,:] ----
+        // ---- Explicit transpose: G_T (M_rep×R) → G (R×M_rep) ----
+        // Cost: R*M_rep doubles (e.g. 3×384=1152). Enables stride-1 access below.
+        std::vector<double> G(static_cast<size_t>(R) * rep_size);
+        for (int k = 0; k < rep_size; ++k) {
+            for (int i = 0; i < R; ++i) {
+                G[static_cast<size_t>(i) * rep_size + k] =
+                    G_T[static_cast<size_t>(k) * R + i];
+            }
+        }
+
+        // ---- Self-correction: G[i,:] += sum_weight[i] · A[i,:]  (stride-1) ----
         for (int i = 0; i < R; ++i) {
             cblas_daxpy(
                 static_cast<blas_int>(rep_size), sum_weight[i],
@@ -3099,10 +3111,7 @@ void kernel_gaussian_local_hessian_matvec(
             );
         }
 
-        // ---- Back-project: F[offs1[a]:] += J_q[a,i1]^T @ G[i,:]
-        // Different molecules write to disjoint F regions; same molecule's atoms
-        // accumulate into the same region — process sequentially per molecule.
-        // Cost is tiny: R × rep × ncols FLOPs.
+        // ---- Back-project: F[offs1[a]:] += J_q[a,i1]^T @ G[i,:]  (stride-1) ----
         for (int i = 0; i < R; ++i) {
             const int a = ql.mol_idx[i];
             const int i1 = ql.atm_idx[i];
