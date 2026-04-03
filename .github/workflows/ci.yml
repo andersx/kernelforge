@@ -30,7 +30,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install code quality tools
-        run: uv pip install --system ruff==0.15.5 ty==0.0.28 numpy pytest
+        run: uv pip install --system ruff==0.15.9 ty==0.0.28 numpy pytest
 
       - name: Check formatting with Ruff
         run: ruff format --check python/ tests/
