@@ -229,7 +229,7 @@ class TestFullMatvec:
         )
 
         # Reference: scalar kernel for energy, jacobian for forces
-        K_scalar = _kernels.kernel_gaussian(X_q, X_t, -0.5 / (sigma**2))
+        K_scalar = _kernels.kernel_gaussian(X_q, X_t, sigma)
         E_ref = K_scalar @ alpha_E
         K_jac = _kernels.kernel_gaussian_jacobian(X_q, dX_q, X_t, sigma)
         F_ref = (K_jac @ alpha_E).reshape(N_q, D)

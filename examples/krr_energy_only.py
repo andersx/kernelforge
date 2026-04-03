@@ -102,13 +102,11 @@ def main():
     print(f"\n[1] Data loaded in {time.perf_counter() - t0:.2f}s")
     print(f"    M={X_tr.shape[1]}  ncoords={D}")
 
-    alpha_scalar = -1.0 / (2.0 * SIGMA**2)
-
     # ------------------------------------------------------------------
     # 2. Build training kernel  —  scalar, symmetric, RFP packed
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_rfp = kernel_gaussian_symm_rfp(X_tr, alpha_scalar)
+    K_rfp = kernel_gaussian_symm_rfp(X_tr, SIGMA)
     print(f"\n[2] Training kernel (scalar, RFP) built in {time.perf_counter() - t0:.3f}s")
     print(f"    length={len(K_rfp)}  ({len(K_rfp) * 8 / 1024:.1f} KB)")
     assert len(K_rfp) == N_TRAIN * (N_TRAIN + 1) // 2
@@ -124,7 +122,7 @@ def main():
     # ------------------------------------------------------------------
     # 4. Training error  --  full symmetric scalar kernel
     # ------------------------------------------------------------------
-    K_tr_full = kernel_gaussian_symm(X_tr, alpha_scalar)  # (N_train, N_train)
+    K_tr_full = kernel_gaussian_symm(X_tr, SIGMA)  # (N_train, N_train)
     E_tr_pred = K_tr_full @ alpha
     train_mae = np.mean(np.abs(E_tr_pred - E_tr))
     slope_E_tr, intercept_E_tr = linfit(E_tr, E_tr_pred)
@@ -137,7 +135,7 @@ def main():
     # 5. Test prediction — energies
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    K_te_scalar = kernel_gaussian(X_te, X_tr, alpha_scalar)  # (N_test, N_train)
+    K_te_scalar = kernel_gaussian(X_te, X_tr, SIGMA)  # (N_test, N_train)
     E_te_pred = K_te_scalar @ alpha  # (N_test,)
     print(f"\n[5] Energy prediction kernel built in {time.perf_counter() - t0:.4f}s")
 

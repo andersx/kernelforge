@@ -124,17 +124,16 @@ def test_kernel_gaussian_symm_rfp(n: int, seed: int) -> None:
     d = min(5, n)  # dimension
     X = rng.standard_normal((n, d))
     sigma = 1.5
-    alpha = -1.0 / (2 * sigma**2)
 
     # Direct RFP computation
-    K_rfp = global_kernels.kernel_gaussian_symm_rfp(X, alpha)
+    K_rfp = global_kernels.kernel_gaussian_symm_rfp(X, sigma)
     assert K_rfp.ndim == 1
     assert K_rfp.shape[0] == n * (n + 1) // 2
     assert K_rfp.flags["C_CONTIGUOUS"]
 
     # Reference: compute full kernel, then convert to RFP
     # kernel_gaussian_symm fills lower triangle only
-    K_full_lower = global_kernels.kernel_gaussian_symm(X, alpha)
+    K_full_lower = global_kernels.kernel_gaussian_symm(X, sigma)
     # Mirror lower -> upper to get full symmetric matrix
     K_full = np.tril(K_full_lower) + np.tril(K_full_lower, -1).T
 
@@ -168,10 +167,9 @@ def test_kernel_gaussian_symm_rfp_solve(n: int, seed: int) -> None:
     d = min(5, n)
     X = rng.standard_normal((n, d))
     sigma = 1.0
-    alpha = -1.0 / (2 * sigma**2)
 
     # Compute kernel in RFP format
-    K_rfp = global_kernels.kernel_gaussian_symm_rfp(X, alpha)
+    K_rfp = global_kernels.kernel_gaussian_symm_rfp(X, sigma)
 
     # Create a test right-hand side
     y = rng.standard_normal(n)
@@ -181,7 +179,7 @@ def test_kernel_gaussian_symm_rfp_solve(n: int, seed: int) -> None:
     assert alpha_solve.shape == (n,)
 
     # Verify solution by computing residual with full kernel
-    K_full_lower = global_kernels.kernel_gaussian_symm(X, alpha)
+    K_full_lower = global_kernels.kernel_gaussian_symm(X, sigma)
     K_full = np.tril(K_full_lower) + np.tril(K_full_lower, -1).T
     residual = K_full @ alpha_solve - y
     residual_norm = np.linalg.norm(residual)
@@ -194,8 +192,9 @@ def test_kernel_gaussian_symm_rfp_small() -> None:
     """Test kernel_gaussian_symm_rfp with a hand-crafted small example."""
     # Two points at distance 1.0 apart
     X = np.array([[0.0], [1.0]])
-    alpha = -1.0
-    K_rfp = global_kernels.kernel_gaussian_symm_rfp(X, alpha)
+    # sigma = 1/sqrt(2) gives exp(-dist^2/(2*sigma^2)) = exp(-dist^2)
+    sigma = 1.0 / np.sqrt(2.0)
+    K_rfp = global_kernels.kernel_gaussian_symm_rfp(X, sigma)
 
     # Convert to full to inspect values
     K = kernelmath.rfp_to_full(K_rfp, n=2, uplo="L", transr="N")
@@ -205,6 +204,6 @@ def test_kernel_gaussian_symm_rfp_small() -> None:
     assert K_symm[0, 0] == pytest.approx(1.0)
     assert K_symm[1, 1] == pytest.approx(1.0)
 
-    # Off-diagonal: distance^2 = 1, so exp(-1.0 * 1) = exp(-1)
+    # Off-diagonal: distance^2 = 1, so exp(-1/(2*(1/sqrt(2))^2)) = exp(-1)
     assert K_symm[0, 1] == pytest.approx(np.exp(-1.0))
     assert K_symm[1, 0] == pytest.approx(np.exp(-1.0))

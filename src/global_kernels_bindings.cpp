@@ -19,14 +19,16 @@ static void check_2d(const py::array &X) {
 }
 
 py::array_t<double> kernel_symm_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> X, double alpha
+    py::array_t<double, py::array::c_style | py::array::forcecast> X, double sigma
 ) {
+    if (!(sigma > 0.0)) throw std::runtime_error("sigma must be positive.");
     check_2d(X);
     auto bufX = X.request();
 
     blas_int n = static_cast<blas_int>(bufX.shape[0]);         // rows
     blas_int rep_size = static_cast<blas_int>(bufX.shape[1]);  // cols
     double *Xptr = static_cast<double *>(bufX.ptr);
+    const double alpha = -1.0 / (2.0 * sigma * sigma);
 
     // Allocate aligned K (row-major, n x n)
     std::size_t nelems = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
@@ -51,14 +53,16 @@ py::array_t<double> kernel_symm_py(
 }
 
 py::array_t<double> kernel_symm_rfp_py(
-    py::array_t<double, py::array::c_style | py::array::forcecast> X, double alpha
+    py::array_t<double, py::array::c_style | py::array::forcecast> X, double sigma
 ) {
+    if (!(sigma > 0.0)) throw std::runtime_error("sigma must be positive.");
     check_2d(X);
     auto bufX = X.request();
 
     blas_int n = static_cast<blas_int>(bufX.shape[0]);         // rows
     blas_int rep_size = static_cast<blas_int>(bufX.shape[1]);  // cols
     double *Xptr = static_cast<double *>(bufX.ptr);
+    const double alpha = -1.0 / (2.0 * sigma * sigma);
 
     // RFP output size: n*(n+1)/2
     const std::size_t nt = static_cast<std::size_t>(n) * (static_cast<std::size_t>(n) + 1) / 2;
@@ -84,8 +88,9 @@ py::array_t<double> kernel_symm_rfp_py(
 py::array_t<double> kernel_asymm_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> X1,  // (n1,d)
     py::array_t<double, py::array::c_style | py::array::forcecast> X2,  // (n2,d)
-    double alpha
+    double sigma
 ) {
+    if (!(sigma > 0.0)) throw std::runtime_error("sigma must be positive.");
     check_2d(X1);
     check_2d(X2);
 
@@ -95,6 +100,7 @@ py::array_t<double> kernel_asymm_py(
     const std::size_t d2 = static_cast<std::size_t>(X2.shape(1));
     if (d1 != d2)
         throw std::runtime_error("X1.shape[1] must equal X2.shape[1] (feature dimension d).");
+    const double alpha = -1.0 / (2.0 * sigma * sigma);
 
     // Make aligned (n2 x n1) output
     const std::size_t nelems = n2 * n1;
@@ -709,15 +715,15 @@ PYBIND11_MODULE(global_kernels, m) {
         "kernel_gaussian_symm",
         &kernel_symm_py,
         py::arg("X"),
-        py::arg("alpha"),
-        "Compute K = exp(alpha*(||x_i||^2 + ||x_j||^2 - 2 x_i·x_j)) over the lower triangle.\n"
+        py::arg("sigma"),
+        "Compute K[i,j] = exp(-||x_i-x_j||^2 / (2*sigma^2)) over the full symmetric matrix.\n"
         "X is (n, rep_size) in row-major; returns K as an (n,n) NumPy array."
     );
     m.def(
         "kernel_gaussian_symm_rfp",
         &kernel_symm_rfp_py,
         py::arg("X"),
-        py::arg("alpha"),
+        py::arg("sigma"),
         "Compute symmetric Gaussian kernel directly into RFP format (tiled DGEMM/DSYRK).\n"
         "Tile size: 8192. Temp buffer: min(n,8192)² doubles. No full N×N allocation.\n"
         "Output: 1D array of length n*(n+1)/2 in RFP packed layout (TRANSR='N', UPLO='U')."
@@ -727,8 +733,8 @@ PYBIND11_MODULE(global_kernels, m) {
         &kernel_asymm_py,
         py::arg("X1"),
         py::arg("X2"),
-        py::arg("alpha"),
-        "Return K (n2, n1) where K[i2,i1] = exp(alpha*(||x2||^2 + ||x1||^2 - 2 x2·x1))."
+        py::arg("sigma"),
+        "Return K (n1, n2) where K[i,j] = exp(-||x1_i-x2_j||^2 / (2*sigma^2))."
     );
     m.def(
         "kernel_gaussian_jacobian",
