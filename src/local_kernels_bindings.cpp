@@ -1178,4 +1178,359 @@ Output: 1-D array of length BIG*(BIG+1)/2 where BIG=nm+naq, naq=3*sum(n).
 Packed as RFP TRANSR='N', UPLO='U'.
 )"
     );
+
+    m.def(
+        "kernel_gaussian_local_compute_alpha_desc",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> dx2,
+           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
+           py::array_t<double, py::array::c_style | py::array::forcecast> alpha) -> py::array_t<double> {
+            if (dx2.ndim() != 4 || q2.ndim() != 2 || n2.ndim() != 1 || alpha.ndim() != 1)
+                throw std::invalid_argument("shape error");
+            const int nm2 = static_cast<int>(dx2.shape(0));
+            const int max_atoms2 = static_cast<int>(dx2.shape(1));
+            const int rep_size = static_cast<int>(dx2.shape(2));
+            if (dx2.shape(3) != 3 * max_atoms2) throw std::invalid_argument("dx2 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2) throw std::invalid_argument("q2 shape mismatch");
+            if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch");
+
+            std::vector<double> dx2v(dx2.data(), dx2.data() + dx2.size());
+            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
+            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+            std::vector<double> alphav(alpha.data(), alpha.data() + alpha.size());
+
+            // Allocate output: (nm2, max_atoms2, rep_size)
+            const std::size_t output_size = (std::size_t)nm2 * max_atoms2 * rep_size;
+            double *alpha_desc_ptr = aligned_alloc_64(output_size);
+            auto capsule = py::capsule(alpha_desc_ptr, [](void *p) { aligned_free_64(p); });
+
+            {
+                py::gil_scoped_release release;
+                kf::fchl19::kernel_gaussian_local_compute_alpha_desc(
+                    dx2v,
+                    q2v,
+                    n2v,
+                    nm2,
+                    max_atoms2,
+                    rep_size,
+                    alphav.data(),
+                    alpha_desc_ptr
+                );
+            }
+
+            return py::array_t<double>(
+                {(py::ssize_t)nm2, (py::ssize_t)max_atoms2, (py::ssize_t)rep_size},
+                {(py::ssize_t)(max_atoms2 * rep_size * sizeof(double)),
+                 (py::ssize_t)(rep_size * sizeof(double)),
+                 (py::ssize_t)sizeof(double)},
+                alpha_desc_ptr,
+                capsule
+            );
+        },
+        py::arg("dx2"),
+        py::arg("q2"),
+        py::arg("n2"),
+        py::arg("alpha"),
+        R"(Pre-compute descriptor-space force coefficients for J^T*alpha trick.
+
+Shapes:
+  dx2:   (nm2, max_atoms2, rep_size, 3*max_atoms2), training Jacobians
+  q2:    (nm2, max_atoms2), atomic labels
+  n2:    (nm2,), active atom counts
+  alpha: (naq2,) where naq2 = 3*sum(n2), force coefficients in Cartesian space
+
+Returns:
+  alpha_desc: (nm2, max_atoms2, rep_size), descriptor-space coefficients
+
+Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
+)"
+    );
+
+    m.def(
+        "kernel_gaussian_local_hessian_matvec",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
+           py::array_t<double, py::array::c_style | py::array::forcecast> dx1,
+           py::array_t<double, py::array::c_style | py::array::forcecast> x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_desc,
+           py::array_t<int, py::array::c_style | py::array::forcecast> q1,
+           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast> n1,
+           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
+           double sigma) -> py::array_t<double> {
+            if (x1.ndim() != 3 || dx1.ndim() != 4 || x2.ndim() != 3 || alpha_desc.ndim() != 3 ||
+                q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
+                throw std::invalid_argument("shape error");
+
+            const int nm1 = static_cast<int>(x1.shape(0));
+            const int max_atoms1 = static_cast<int>(x1.shape(1));
+            const int rep_size = static_cast<int>(x1.shape(2));
+            const int nm2 = static_cast<int>(x2.shape(0));
+            const int max_atoms2 = static_cast<int>(x2.shape(1));
+
+            if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep_size ||
+                dx1.shape(3) != 3 * max_atoms1)
+                throw std::invalid_argument("dx1 shape mismatch");
+            if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
+                throw std::invalid_argument("x2 shape mismatch");
+            if (alpha_desc.shape(0) != nm2 || alpha_desc.shape(1) != max_atoms2 ||
+                alpha_desc.shape(2) != rep_size)
+                throw std::invalid_argument("alpha_desc shape mismatch");
+            if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
+                throw std::invalid_argument("q1 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
+                throw std::invalid_argument("q2 shape mismatch");
+            if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
+                throw std::invalid_argument("n1/n2 length mismatch");
+
+            std::vector<double> x1v(x1.data(), x1.data() + x1.size());
+            std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
+            std::vector<double> x2v(x2.data(), x2.data() + x2.size());
+            std::vector<double> alpha_descv(alpha_desc.data(), alpha_desc.data() + alpha_desc.size());
+            std::vector<int> q1v(q1.data(), q1.data() + q1.size());
+            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
+            std::vector<int> n1v(n1.data(), n1.data() + n1.size());
+            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+
+            // Compute naq1 = 3*sum(n1)
+            long long naq1_ll = 0;
+            for (int a = 0; a < nm1; ++a)
+                naq1_ll += 3LL * std::max(0, std::min(n1v[a], max_atoms1));
+            const int naq1 = static_cast<int>(naq1_ll);
+
+            // Allocate output: (naq1,)
+            double *F_ptr = aligned_alloc_64((std::size_t)naq1);
+            auto capsule = py::capsule(F_ptr, [](void *p) { aligned_free_64(p); });
+
+            {
+                py::gil_scoped_release release;
+                kf::fchl19::kernel_gaussian_local_hessian_matvec(
+                    x1v,
+                    dx1v,
+                    x2v,
+                    alpha_descv,
+                    q1v,
+                    q2v,
+                    n1v,
+                    n2v,
+                    nm1,
+                    nm2,
+                    max_atoms1,
+                    max_atoms2,
+                    rep_size,
+                    naq1,
+                    sigma,
+                    F_ptr
+                );
+            }
+
+            return py::array_t<double>(
+                {(py::ssize_t)naq1},
+                {(py::ssize_t)sizeof(double)},
+                F_ptr,
+                capsule
+            );
+        },
+        py::arg("x1"),
+        py::arg("dx1"),
+        py::arg("x2"),
+        py::arg("alpha_desc"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
+        py::arg("sigma"),
+        R"(Predict forces via local Hessian kernel matvec using J^T*alpha trick.
+
+Cost: O(nm1·naq2·rep + naq1) vs O(naq1·naq2·rep + naq1) for full matrix.
+
+Shapes:
+  x1:        (nm1, max_atoms1, rep_size), query descriptor vectors
+  dx1:       (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
+  x2:        (nm2, max_atoms2, rep_size), training descriptor vectors
+  alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+  q1, q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  n1, n2:    (nm1/nm2), active atom counts
+  sigma:     Gaussian width parameter
+
+Returns:
+  F: (naq1,) where naq1 = 3*sum(n1), forces in Cartesian coordinates
+)"
+    );
+
+    m.def(
+        "kernel_gaussian_local_jacobian_t_matvec",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
+           py::array_t<double, py::array::c_style | py::array::forcecast> x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_desc,
+           py::array_t<int, py::array::c_style | py::array::forcecast> q1,
+           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast> n1,
+           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
+           double sigma) -> py::array_t<double> {
+            if (x1.ndim() != 3 || x2.ndim() != 3 || alpha_desc.ndim() != 3 ||
+                q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
+                throw std::invalid_argument("shape error");
+
+            const int nm1 = static_cast<int>(x1.shape(0));
+            const int max_atoms1 = static_cast<int>(x1.shape(1));
+            const int rep_size = static_cast<int>(x1.shape(2));
+            const int nm2 = static_cast<int>(x2.shape(0));
+            const int max_atoms2 = static_cast<int>(x2.shape(1));
+
+            if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch");
+            if (alpha_desc.shape(0) != nm2 || alpha_desc.shape(1) != max_atoms2 ||
+                alpha_desc.shape(2) != rep_size)
+                throw std::invalid_argument("alpha_desc shape mismatch");
+            if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
+                throw std::invalid_argument("q1 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
+                throw std::invalid_argument("q2 shape mismatch");
+            if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
+                throw std::invalid_argument("n1/n2 length mismatch");
+
+            std::vector<double> x1v(x1.data(), x1.data() + x1.size());
+            std::vector<double> x2v(x2.data(), x2.data() + x2.size());
+            std::vector<double> alpha_descv(alpha_desc.data(), alpha_desc.data() + alpha_desc.size());
+            std::vector<int> q1v(q1.data(), q1.data() + q1.size());
+            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
+            std::vector<int> n1v(n1.data(), n1.data() + n1.size());
+            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+
+            // Allocate output: (nm1,)
+            py::array_t<double> E({(py::ssize_t)nm1});
+            auto Ev = E.mutable_unchecked<1>();
+
+            {
+                py::gil_scoped_release release;
+                kf::fchl19::kernel_gaussian_local_jacobian_t_matvec(
+                    x1v, x2v, alpha_descv, q1v, q2v, n1v, n2v,
+                    nm1, nm2, max_atoms1, max_atoms2, rep_size, sigma,
+                    Ev.mutable_data(0)
+                );
+            }
+            return E;
+        },
+        py::arg("x1"),
+        py::arg("x2"),
+        py::arg("alpha_desc"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
+        py::arg("sigma"),
+        R"(Predict energies via local Jacobian kernel matvec using J^T*alpha trick.
+
+Cost: O(nm1·naq2·rep) vs O(nm1·naq2·rep·3*na) for full matrix.
+
+Shapes:
+  x1:        (nm1, max_atoms1, rep_size), query descriptor vectors
+  x2:        (nm2, max_atoms2, rep_size), training descriptor vectors
+  alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+  q1, q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  n1, n2:    (nm1/nm2), active atom counts
+  sigma:     Gaussian width parameter
+
+Returns:
+  E: (nm1,) predicted energies per query molecule
+)"
+    );
+
+    m.def(
+        "kernel_gaussian_local_full_matvec",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
+           py::array_t<double, py::array::c_style | py::array::forcecast> dx1,
+           py::array_t<double, py::array::c_style | py::array::forcecast> x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_desc_F,
+           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_E,
+           py::array_t<int, py::array::c_style | py::array::forcecast> q1,
+           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast> n1,
+           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
+           double sigma) -> py::tuple {
+            if (x1.ndim() != 3 || dx1.ndim() != 4 || x2.ndim() != 3 ||
+                alpha_desc_F.ndim() != 3 || alpha_E.ndim() != 1 ||
+                q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
+                throw std::invalid_argument("shape error");
+
+            const int nm1 = static_cast<int>(x1.shape(0));
+            const int max_atoms1 = static_cast<int>(x1.shape(1));
+            const int rep_size = static_cast<int>(x1.shape(2));
+            const int nm2 = static_cast<int>(x2.shape(0));
+            const int max_atoms2 = static_cast<int>(x2.shape(1));
+
+            if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 ||
+                dx1.shape(2) != rep_size || dx1.shape(3) != 3 * max_atoms1)
+                throw std::invalid_argument("dx1 shape mismatch");
+            if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch");
+            if (alpha_desc_F.shape(0) != nm2 || alpha_desc_F.shape(1) != max_atoms2 ||
+                alpha_desc_F.shape(2) != rep_size)
+                throw std::invalid_argument("alpha_desc_F shape mismatch");
+            if (alpha_E.shape(0) != nm2) throw std::invalid_argument("alpha_E length mismatch");
+            if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
+                throw std::invalid_argument("q1 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
+                throw std::invalid_argument("q2 shape mismatch");
+            if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
+                throw std::invalid_argument("n1/n2 length mismatch");
+
+            std::vector<double> x1v(x1.data(), x1.data() + x1.size());
+            std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
+            std::vector<double> x2v(x2.data(), x2.data() + x2.size());
+            std::vector<double> alpha_desc_Fv(alpha_desc_F.data(), alpha_desc_F.data() + alpha_desc_F.size());
+            std::vector<double> alpha_Ev(alpha_E.data(), alpha_E.data() + alpha_E.size());
+            std::vector<int> q1v(q1.data(), q1.data() + q1.size());
+            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
+            std::vector<int> n1v(n1.data(), n1.data() + n1.size());
+            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+
+            // Compute naq1 = 3*sum(n1)
+            long long naq1_ll = 0;
+            for (int a = 0; a < nm1; ++a)
+                naq1_ll += 3LL * std::max(0, std::min(n1v[a], max_atoms1));
+            const int naq1 = static_cast<int>(naq1_ll);
+
+            py::array_t<double> E({(py::ssize_t)nm1});
+            py::array_t<double> F({(py::ssize_t)naq1});
+            auto Ev = E.mutable_unchecked<1>();
+            auto Fv = F.mutable_unchecked<1>();
+
+            {
+                py::gil_scoped_release release;
+                kf::fchl19::kernel_gaussian_local_full_matvec(
+                    x1v, dx1v, x2v, alpha_desc_Fv, alpha_Ev.data(),
+                    q1v, q2v, n1v, n2v,
+                    nm1, nm2, max_atoms1, max_atoms2, rep_size, naq1, sigma,
+                    Ev.mutable_data(0), Fv.mutable_data(0)
+                );
+            }
+            return py::make_tuple(E, F);
+        },
+        py::arg("x1"),
+        py::arg("dx1"),
+        py::arg("x2"),
+        py::arg("alpha_desc_F"),
+        py::arg("alpha_E"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
+        py::arg("sigma"),
+        R"(Predict energies+forces via full local kernel matvec using J^T*alpha trick.
+
+Cost: O(nm1·naq2·rep + naq1) vs O((nm1+naq1)·(nm2+naq2)·rep) for full matrix.
+
+Shapes:
+  x1:          (nm1, max_atoms1, rep_size), query descriptor vectors
+  dx1:         (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
+  x2:          (nm2, max_atoms2, rep_size), training descriptor vectors
+  alpha_desc_F:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc(dX2, alpha_F)
+  alpha_E:     (nm2,), energy coefficients
+  q1, q2:      (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  n1, n2:      (nm1/nm2), active atom counts
+  sigma:       Gaussian width parameter
+
+Returns:
+  (E, F): E=(nm1,) energies, F=(naq1,) forces where naq1=3*sum(n1)
+)"
+    );
 }
