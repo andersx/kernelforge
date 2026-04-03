@@ -105,6 +105,8 @@ class LocalKRRModel(BaseModel):
             K_rfp = local_kernels.kernel_gaussian_symm_rfp(X, Q_krr, N, self.sigma)
             self._y_train = energies
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, energies, l2=self.l2)
+            # J^T alpha trick not applicable: alpha has shape (n_train,), not (naq,)
+            self._alpha_desc: NDArray[np.float64] | None = None
 
         elif mode == "force_only":
             if forces is None:
@@ -117,6 +119,11 @@ class LocalKRRModel(BaseModel):
             K_rfp = local_kernels.kernel_gaussian_hessian_symm_rfp(X, dX, Q_krr, N, self.sigma)
             self._y_train = F_flat
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, F_flat, l2=self.l2)
+            # Precompute descriptor-space force coefficients for fast inference.
+            # alpha has shape (naq_tr,) — Cartesian force coefficients.
+            self._alpha_desc = local_kernels.kernel_gaussian_local_compute_alpha_desc(
+                dX, Q_krr, N, self._alpha
+            )
 
         else:  # energy_and_force
             if energies is None:
@@ -136,6 +143,12 @@ class LocalKRRModel(BaseModel):
             K_rfp = local_kernels.kernel_gaussian_full_symm_rfp(X, dX, Q_krr, N, self.sigma)
             self._y_train = y_tr
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, y_tr, l2=self.l2)
+            # Precompute descriptor-space force coefficients for fast inference.
+            # alpha[n_train:] are the Cartesian force coefficients.
+            alpha_F = self._alpha[self._n_train :]
+            self._alpha_desc = local_kernels.kernel_gaussian_local_compute_alpha_desc(
+                dX, Q_krr, N, alpha_F
+            )
 
     # ------------------------------------------------------------------
     # Internal predict
@@ -183,29 +196,46 @@ class LocalKRRModel(BaseModel):
             if dX_te is None or dX_tr is None:
                 msg = "dX_te or dX_tr is None in force_only predict — internal error"
                 raise RuntimeError(msg)
-            K_hess = local_kernels.kernel_gaussian_hessian(
-                X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
-            )
-            F_pred = K_hess @ alpha  # flat (sum(N_te)*3,)
-
-            # Energy via Jacobian kernel: K_j[i, j*naq+d] = dK(i,j)/dR_j[d]
-            K_j = local_kernels.kernel_gaussian_jacobian(
-                X_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
-            )
-            E_pred = -(K_j @ alpha)
+            if self._alpha_desc is not None:
+                # Fast path: J^T alpha trick — no full kernel matrix materialised.
+                F_pred = local_kernels.kernel_gaussian_local_hessian_matvec(
+                    X_te, dX_te, X_tr, self._alpha_desc, Q_te, Q_tr, N_te, N_tr, self.sigma
+                )
+                E_pred = -local_kernels.kernel_gaussian_local_jacobian_t_matvec(
+                    X_te, X_tr, self._alpha_desc, Q_te, Q_tr, N_te, N_tr, self.sigma
+                )
+            else:
+                # Fallback for models loaded from files saved before alpha_desc was added.
+                K_hess = local_kernels.kernel_gaussian_hessian(
+                    X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
+                )
+                F_pred = K_hess @ alpha
+                K_j = local_kernels.kernel_gaussian_jacobian(
+                    X_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
+                )
+                E_pred = -(K_j @ alpha)
 
         else:  # energy_and_force
             if dX_te is None or dX_tr is None:
                 msg = "dX_te or dX_tr is None in energy_and_force predict — internal error"
                 raise RuntimeError(msg)
-            K_full = local_kernels.kernel_gaussian_full(
-                X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
-            )
-            y_pred = K_full @ alpha  # (n_test + sum(N_te)*3,)
-            E_pred = y_pred[:n_test]
-            # Negate back: we stored -F as training labels, so predictions are -F_pred.
-            # Return flat (sum(N_te)*3,) — works for both fixed- and variable-size molecules.
-            F_pred = -y_pred[n_test:]
+            if self._alpha_desc is not None:
+                # Fast path: J^T alpha trick — no full kernel matrix materialised.
+                # alpha[:n_train] are the per-molecule energy coefficients.
+                alpha_E = alpha[: self._n_train]
+                E_pred, F_raw = local_kernels.kernel_gaussian_local_full_matvec(
+                    X_te, dX_te, X_tr, self._alpha_desc, alpha_E, Q_te, Q_tr, N_te, N_tr, self.sigma
+                )
+                # Negate back: training labels were -F, so the F slot holds -F_pred.
+                F_pred = -F_raw
+            else:
+                # Fallback for models loaded from files saved before alpha_desc was added.
+                K_full = local_kernels.kernel_gaussian_full(
+                    X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
+                )
+                y_pred = K_full @ alpha
+                E_pred = y_pred[:n_test]
+                F_pred = -y_pred[n_test:]
 
         return E_pred, F_pred
 
@@ -252,6 +282,8 @@ class LocalKRRModel(BaseModel):
         }
         if self._dX_tr is not None:
             d["dX_tr"] = self._dX_tr
+        if self._alpha_desc is not None:
+            d["alpha_desc"] = self._alpha_desc
         return d
 
     def _load_from_arrays(self, data: np.lib.npyio.NpzFile) -> None:
@@ -268,5 +300,6 @@ class LocalKRRModel(BaseModel):
         self._Q_tr = data["Q_tr"]
         self._N_tr = data["N_tr"]
         self._dX_tr = data.get("dX_tr", None)
+        self._alpha_desc = data.get("alpha_desc", None)
         self._n_train = len(self._N_tr)
         self._n_atoms = self._X_tr.shape[1]
