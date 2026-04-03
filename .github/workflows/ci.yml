@@ -13,8 +13,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  code-quality:
+    uses: ./.github/workflows/code-quality.yml
+
   test:
     name: pytest (${{ matrix.os }} / py${{ matrix.python-version }})
+    needs: code-quality
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

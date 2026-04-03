@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -285,7 +285,7 @@ class LocalRFFModel(BaseModel):
         self.repr_params = json.loads(str(data["repr_params"]))
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
-        self.training_mode_: TrainingMode = str(data["training_mode"])
+        self.training_mode_: TrainingMode = cast(TrainingMode, str(data["training_mode"]))
         self._weights = data["weights"]
         self._W = data["W"]
         self._b = data["b"]

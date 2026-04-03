@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -281,7 +281,7 @@ class FCHL18KRRModel(BaseModel):
         self._kp_fit = json.loads(str(data["kp_fit"]))
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
-        self.training_mode_: TrainingMode = str(data["training_mode"])
+        self.training_mode_: TrainingMode = cast(TrainingMode, str(data["training_mode"]))
         self._alpha = data["alpha"]
         self._y_train = data["y_train"] if "y_train" in data else np.array([], dtype=np.float64)
         self._x_tr = data["x_tr"]
