@@ -132,9 +132,11 @@ class GlobalRFFModel(BaseModel):
             if dX is None:
                 msg = "dX is None in energy_and_force fit — internal error"
                 raise RuntimeError(msg)
-            # RFF full convention: physical forces directly (no sign flip needed).
             F_flat = forces.ravel()
-            y_tr = np.concatenate([energies, F_flat])
+            # rff_full's energy features produce predictions with a sign flip vs
+            # the gramian targets: rff_full @ w ≈ [-E; F].  Store y_train with the
+            # same sign convention ([-E; F]) so training scores compare correctly.
+            y_tr = np.concatenate([-energies, F_flat])
             ZtZ_rfp, ZtY = rff_full_gramian_symm_rfp(X, dX, W, b, energies, F_flat)
             self._y_train = y_tr
             self._weights = kernelmath.cho_solve_rfp(ZtZ_rfp, ZtY, l2=self.l2)
@@ -186,7 +188,7 @@ class GlobalRFFModel(BaseModel):
             Z_te = rff_features(X_te, W, b)  # (n_test, d_rff)
             E_pred: NDArray[np.float64] = Z_te @ w
             G_te = rff_gradient(X_te, dX_te, W, b)  # (d_rff, n_test*D)
-            F_pred: NDArray[np.float64] = G_te.T @ w  # flat (n_test*D,)
+            F_pred: NDArray[np.float64] = -G_te.T @ w  # flat (n_test*D,)
 
         elif mode == "force_only":
             G_te = rff_gradient(X_te, dX_te, W, b)  # (d_rff, n_test*D)
@@ -196,9 +198,9 @@ class GlobalRFFModel(BaseModel):
 
         else:  # energy_and_force
             Z_full_te = rff_full(X_te, dX_te, W, b)  # (n_test*(1+D), d_rff)
-            y_pred = Z_full_te @ w
+            y_pred = -Z_full_te @ w
             E_pred = y_pred[:n_test]
-            F_pred = y_pred[n_test:]  # flat (n_test*D,)
+            F_pred = -y_pred[n_test:]  # flat (n_test*D,)
 
         return E_pred, F_pred
 
