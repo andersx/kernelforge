@@ -520,11 +520,11 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
     """Validate cross-argument constraints."""
     if args.cuda:
         try:
-            from kernelforge import cuda_krr_ext as _  # noqa: F401
+            from kernelforge import cuda_global_kernels as _  # noqa: F401
         except ImportError:
             parser.error(
-                "--cuda requires cuda_krr_ext (not built). "
-                "Re-build kernelforge with a CUDA compiler and CUDAToolkit present:\n"
+                "--cuda requires cuda_global_kernels (not built). "
+                "Re-build kernelforge with a CUDA compiler, CUDAToolkit, and PyTorch:\n"
                 "    make install-linux-mkl-ilp64"
             )
         if args.representation != "invdist":

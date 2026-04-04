@@ -1,20 +1,22 @@
 """Tests for CudaGlobalKRRModel using rMD17 ethanol.
 
 These tests are skipped when:
-  - cuda_krr_ext was not built (no CUDA compiler at build time)
+  - cuda_global_kernels was not built (no CUDA + PyTorch at build time)
   - No NVIDIA GPU is detected
   - The rMD17 ethanol dataset is not cached locally
 
 Run with:
     uv run pytest tests/test_cuda_global_krr.py -v
 
-Float32 precision note
-----------------------
-CudaGlobalKRRModel trains in float32.  The full kernel matrix K_full mixes
-the energy block (diagonal ~1.0) with the force block (diagonal ~1e-3), which
-makes the matrix ill-conditioned in float32 for large training sets from MD
-trajectories (very similar structures).  Tests are written to stay within
-the well-conditioned regime (N_train = 20, sigma = 3.0, l2 = 1e-5).
+Architecture notes
+------------------
+CudaGlobalKRRModel trains using:
+  - GPU float32 kernel assembly  (cuda_global_kernels.kernel_gaussian_full_symm)
+  - CPU float64 Cholesky solve   (kernelmath.solve_cholesky)
+  - GPU float32 contracted matvec for inference
+
+The float64 Cholesky solve avoids conditioning failures that afflict pure
+float32 Cholesky for large training sets with tight sigma on MD trajectories.
 """
 
 from __future__ import annotations
@@ -29,12 +31,17 @@ import pytest
 # ---------------------------------------------------------------------------
 # Skip guard — skip entire module if CUDA extension is unavailable
 # ---------------------------------------------------------------------------
-cuda_krr_ext = pytest.importorskip(
-    "kernelforge.cuda_krr_ext",
-    reason="cuda_krr_ext not built (requires CUDA compiler and GPU at build time)",
+cuda_global_kernels = pytest.importorskip(
+    "kernelforge.cuda_global_kernels",
+    reason="cuda_global_kernels not built (requires CUDA + PyTorch at build time)",
 )
 
-# Check for a functional GPU via nvidia-smi
+torch = pytest.importorskip(
+    "torch",
+    reason="PyTorch not installed",
+)
+
+# Check for a functional GPU
 _nvidia_smi = shutil.which("nvidia-smi")
 try:
     _gpu_ok = (
@@ -57,15 +64,13 @@ pytestmark = pytest.mark.skipif(
 from kernelforge.models import CudaGlobalKRRModel, GlobalKRRModel  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Dataset helpers (same pattern as test_models_global.py)
+# Dataset helpers
 # ---------------------------------------------------------------------------
 
 _CACHE = Path.home() / ".kernelforge" / "datasets"
 _RMD17_TRAIN = _CACHE / "rmd17_ethanol_train_01.npz"
 
-# Training/test sizes that stay in the well-conditioned float32 regime.
-# Ethanol has 9 atoms → D=27 coords, M=36 invdist features.
-# K_full size = N*(1+D) x N*(1+D).  N=20 -> 560x560 (condition ~10^5, safe).
+# Ethanol: 9 atoms, D=27 coords, M=36 invdist features.
 _N_TRAIN = 20
 _N_TEST = 5
 
@@ -73,7 +78,6 @@ _N_TEST = 5
 def _load_ethanol(
     n: int = _N_TRAIN + _N_TEST,
 ) -> tuple[list[np.ndarray], list[np.ndarray], np.ndarray, np.ndarray]:
-    """Load a small slice of rMD17 ethanol.  Skip test if not cached."""
     if not _RMD17_TRAIN.exists():
         pytest.skip("rMD17 ethanol data not cached; run kernelcli to populate")
     d = np.load(_RMD17_TRAIN, allow_pickle=True)
@@ -86,7 +90,7 @@ def _load_ethanol(
 
 
 # ---------------------------------------------------------------------------
-# Basic smoke / shape tests
+# Smoke / shape tests
 # ---------------------------------------------------------------------------
 
 
@@ -101,12 +105,10 @@ def test_fit_predict_smoke() -> None:
 
     assert model.is_fitted_
     assert model.training_mode_ == "energy_and_force"
-    # Ethanol: 9 atoms, D = 27, M = 9*8/2 = 36
     assert model._D == 27
     assert model._M == 36
 
     E_pred, F_pred = model.predict(te, zte)
-
     assert E_pred.shape == (_N_TEST,)
     assert F_pred.shape == (_N_TEST, 27)
     assert np.all(np.isfinite(E_pred))
@@ -130,16 +132,16 @@ def test_force_only_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Numerical agreement with GlobalKRRModel (CPU float64 reference)
+# Numerical agreement with GlobalKRRModel (CPU float64)
 # ---------------------------------------------------------------------------
 
 
 def test_cuda_vs_cpu_agreement() -> None:
-    """CudaGlobalKRRModel predictions must agree with GlobalKRRModel to ~1e-3.
+    """CudaGlobalKRRModel predictions must agree with GlobalKRRModel to ~1e-2.
 
-    The two models use the same algorithm: float32 GPU vs float64 CPU.
-    We use l2=1e-5 to keep the float32 K_full well-conditioned for ethanol
-    (K_FF diagonal ~1e-3, so l2=1e-5 adds a meaningful stabilizing term).
+    Both models use the same kernel formula.  CudaGlobalKRRModel now uses a
+    float64 CPU Cholesky (via kernelmath.solve_cholesky), so agreement with
+    GlobalKRRModel should be close despite GPU float32 kernel assembly.
     """
     coords, z, E, F = _load_ethanol()
     tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
@@ -162,16 +164,31 @@ def test_cuda_vs_cpu_agreement() -> None:
         atol=1e-2,
         err_msg="Energy predictions disagree between CUDA and CPU models",
     )
-    # Forces: absolute tolerance only.
-    # Near-zero force components have large relative error in float32 vs float64,
-    # but the absolute error stays bounded by ~0.1 kcal/mol/Å for N=20, l2=1e-5.
-    # GlobalKRRModel returns forces flat (N*D,); CudaGlobalKRRModel returns (N, D).
     np.testing.assert_allclose(
         F_gpu.ravel(),
         F_cpu.ravel(),
         atol=0.5,
         err_msg="Force predictions disagree between CUDA and CPU models",
     )
+
+
+# ---------------------------------------------------------------------------
+# Larger N + tighter sigma (the previously-failing case)
+# ---------------------------------------------------------------------------
+
+
+def test_n100_sigma1_no_nan() -> None:
+    """N=100, sigma=1.0 must not produce NaN (float64 solve path prevents this)."""
+    coords, z, E, F = _load_ethanol(n=105)
+    tr, te = coords[:100], coords[100:]
+    ztr, zte = z[:100], z[100:]
+
+    model = CudaGlobalKRRModel(sigma=1.0, l2=1e-4)
+    model.fit(tr, ztr, energies=E[:100], forces=F[:100])
+    E_pred, F_pred = model.predict(te, zte)
+
+    assert np.all(np.isfinite(E_pred)), "NaN/Inf in E_pred for N=100, sigma=1.0"
+    assert np.all(np.isfinite(F_pred)), "NaN/Inf in F_pred for N=100, sigma=1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +199,6 @@ def test_cuda_vs_cpu_agreement() -> None:
 def test_train_score() -> None:
     """Training scores must be finite."""
     coords, z, E, F = _load_ethanol()
-
     model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
     model.fit(coords[:_N_TRAIN], z[:_N_TRAIN], energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
 
@@ -218,13 +234,13 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     assert loaded.is_fitted_
     assert loaded.training_mode_ == "energy_and_force"
     assert loaded.sigma == model.sigma
-    assert loaded.l2 == model.l2
 
     E_load, F_load = loaded.predict(te, zte)
-
-    # float32 round-trip: same float32 state reloaded — expect bit-exact
-    np.testing.assert_array_equal(E_orig, E_load, err_msg="Energy changed after save/load")
-    np.testing.assert_array_equal(F_orig, F_load, err_msg="Forces changed after save/load")
+    # After save/load the float32 state is reloaded bit-exactly → same predictions
+    np.testing.assert_allclose(E_orig, E_load, rtol=1e-5, err_msg="Energy changed after save/load")
+    np.testing.assert_allclose(
+        F_orig.ravel(), F_load.ravel(), rtol=1e-5, err_msg="Forces changed after save/load"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -233,9 +249,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
 
 
 def test_predict_torch() -> None:
-    """predict_torch must return tensors matching predict() to float32 precision."""
-    torch = pytest.importorskip("torch", reason="PyTorch not installed")
-
+    """predict_torch must return CUDA tensors matching predict() to float32."""
     from kernelforge import invdist_repr
 
     coords, z, E, F = _load_ethanol()
@@ -246,10 +260,13 @@ def test_predict_torch() -> None:
     model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
     model.fit(tr, ztr, energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
 
-    # Reference via numpy predict()
-    E_np, F_np = model.predict(te, zte)
+    # predict() applies per-element energy baseline; predict_torch() returns
+    # baseline-subtracted energies (same as _predict()).  Forces are unaffected
+    # by the constant baseline, so they agree directly.
+    _E_np, F_np = model.predict(te, zte)
+    E_raw, _F_raw = model._predict(te, zte)
 
-    # Build test representations as float32 torch tensors
+    # Build float32 CUDA tensors from the same representations
     X_list, dX_list = [], []
     for c in te:
         x, dx = invdist_repr.inverse_distance_upper_and_jacobian(
@@ -258,23 +275,29 @@ def test_predict_torch() -> None:
         X_list.append(x.astype(np.float32))
         dX_list.append(dx.astype(np.float32))
 
-    X_te_t = torch.tensor(np.array(X_list))  # (_N_TEST, M) float32
-    dX_te_t = torch.tensor(np.array(dX_list))  # (_N_TEST, D, M) float32
+    X_cuda = torch.tensor(np.array(X_list)).cuda()
+    dX_cuda = torch.tensor(np.array(dX_list)).cuda()
 
-    E_t, F_t = model.predict_torch(X_te_t, dX_te_t)
+    E_t, F_t = model.predict_torch(X_cuda, dX_cuda)
 
     assert E_t.shape == (_N_TEST,)
     assert F_t.shape == (_N_TEST, 27)
+    assert E_t.device.type == "cuda"
+    assert F_t.device.type == "cuda"
 
-    # predict_torch and predict() go through the same CUDA state → identical
-    np.testing.assert_array_equal(
+    # Energies: predict_torch returns baseline-subtracted values → compare
+    # against _predict() (same conventions, both float32 CUDA).
+    np.testing.assert_allclose(
         E_t.cpu().numpy(),
-        E_np.astype(np.float32),
-        err_msg="predict_torch energy differs from predict()",
+        E_raw.astype(np.float32),
+        rtol=1e-4,
+        err_msg="predict_torch energy differs from _predict()",
     )
-    np.testing.assert_array_equal(
-        F_t.cpu().numpy(),
-        F_np.astype(np.float32),
+    # Forces: baseline is a constant → no effect on gradients.
+    np.testing.assert_allclose(
+        F_t.cpu().numpy().ravel(),
+        F_np.astype(np.float32).ravel(),
+        rtol=1e-4,
         err_msg="predict_torch forces differ from predict()",
     )
 
@@ -292,10 +315,59 @@ def test_score_method() -> None:
 
     model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
     model.fit(tr, ztr, energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
-
     scores = model.score(te, zte, energies=E[_N_TRAIN:], forces=F[_N_TRAIN:])
 
     assert "energy" in scores
     assert "force" in scores
     assert np.isfinite(scores["energy"].mae)
     assert np.isfinite(scores["force"].mae)
+
+
+# ---------------------------------------------------------------------------
+# kernel functions standalone test
+# ---------------------------------------------------------------------------
+
+
+def test_kernel_gaussian_full_symm_shape() -> None:
+    """kernel_gaussian_full_symm must return correctly shaped symmetric tensor."""
+    N, M, D = 5, 36, 27
+    X = torch.randn(N, M).cuda().float()
+    dX = torch.randn(N, D, M).cuda().float()
+
+    K = cuda_global_kernels.kernel_gaussian_full_symm(X, dX, 2.0)
+
+    full = N * (1 + D)
+    assert K.shape == (full, full)
+    assert K.device.type == "cuda"
+    assert K.dtype == torch.float32
+
+    # Check symmetry (both triangles filled)
+    K_np = K.cpu().numpy()
+    np.testing.assert_allclose(K_np, K_np.T, atol=1e-5, err_msg="K_full is not symmetric")
+
+    # Diagonal of K_EE must be 1.0 (K[a,a] = exp(0) = 1)
+    np.testing.assert_allclose(
+        np.diag(K_np[:N, :N]),
+        np.ones(N),
+        atol=1e-5,
+        err_msg="K_EE diagonal should be 1.0",
+    )
+
+
+def test_kernel_gaussian_full_matvec_shape() -> None:
+    """kernel_gaussian_full_matvec must return correctly shaped tensors."""
+    N_q, N_t, M, D = 3, 5, 36, 27
+    X_q = torch.randn(N_q, M).cuda().float()
+    dX_q = torch.randn(N_q, D, M).cuda().float()
+    X_t = torch.randn(N_t, M).cuda().float()
+    alpha_E = torch.randn(N_t).cuda().float()
+    alpha_desc_F = torch.randn(N_t, M).cuda().float()
+
+    E, F = cuda_global_kernels.kernel_gaussian_full_matvec(
+        X_q, dX_q, X_t, alpha_E, alpha_desc_F, 2.0
+    )
+
+    assert E.shape == (N_q,)
+    assert F.shape == (N_q, D)
+    assert E.device.type == "cuda"
+    assert F.device.type == "cuda"

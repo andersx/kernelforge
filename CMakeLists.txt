@@ -241,40 +241,87 @@ kf_add_cpp_module(fchl18_kernel
            src/fchl18_full_kernels.cpp
   BINDINGS src/fchl18_kernel_bindings.cpp)
 
-# ---- Optional CUDA KRR extension -------------------------------------------
+# ---- Optional CUDA + PyTorch extension: cuda_global_kernels -----------------
 if(CMAKE_CUDA_COMPILER)
   find_package(CUDAToolkit QUIET)
 
-  if(CUDAToolkit_FOUND)
-    message(STATUS "CUDA ${CMAKE_CUDA_COMPILER_VERSION} found — building cuda_krr_ext")
+    if(CUDAToolkit_FOUND)
+    # Try to locate PyTorch CMake config.  The scikit-build-core build process
+    # uses an isolated temporary Python (which may not have torch).  Fall back
+    # to VIRTUAL_ENV/bin/python (the project venv, which does have torch).
+    # Locate PyTorch CMake config.  scikit-build-core builds use an isolated
+    # Python that may lack torch.  Try the project venv (.venv) first, then
+    # the build Python, then common conda/venv locations.
+    set(_TORCH_CMAKE_PREFIX "")
+    foreach(_py_candidate
+        "${CMAKE_SOURCE_DIR}/.venv/bin/python"
+        "${Python_EXECUTABLE}"
+        "$ENV{VIRTUAL_ENV}/bin/python"
+        "$ENV{CONDA_PREFIX}/bin/python")
+      if(EXISTS "${_py_candidate}" AND NOT _TORCH_CMAKE_PREFIX)
+        execute_process(
+          COMMAND "${_py_candidate}" -c
+                  "import torch; print(torch.utils.cmake_prefix_path)"
+          OUTPUT_VARIABLE _TORCH_CMAKE_PREFIX
+          OUTPUT_STRIP_TRAILING_WHITESPACE
+          RESULT_VARIABLE _TORCH_RESULT
+          ERROR_QUIET)
+        if(NOT _TORCH_RESULT EQUAL 0)
+          set(_TORCH_CMAKE_PREFIX "")
+        endif()
+      endif()
+    endforeach()
 
-    pybind11_add_module(cuda_krr_ext MODULE
-      src/cuda_krr.cu
-      src/cuda_krr_bindings.cpp)
+    if(_TORCH_CMAKE_PREFIX)
+      list(PREPEND CMAKE_PREFIX_PATH "${_TORCH_CMAKE_PREFIX}")
+      find_package(Torch QUIET)
+    endif()
 
-    target_include_directories(cuda_krr_ext PRIVATE src)
+    if(Torch_FOUND)
+      message(STATUS
+        "CUDA ${CMAKE_CUDA_COMPILER_VERSION} + Torch ${Torch_VERSION} — "
+        "building cuda_global_kernels")
 
-    target_link_libraries(cuda_krr_ext PRIVATE
-      pybind11::headers
-      Python::Module
-      CUDA::cublas
-      CUDA::cusolver)
+      pybind11_add_module(cuda_global_kernels MODULE
+        src/cuda_global_kernels.cu
+        src/cuda_global_kernels_bindings.cpp)
 
-    set_property(TARGET cuda_krr_ext PROPERTY CUDA_STANDARD 17)
-    set_property(TARGET cuda_krr_ext PROPERTY POSITION_INDEPENDENT_CODE ON)
-    # sm_70+ covers Volta, Turing, Ampere, Ada, Hopper
-    set_property(TARGET cuda_krr_ext PROPERTY CUDA_ARCHITECTURES "70;80;86;89;90")
+      # Torch include dirs must precede the standalone pybind11 headers so that
+      # torch/extension.h's bundled pybind11 wins the header-guard race.
+      target_include_directories(cuda_global_kernels BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
 
-    target_compile_options(cuda_krr_ext PRIVATE
-      $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
-      $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+      # libtorch_python.so provides the pybind11 type_caster<at::Tensor>
+      # specialisations; without it the module fails to load at runtime.
+      find_library(_LIBTORCH_PYTHON torch_python
+        PATHS "${TORCH_INSTALL_PREFIX}/lib"
+        NO_DEFAULT_PATH)
 
-    list(APPEND _KF_ALL_MODULES cuda_krr_ext)
+      target_link_libraries(cuda_global_kernels PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}"
+        CUDA::cublas)
+
+      set_property(TARGET cuda_global_kernels PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_global_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
+      # sm_70+ covers Volta, Turing, Ampere, Ada, Hopper
+      set_property(TARGET cuda_global_kernels PROPERTY CUDA_ARCHITECTURES "70;80;86;89;90")
+
+      target_compile_options(cuda_global_kernels PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_global_kernels)
+    else()
+      message(STATUS
+        "CUDA found but Torch not found — skipping cuda_global_kernels")
+    endif()
   else()
-    message(STATUS "CUDAToolkit not found — skipping cuda_krr_ext")
+    message(STATUS "CUDAToolkit not found — skipping cuda_global_kernels")
   endif()
 else()
-  message(STATUS "No CUDA compiler found — skipping cuda_krr_ext")
+  message(STATUS "No CUDA compiler found — skipping cuda_global_kernels")
 endif()
 
 # ---- Install ----------------------------------------------------------------

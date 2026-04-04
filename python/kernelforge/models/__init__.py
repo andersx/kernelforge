@@ -22,9 +22,11 @@ GlobalRFFModel
     Inverse-distance global Random Fourier Features regression. Same as
     GlobalKRRModel but solves a D_rff x D_rff system instead of N x N.
 CudaGlobalKRRModel
-    GPU-accelerated KRR using inverse-distance descriptors and CUDA kernels
-    (cuBLAS SGEMM + cuSOLVER Cholesky).  Supports energy_and_force mode only.
-    Requires CUDA at build time; raises ImportError if cuda_krr_ext is absent.
+    GPU-accelerated KRR using inverse-distance descriptors and CUDA kernels.
+    Training uses GPU float32 kernel assembly + CPU float64 Cholesky solve
+    (via kernelmath).  Inference uses the GPU J^T·alpha contracted matvec.
+    Supports energy_and_force mode only.
+    Requires CUDA + PyTorch at build time; raises ImportError if absent.
 ModelScore
     Dataclass returned by model.score() containing MAE, Pearson r, slope,
     and intercept for energy and/or force predictions.

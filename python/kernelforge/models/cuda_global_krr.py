@@ -1,12 +1,22 @@
 """CudaGlobalKRRModel: GPU-accelerated KRR using inverse-distance descriptors.
 
-Training and inference use the hand-written CUDA kernels from ``cuda_krr_ext``
-(cuBLAS SGEMM + cuSOLVER Cholesky).  At inference time only a contracted
-representation of the training data is kept on GPU — no full kernel matrix is
-ever materialised.
+Architecture
+------------
+Training:
+  1. Build invdist X (N,M), dX (N,D,M) in float64.
+  2. Call ``cuda_global_kernels.kernel_gaussian_full_symm`` (GPU, float32)
+     to build K_full (N*(1+D))^2 on GPU.
+  3. Download K_full, cast to float64, solve with ``kernelmath.solve_cholesky``
+     (CPU, float64) — avoids float32 Cholesky conditioning issues.
+  4. Pre-contract force coefficients:
+     alpha_desc_F[m, k] = einsum('ndm,nd->nm', dX, alpha_F)
+  5. Store X_train, alpha_E, alpha_desc_F as persistent float32 CUDA tensors.
 
-Only the ``energy_and_force`` training mode is supported.  For ``energy_only``
-or ``force_only`` training use :class:`GlobalKRRModel` instead.
+Inference:
+  Call ``cuda_global_kernels.kernel_gaussian_full_matvec`` (GPU, float32)
+  using the J^T·alpha trick — no K_test_train materialisation.
+
+Only ``energy_and_force`` training mode is supported.
 """
 
 from __future__ import annotations
@@ -17,26 +27,24 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .base import BaseModel, TrainingMode
-from .global_krr import _build_repr  # reuse the invdist_repr helper
+from .global_krr import _build_repr  # reuse invdist_repr helper
 
 # --------------------------------------------------------------------------
-# Optional PyTorch import (needed only for predict_torch)
+# Optional PyTorch import (needed for CUDA tensor operations)
 # --------------------------------------------------------------------------
 try:
-    import torch  # type: ignore[ty:unresolved-import]  # noqa: F401
+    import torch as _torch  # noqa: F401
 
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
 
 # --------------------------------------------------------------------------
-# CUDA extension import — _ext is only defined when the build includes CUDA.
-# All code paths that access _ext are guarded by _require_cuda_ext() which
-# raises ImportError when _CUDA_EXT_AVAILABLE is False.
+# CUDA extension import
 # --------------------------------------------------------------------------
 _CUDA_EXT_AVAILABLE = False
 try:
-    from kernelforge import cuda_krr_ext as _ext
+    from kernelforge import cuda_global_kernels as _ext
 
     _CUDA_EXT_AVAILABLE = True
 except ImportError:
@@ -46,26 +54,38 @@ except ImportError:
 def _require_cuda_ext() -> None:
     if not _CUDA_EXT_AVAILABLE:
         msg = (
-            "cuda_krr_ext is not available.  "
-            "Re-build kernelforge with a CUDA compiler and CUDAToolkit present:\n"
+            "cuda_global_kernels is not available.  "
+            "Re-build kernelforge with a CUDA compiler, CUDAToolkit, and PyTorch present:\n"
             "    make install-linux-mkl-ilp64   (or another Makefile target)\n"
-            "CUDA must be discoverable by CMake at build time."
+            "Both CUDA and torch must be discoverable by CMake at build time."
         )
         raise ImportError(msg)
+
+
+def _require_torch() -> None:
+    if not _TORCH_AVAILABLE:
+        msg = "PyTorch is required for CudaGlobalKRRModel.  pip install torch"
+        raise ImportError(msg)
+
+
+def _to_cuda(arr: NDArray[np.float32]) -> Any:  # noqa: ANN401
+    """Return a contiguous float32 CUDA torch tensor from a numpy array."""
+    import torch
+
+    return torch.from_numpy(np.ascontiguousarray(arr, dtype=np.float32)).cuda()
 
 
 class CudaGlobalKRRModel(BaseModel):
     """GPU-accelerated KRR model using inverse-distance global descriptors.
 
-    Uses CUDA kernels (cuBLAS + cuSOLVER) for both training and inference.
-    At inference time only the contracted state (W_F_bar, W_combined, ...)
-    lives on GPU — training Jacobians are freed after fit().
+    Training uses a GPU float32 kernel assembly followed by a CPU float64
+    Cholesky solve (via ``kernelmath.solve_cholesky``), which avoids float32
+    conditioning failures for large training sets with tight sigma.  Inference
+    runs entirely on GPU using the J^T·alpha contracted matvec.
 
-    **Only** ``energy_and_force`` training mode is supported.  For
-    ``energy_only`` or ``force_only`` use :class:`GlobalKRRModel`.
+    **Only** ``energy_and_force`` training mode is supported.
 
-    **All molecules in the dataset must have the same atom count** — the
-    descriptor dimension M = N*(N-1)/2 is fixed by the atom count N.
+    **All molecules must have the same atom count.**
 
     Parameters
     ----------
@@ -84,8 +104,8 @@ class CudaGlobalKRRModel(BaseModel):
     >>> model.save("cuda_model.npz")
     >>> model2 = CudaGlobalKRRModel.load("cuda_model.npz")
 
-    PyTorch interface (accepts pre-computed float32 tensors):
-    >>> E_t, F_t = model.predict_torch(X_te_tensor, dX_te_tensor)
+    PyTorch interface (pre-computed float32 CUDA tensors, no baseline applied):
+    >>> E_t, F_t = model.predict_torch(X_te_cuda, dX_te_cuda)
     """
 
     def __init__(
@@ -95,13 +115,14 @@ class CudaGlobalKRRModel(BaseModel):
         eps: float = 1e-12,
     ) -> None:
         _require_cuda_ext()
+        _require_torch()
         self.sigma = sigma
         self.l2 = l2
         self.eps = eps
         self.is_fitted_ = False
 
     # ------------------------------------------------------------------
-    # Internal fit — energy_and_force only
+    # fit
     # ------------------------------------------------------------------
 
     def _fit(
@@ -111,15 +132,15 @@ class CudaGlobalKRRModel(BaseModel):
         energies: NDArray[np.float64] | None,
         forces: NDArray[np.float64] | None,
     ) -> None:
+        from kernelforge import kernelmath
+
         mode = self.training_mode_
         if mode != "energy_and_force":
             msg = (
                 f"CudaGlobalKRRModel only supports 'energy_and_force' training. "
-                f"Got '{mode}'. For energy-only or force-only training use "
-                f"GlobalKRRModel instead."
+                f"Got '{mode}'. Use GlobalKRRModel for other modes."
             )
             raise NotImplementedError(msg)
-
         if energies is None:
             msg = "energies must be provided for energy_and_force mode"
             raise ValueError(msg)
@@ -127,45 +148,63 @@ class CudaGlobalKRRModel(BaseModel):
             msg = "forces must be provided for energy_and_force mode"
             raise ValueError(msg)
 
-        # 1. Build representations (float64 numpy)
+        # ---- Step 1: build invdist representations (float64) ----
         X, dX = _build_repr(coords_list, self.eps, with_gradients=True)
-        # X : (N, M) float64,  dX : (N, D, M) float64
-
+        # X  : (N, M) float64
+        # dX : (N, D, M) float64
         if dX is None:
             msg = "dX is None — internal error (with_gradients=True)"
             raise RuntimeError(msg)
 
-        N = len(coords_list)
-        M = X.shape[1]
+        N, M = X.shape[0], X.shape[1]
         D = dX.shape[1]
-
         self._n_train = N
         self._M = M
         self._D = D
 
-        # 2. Convert to float32 (CUDA extension works in float32)
-        X_f32: NDArray[np.float32] = np.ascontiguousarray(X, dtype=np.float32)
-        # dX (N, D, M) -> dXT (N*D, M)
-        dXT_f32: NDArray[np.float32] = np.ascontiguousarray(dX.reshape(N * D, M), dtype=np.float32)
-        E_f32: NDArray[np.float32] = np.ascontiguousarray(energies, dtype=np.float32)
-        # forces shape: (N, D) from base class — pass physical forces (CUDA negates internally)
-        F_f32: NDArray[np.float32] = np.ascontiguousarray(forces.ravel(), dtype=np.float32)
+        # ---- Step 2: build K_full on GPU (float32) ----
+        X_f32 = _to_cuda(X.astype(np.float32))
+        dX_f32 = _to_cuda(dX.astype(np.float32))
 
-        # 3. Train + initialise GPU inference state
-        state = _ext.CudaKRRState()  # type: ignore[union-attr]
-        alpha_f32: NDArray[np.float32] = state.train_ef(
-            X_f32, dXT_f32, E_f32, F_f32, self.sigma, self.l2
+        K_full_cuda = _ext.kernel_gaussian_full_symm(  # type: ignore[union-attr]
+            X_f32, dX_f32, float(self.sigma)
         )
+        # K_full_cuda: (N*(1+D), N*(1+D)) float32 CUDA
 
-        self._state: _ext.CudaKRRState = state  # type: ignore[name-defined]
+        # ---- Step 3: CPU float64 Cholesky solve ----
+        K_f64: NDArray[np.float64] = K_full_cuda.cpu().numpy().astype(np.float64)
+        del K_full_cuda  # free GPU memory
 
-        # 4. Store float64 alpha and y_train for training score / save
-        self._alpha: NDArray[np.float64] = alpha_f32.astype(np.float64)
-        # y_train = [E, -F.ravel()]  (same sign convention as GlobalKRRModel)
-        self._y_train: NDArray[np.float64] = np.concatenate([energies, -forces.ravel()])
+        rhs: NDArray[np.float64] = np.concatenate([energies, -forces.ravel()], dtype=np.float64)
+
+        # solve_cholesky modifies K_f64 in-place (Cholesky factor)
+        alpha_f64: NDArray[np.float64] = kernelmath.solve_cholesky(K_f64, rhs, self.l2)
+        del K_f64
+
+        # ---- Step 4: pre-contract force coefficients ----
+        alpha_E_f64 = alpha_f64[:N]
+        alpha_F_f64 = alpha_f64[N:].reshape(N, D)
+
+        # alpha_desc_F[m, k] = sum_d dX[m,d,k] * alpha_F[m,d]
+        alpha_desc_F_f64: NDArray[np.float64] = np.einsum(
+            "ndm,nd->nm", dX, alpha_F_f64, optimize=True
+        )  # (N, M)
+
+        # ---- Step 5: store persistent CUDA tensors ----
+        self._X_train_np: NDArray[np.float32] = X.astype(np.float32)
+        self._alpha_E_np: NDArray[np.float32] = alpha_E_f64.astype(np.float32)
+        self._alpha_desc_F_np: NDArray[np.float32] = alpha_desc_F_f64.astype(np.float32)
+
+        self._X_train_cuda: Any = _to_cuda(self._X_train_np)
+        self._alpha_E_cuda: Any = _to_cuda(self._alpha_E_np)
+        self._alpha_desc_F_cuda: Any = _to_cuda(self._alpha_desc_F_np)
+
+        # For training score and save/load
+        self._alpha: NDArray[np.float64] = alpha_f64
+        self._y_train: NDArray[np.float64] = rhs  # [E, -F.ravel()]
 
     # ------------------------------------------------------------------
-    # Internal predict
+    # predict
     # ------------------------------------------------------------------
 
     def _predict(
@@ -178,20 +217,20 @@ class CudaGlobalKRRModel(BaseModel):
             msg = "dX_te is None — internal error"
             raise RuntimeError(msg)
 
-        N_test = len(coords_list)
-        D = self._D
+        X_te_cuda = _to_cuda(X_te.astype(np.float32))
+        dX_te_cuda = _to_cuda(dX_te.astype(np.float32))
 
-        X_te_f32: NDArray[np.float32] = np.ascontiguousarray(X_te, dtype=np.float32)
-        dXT_te_f32: NDArray[np.float32] = np.ascontiguousarray(
-            dX_te.reshape(N_test * D, X_te.shape[1]),
-            dtype=np.float32,
+        E_cuda, F_cuda = _ext.kernel_gaussian_full_matvec(  # type: ignore[union-attr]
+            X_te_cuda,
+            dX_te_cuda,
+            self._X_train_cuda,
+            self._alpha_E_cuda,
+            self._alpha_desc_F_cuda,
+            float(self.sigma),
         )
 
-        E_f32, F_f32 = self._state.predict(X_te_f32, dXT_te_f32)
-
-        E_pred: NDArray[np.float64] = E_f32.astype(np.float64)
-        # F_f32 is (N_test*D,) flat; reshape to (N_test, D)
-        F_pred: NDArray[np.float64] = F_f32.astype(np.float64).reshape(N_test, D)
+        E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
+        F_pred: NDArray[np.float64] = F_cuda.cpu().numpy().astype(np.float64)
 
         return E_pred, F_pred
 
@@ -201,54 +240,39 @@ class CudaGlobalKRRModel(BaseModel):
 
     def predict_torch(
         self,
-        X_te: Any,  # noqa: ANN401  # torch.Tensor (N_test, M) float32
-        dX_te: Any,  # noqa: ANN401  # torch.Tensor (N_test, D, M) float32
-    ) -> tuple[Any, Any]:  # (torch.Tensor, torch.Tensor)
-        """Predict E and F from pre-computed torch float32 tensors.
+        X_te: Any,  # noqa: ANN401  # torch.Tensor (N_test, M) float32 CUDA
+        dX_te: Any,  # noqa: ANN401  # torch.Tensor (N_test, D, M) float32 CUDA
+    ) -> tuple[Any, Any]:
+        """Predict E and F from pre-computed float32 CUDA tensors.
 
-        Accepts descriptor tensors directly, bypassing ``invdist_repr`` and
-        the numpy conversion in ``predict()``.  Returns ``torch.Tensor`` on
-        the same device as the inputs.
+        Accepts descriptor tensors already on GPU, bypassing invdist_repr and
+        numpy conversions.  Returns float32 CUDA tensors.
+
+        Note: returned energies are **baseline-subtracted** (same as ``_predict``).
+        Forces are unaffected by the constant per-element baseline.
 
         Parameters
         ----------
-        X_te : torch.Tensor, shape (N_test, M), float32
-            Test descriptors.
-        dX_te : torch.Tensor, shape (N_test, D, M), float32
-            Test Jacobians ``∂X_te/∂coords``.
+        X_te : torch.Tensor, shape (N_test, M), float32 CUDA
+        dX_te : torch.Tensor, shape (N_test, D, M), float32 CUDA
 
         Returns
         -------
-        E_pred : torch.Tensor, shape (N_test,), float32
-        F_pred : torch.Tensor, shape (N_test, D), float32
-            Physical forces F = -dE/dR.
+        E_pred : torch.Tensor, shape (N_test,), float32 CUDA  (baseline-subtracted)
+        F_pred : torch.Tensor, shape (N_test, D), float32 CUDA
         """
-        if not _TORCH_AVAILABLE:
-            msg = "PyTorch is not installed. pip install torch to use predict_torch()."
-            raise ImportError(msg)
-
-        import torch  # type: ignore[ty:unresolved-import]
-
         if not self.is_fitted_:
             msg = "Model is not fitted. Call fit() first."
             raise RuntimeError(msg)
 
-        device = X_te.device
-        N_test = X_te.shape[0]
-        D = self._D
-
-        # Transfer to CPU numpy for the CUDA extension (H2D/D2H inside extension)
-        X_np = X_te.cpu().to(torch.float32).numpy()
-        dX_np = dX_te.cpu().to(torch.float32).numpy().reshape(N_test * D, -1)
-
-        X_np = np.ascontiguousarray(X_np)
-        dX_np = np.ascontiguousarray(dX_np)
-
-        E_f32, F_f32 = self._state.predict(X_np, dX_np)
-
-        E_tensor = torch.from_numpy(E_f32.copy()).to(device)
-        F_tensor = torch.from_numpy(F_f32.copy()).reshape(N_test, D).to(device)
-        return E_tensor, F_tensor
+        return _ext.kernel_gaussian_full_matvec(  # type: ignore[union-attr]
+            X_te,
+            dX_te,
+            self._X_train_cuda,
+            self._alpha_E_cuda,
+            self._alpha_desc_F_cuda,
+            float(self.sigma),
+        )
 
     # ------------------------------------------------------------------
     # Training score
@@ -257,12 +281,12 @@ class CudaGlobalKRRModel(BaseModel):
     def _training_labels_and_predictions(
         self,
     ) -> dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]]:
-        # y_pred = y_train - l2 * alpha  (from (K + l2*I) @ alpha = y_train)
+        # From (K + l2*I) @ alpha = y_train  ->  y_pred = y_train - l2 * alpha
         y_pred = self._y_train - self.l2 * self._alpha
         n = self._n_train
-        # y_train = [E, -F.ravel()]; undo sign on forces
         return {
             "energy": (self._y_train[:n], y_pred[:n]),
+            # y_train[n:] = -F_train; undo sign for user-facing forces
             "force": (-self._y_train[n:], -y_pred[n:]),
         }
 
@@ -271,8 +295,6 @@ class CudaGlobalKRRModel(BaseModel):
     # ------------------------------------------------------------------
 
     def _arrays_to_save(self) -> dict[str, object]:
-        # Extract GPU inference state as numpy float32 arrays
-        X_tr, W_F_bar, W_combined, W_F_self, alpha_E, norms_tr = self._state.get_state()
         return {
             "model_class": "CudaGlobalKRRModel",
             "training_mode": self.training_mode_,
@@ -286,17 +308,15 @@ class CudaGlobalKRRModel(BaseModel):
             "element_energies": self.element_energies_,
             "alpha": self._alpha,
             "y_train": self._y_train,
-            # GPU inference state — float32
-            "X_tr": X_tr,
-            "W_F_bar": W_F_bar,
-            "W_combined": W_combined,
-            "W_F_self": W_F_self,
-            "alpha_E_f32": alpha_E,
-            "norms_tr": norms_tr,
+            # GPU inference state (float32 numpy copies for serialisation)
+            "X_train": self._X_train_np,
+            "alpha_E": self._alpha_E_np,
+            "alpha_desc_F": self._alpha_desc_F_np,
         }
 
     def _load_from_arrays(self, data: np.lib.npyio.NpzFile) -> None:
         _require_cuda_ext()
+        _require_torch()
 
         self.sigma = float(data["sigma"])
         self.l2 = float(data["l2"])
@@ -314,18 +334,11 @@ class CudaGlobalKRRModel(BaseModel):
             else np.array([], dtype=np.float64)
         )
 
-        # Reconstruct GPU inference state from saved float32 arrays
-        state = _ext.CudaKRRState()  # type: ignore[union-attr]
-        state.load_state(
-            np.ascontiguousarray(data["X_tr"], dtype=np.float32),
-            np.ascontiguousarray(data["W_F_bar"], dtype=np.float32),
-            np.ascontiguousarray(data["W_combined"], dtype=np.float32),
-            np.ascontiguousarray(data["W_F_self"], dtype=np.float32),
-            np.ascontiguousarray(data["alpha_E_f32"], dtype=np.float32),
-            np.ascontiguousarray(data["norms_tr"], dtype=np.float32),
-            self.sigma,
-            self._n_train,
-            self._M,
-            self._D,
-        )
-        self._state = state
+        # Reconstruct persistent CUDA tensors from saved numpy arrays
+        self._X_train_np = data["X_train"].astype(np.float32)
+        self._alpha_E_np = data["alpha_E"].astype(np.float32)
+        self._alpha_desc_F_np = data["alpha_desc_F"].astype(np.float32)
+
+        self._X_train_cuda = _to_cuda(self._X_train_np)
+        self._alpha_E_cuda = _to_cuda(self._alpha_E_np)
+        self._alpha_desc_F_cuda = _to_cuda(self._alpha_desc_F_np)
