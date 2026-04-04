@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.18)
 project(kernelforge LANGUAGES C CXX)
 
+# Optional CUDA language — enabled below if the compiler is found
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+  enable_language(CUDA)
+endif()
+
 # C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -233,6 +240,42 @@ kf_add_cpp_module(fchl18_kernel
            src/fchl18_hessian_kernels.cpp
            src/fchl18_full_kernels.cpp
   BINDINGS src/fchl18_kernel_bindings.cpp)
+
+# ---- Optional CUDA KRR extension -------------------------------------------
+if(CMAKE_CUDA_COMPILER)
+  find_package(CUDAToolkit QUIET)
+
+  if(CUDAToolkit_FOUND)
+    message(STATUS "CUDA ${CMAKE_CUDA_COMPILER_VERSION} found — building cuda_krr_ext")
+
+    pybind11_add_module(cuda_krr_ext MODULE
+      src/cuda_krr.cu
+      src/cuda_krr_bindings.cpp)
+
+    target_include_directories(cuda_krr_ext PRIVATE src)
+
+    target_link_libraries(cuda_krr_ext PRIVATE
+      pybind11::headers
+      Python::Module
+      CUDA::cublas
+      CUDA::cusolver)
+
+    set_property(TARGET cuda_krr_ext PROPERTY CUDA_STANDARD 17)
+    set_property(TARGET cuda_krr_ext PROPERTY POSITION_INDEPENDENT_CODE ON)
+    # sm_70+ covers Volta, Turing, Ampere, Ada, Hopper
+    set_property(TARGET cuda_krr_ext PROPERTY CUDA_ARCHITECTURES "70;80;86;89;90")
+
+    target_compile_options(cuda_krr_ext PRIVATE
+      $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+      $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+    list(APPEND _KF_ALL_MODULES cuda_krr_ext)
+  else()
+    message(STATUS "CUDAToolkit not found — skipping cuda_krr_ext")
+  endif()
+else()
+  message(STATUS "No CUDA compiler found — skipping cuda_krr_ext")
+endif()
 
 # ---- Install ----------------------------------------------------------------
 install(TARGETS ${_KF_ALL_MODULES}
