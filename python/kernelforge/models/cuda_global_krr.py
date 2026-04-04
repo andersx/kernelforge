@@ -132,7 +132,7 @@ class CudaGlobalKRRModel(BaseModel):
         energies: NDArray[np.float64] | None,
         forces: NDArray[np.float64] | None,
     ) -> None:
-        from kernelforge import kernelmath
+        import torch
 
         mode = self.training_mode_
         if mode != "energy_and_force":
@@ -171,15 +171,29 @@ class CudaGlobalKRRModel(BaseModel):
         )
         # K_full_cuda: (N*(1+D), N*(1+D)) float32 CUDA
 
-        # ---- Step 3: CPU float64 Cholesky solve ----
-        K_f64: NDArray[np.float64] = K_full_cuda.cpu().numpy().astype(np.float64)
-        del K_full_cuda  # free GPU memory
+        # ---- Step 3: GPU float64 Cholesky solve (cuSOLVER via torch.linalg) ----
+        # Cast K_full to float64 on GPU — stays on device, no H2D round-trip.
+        K_f64_cuda = K_full_cuda.to(torch.float64)
+        del K_full_cuda  # free float32 copy
 
-        rhs: NDArray[np.float64] = np.concatenate([energies, -forces.ravel()], dtype=np.float64)
+        # Add L2 regularisation to diagonal in-place.
+        K_f64_cuda.diagonal().add_(self.l2)
 
-        # solve_cholesky modifies K_f64 in-place (Cholesky factor)
-        alpha_f64: NDArray[np.float64] = kernelmath.solve_cholesky(K_f64, rhs, self.l2)
-        del K_f64
+        # Build RHS [E, -F] as float64 CUDA tensor.
+        rhs_gpu = torch.from_numpy(
+            np.concatenate([energies, -forces.ravel()]).astype(np.float64)
+        ).cuda()
+
+        # Cholesky factorisation + triangular solve, entirely on GPU (float64).
+        # torch.linalg.cholesky wraps cuSOLVER dpotrf; torch.cholesky_solve
+        # wraps dpotrs.  Both operate in float64, avoiding the float32
+        # conditioning failures seen with cusolverDnSpotrf on MD data.
+        chol_L = torch.linalg.cholesky(K_f64_cuda)
+        alpha_gpu = torch.cholesky_solve(rhs_gpu.unsqueeze(-1), chol_L).squeeze(-1)
+        del K_f64_cuda, chol_L, rhs_gpu
+
+        alpha_f64: NDArray[np.float64] = alpha_gpu.cpu().numpy()
+        del alpha_gpu
 
         # ---- Step 4: pre-contract force coefficients ----
         alpha_E_f64 = alpha_f64[:N]
@@ -201,7 +215,9 @@ class CudaGlobalKRRModel(BaseModel):
 
         # For training score and save/load
         self._alpha: NDArray[np.float64] = alpha_f64
-        self._y_train: NDArray[np.float64] = rhs  # [E, -F.ravel()]
+        self._y_train: NDArray[np.float64] = np.concatenate([energies, -forces.ravel()]).astype(
+            np.float64
+        )
 
     # ------------------------------------------------------------------
     # predict
