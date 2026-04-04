@@ -218,7 +218,7 @@ class TestLoadSmallMolsMini:
 
 def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
     """Build an argparse.Namespace with sensible defaults, overridden by kwargs."""
-    defaults: dict[str, str | int | float | list | None] = {
+    defaults: dict[str, str | int | float | bool | list | None] = {
         "dataset": "small_mols_mini",
         "regressor": "krr",
         "representation": "fchl19",
@@ -234,6 +234,7 @@ def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
         "max_size": None,
         "save": None,
         "repr_param": None,
+        "cuda": False,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)

@@ -124,3 +124,9 @@ ignore = [
 "python/kernelforge/kernelcli.py" = [
     "T201",   # Print statements (CLI tool)
 ]
+
+[tool.ty.analysis]
+# torch is an optional GPU dependency not present in CI or non-CUDA environments.
+# Treat it as Any so unresolved-import errors are suppressed unconditionally,
+# without needing per-line suppression comments.
+replace-imports-with-any = ["torch", "torch.**"]

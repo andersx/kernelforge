@@ -15,6 +15,11 @@ Usage examples::
     kernelcli --dataset small_mols_mini --regressor krr --representation fchl18 \\
               --mode energy_and_force --sigma 2.5 --l2 1e-4
 
+GPU-accelerated variant (requires CUDA build and --representation invdist)::
+
+    kernelcli --dataset rmd17_ethanol --representation invdist \\
+              --cuda --sigma 3.0 --l2 1e-5 --n-train 200 --n-test 200
+
 Representation/kernel parameters can be overridden with ``--repr-param KEY=VALUE``
 (repeatable).  For FCHL19 these map to ``repr_params``; for FCHL18 they map to
 ``kernel_params``.  Values are auto-cast to int, float, bool, or str::
@@ -40,6 +45,7 @@ from numpy.typing import NDArray
 
 from kernelforge.cli import load_qm7b_raw_data
 from kernelforge.models import (
+    CudaGlobalKRRModel,
     FCHL18KRRModel,
     GlobalKRRModel,
     GlobalRFFModel,
@@ -317,12 +323,22 @@ def _build_model(
     z_tr: list[NDArray[np.int32]],
     z_te: list[NDArray[np.int32]],
     repr_params: dict[str, Any] | None = None,
-) -> LocalKRRModel | LocalRFFModel | FCHL18KRRModel | GlobalKRRModel | GlobalRFFModel:
+    cuda: bool = False,
+) -> (
+    LocalKRRModel
+    | LocalRFFModel
+    | FCHL18KRRModel
+    | GlobalKRRModel
+    | GlobalRFFModel
+    | CudaGlobalKRRModel
+):
     """Construct and return the appropriate model instance."""
     repr_params = repr_params or {}
 
     # Inverse-distance global descriptor (no element list or atom-padding needed)
     if representation == "invdist":
+        if cuda:
+            return CudaGlobalKRRModel(sigma=sigma, l2=l2)
         if regressor == "krr":
             return GlobalKRRModel(sigma=sigma, l2=l2)
         # rff
@@ -370,6 +386,8 @@ def _print_header(args: argparse.Namespace) -> None:
     print(f"  dataset        : {args.dataset}")
     print(f"  regressor      : {args.regressor.upper()}")
     print(f"  representation : {args.representation.upper()}")
+    if args.cuda:
+        print("  device         : CUDA (GPU)")
     print(f"  mode           : {args.mode}")
     print(f"  sigma          : {args.sigma}")
     print(f"  l2             : {args.l2}")
@@ -470,6 +488,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Save fitted model to .npz file.",
     )
     p.add_argument(
+        "--cuda",
+        action="store_true",
+        default=False,
+        help=(
+            "Use GPU-accelerated CudaGlobalKRRModel (cuBLAS + cuSOLVER). "
+            "Requires --representation invdist --mode energy_and_force "
+            "and a CUDA-enabled build of kernelforge."
+        ),
+    )
+    p.add_argument(
         "--repr-param",
         action="append",
         default=None,
@@ -490,6 +518,28 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Validate cross-argument constraints."""
+    if args.cuda:
+        try:
+            from kernelforge import cuda_global_kernels as _  # noqa: F401
+        except ImportError:
+            parser.error(
+                "--cuda requires cuda_global_kernels (not built). "
+                "Re-build kernelforge with a CUDA compiler, CUDAToolkit, and PyTorch:\n"
+                "    make install-linux-mkl-ilp64"
+            )
+        if args.representation != "invdist":
+            parser.error(
+                f"--cuda requires --representation invdist "
+                f"(got --representation {args.representation})."
+            )
+        if args.mode != "energy_and_force":
+            parser.error(
+                f"--cuda only supports energy_and_force mode "
+                f"(got --mode {args.mode}). Add --mode energy_and_force."
+            )
+        if args.regressor != "krr":
+            parser.error(f"--cuda requires --regressor krr (got --regressor {args.regressor}).")
+
     if args.representation == "fchl18" and args.regressor == "rff":
         parser.error(
             "RFF regressor is not supported with the FCHL18 representation. "
@@ -564,6 +614,7 @@ def run(args: argparse.Namespace) -> None:
         z_tr=z_tr,
         z_te=z_te,
         repr_params=repr_params,
+        cuda=args.cuda,
     )
     print(f"\n[2] Model: {type(model).__name__}")
 
