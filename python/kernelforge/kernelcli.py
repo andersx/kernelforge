@@ -46,6 +46,7 @@ from numpy.typing import NDArray
 from kernelforge.cli import load_qm7b_raw_data
 from kernelforge.models import (
     CudaGlobalKRRModel,
+    CudaLocalKRRModel,
     FCHL18KRRModel,
     GlobalKRRModel,
     GlobalRFFModel,
@@ -331,6 +332,7 @@ def _build_model(
     | GlobalKRRModel
     | GlobalRFFModel
     | CudaGlobalKRRModel
+    | CudaLocalKRRModel
 ):
     """Construct and return the appropriate model instance."""
     repr_params = repr_params or {}
@@ -359,7 +361,11 @@ def _build_model(
             sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
         )
 
-    # FCHL19 — KRR or RFF; repr_params forwarded to generate_fchl_acsf[_and_gradients]
+    # FCHL19 — GPU (CudaLocalKRRModel), KRR, or RFF
+    if cuda:
+        return CudaLocalKRRModel(
+            sigma=sigma, l2=l2, elements=elements, repr_params=repr_params or None
+        )
     if regressor == "krr":
         return LocalKRRModel(sigma=sigma, l2=l2, elements=elements, repr_params=repr_params or None)
     # rff
@@ -492,9 +498,10 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Use GPU-accelerated CudaGlobalKRRModel (cuBLAS + cuSOLVER). "
-            "Requires --representation invdist --mode energy_and_force "
-            "and a CUDA-enabled build of kernelforge."
+            "Use GPU-accelerated model (cuBLAS + cuSOLVER via PyTorch). "
+            "With --representation invdist uses CudaGlobalKRRModel; "
+            "with --representation fchl19 uses CudaLocalKRRModel. "
+            "Requires --mode energy_and_force and a CUDA-enabled build of kernelforge."
         ),
     )
     p.add_argument(
@@ -519,17 +526,28 @@ def _build_parser() -> argparse.ArgumentParser:
 def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
     """Validate cross-argument constraints."""
     if args.cuda:
-        try:
-            from kernelforge import cuda_global_kernels as _  # noqa: F401
-        except ImportError:
+        # Check that the appropriate CUDA extension is built
+        if args.representation == "invdist":
+            try:
+                from kernelforge import cuda_global_kernels as _
+            except ImportError:
+                parser.error(
+                    "--cuda with --representation invdist requires cuda_global_kernels "
+                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
+                    "and PyTorch:\n    make install-linux-mkl-ilp64"
+                )
+        elif args.representation == "fchl19":
+            try:
+                from kernelforge import cuda_local_kernels as _  # noqa: F401
+            except ImportError:
+                parser.error(
+                    "--cuda with --representation fchl19 requires cuda_local_kernels "
+                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
+                    "and PyTorch:\n    make install-linux-mkl-ilp64"
+                )
+        else:
             parser.error(
-                "--cuda requires cuda_global_kernels (not built). "
-                "Re-build kernelforge with a CUDA compiler, CUDAToolkit, and PyTorch:\n"
-                "    make install-linux-mkl-ilp64"
-            )
-        if args.representation != "invdist":
-            parser.error(
-                f"--cuda requires --representation invdist "
+                f"--cuda requires --representation invdist or fchl19 "
                 f"(got --representation {args.representation})."
             )
         if args.mode != "energy_and_force":

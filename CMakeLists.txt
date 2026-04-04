@@ -280,8 +280,15 @@ if(CMAKE_CUDA_COMPILER)
     if(Torch_FOUND)
       message(STATUS
         "CUDA ${CMAKE_CUDA_COMPILER_VERSION} + Torch ${Torch_VERSION} — "
-        "building cuda_global_kernels")
+        "building cuda_global_kernels and cuda_local_kernels")
 
+      # libtorch_python.so provides the pybind11 type_caster<at::Tensor>
+      # specialisations; without it the modules fail to load at runtime.
+      find_library(_LIBTORCH_PYTHON torch_python
+        PATHS "${TORCH_INSTALL_PREFIX}/lib"
+        NO_DEFAULT_PATH)
+
+      # ---- cuda_global_kernels ----
       pybind11_add_module(cuda_global_kernels MODULE
         src/cuda_global_kernels.cu
         src/cuda_global_kernels_bindings.cpp)
@@ -291,12 +298,6 @@ if(CMAKE_CUDA_COMPILER)
       target_include_directories(cuda_global_kernels BEFORE PRIVATE
         ${TORCH_INCLUDE_DIRS}
         src)
-
-      # libtorch_python.so provides the pybind11 type_caster<at::Tensor>
-      # specialisations; without it the module fails to load at runtime.
-      find_library(_LIBTORCH_PYTHON torch_python
-        PATHS "${TORCH_INSTALL_PREFIX}/lib"
-        NO_DEFAULT_PATH)
 
       target_link_libraries(cuda_global_kernels PRIVATE
         "${TORCH_LIBRARIES}"
@@ -313,9 +314,34 @@ if(CMAKE_CUDA_COMPILER)
         $<$<COMPILE_LANGUAGE:CXX>:-O3>)
 
       list(APPEND _KF_ALL_MODULES cuda_global_kernels)
+
+      # ---- cuda_local_kernels ----
+      pybind11_add_module(cuda_local_kernels MODULE
+        src/cuda_local_kernels.cu
+        src/cuda_local_kernels_bindings.cpp)
+
+      target_include_directories(cuda_local_kernels BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
+
+      target_link_libraries(cuda_local_kernels PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}"
+        CUDA::cublas)
+
+      set_property(TARGET cuda_local_kernels PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_local_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
+      set_property(TARGET cuda_local_kernels PROPERTY CUDA_ARCHITECTURES "70;80;86;89;90")
+
+      target_compile_options(cuda_local_kernels PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_local_kernels)
+
     else()
       message(STATUS
-        "CUDA found but Torch not found — skipping cuda_global_kernels")
+        "CUDA found but Torch not found — skipping cuda_global_kernels and cuda_local_kernels")
     endif()
   else()
     message(STATUS "CUDAToolkit not found — skipping cuda_global_kernels")
