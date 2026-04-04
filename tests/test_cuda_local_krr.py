@@ -100,7 +100,7 @@ def test_fit_predict_smoke() -> None:
     tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
     ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
 
-    model = CudaLocalKRRModel(sigma=2.0, l2=1e-5, elements=_ELEMENTS)
+    model = CudaLocalKRRModel(sigma=2.0, l2=1e-4, elements=_ELEMENTS)
     model.fit(tr, ztr, energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
 
     assert model.is_fitted_
@@ -117,7 +117,7 @@ def test_fit_predict_smoke() -> None:
 def test_energy_only_raises() -> None:
     """energy_only mode must raise NotImplementedError."""
     coords, z, E, _ = _load_ethanol()
-    model = CudaLocalKRRModel(sigma=2.0, l2=1e-5, elements=_ELEMENTS)
+    model = CudaLocalKRRModel(sigma=2.0, l2=1e-4, elements=_ELEMENTS)
     with pytest.raises(NotImplementedError, match="energy_and_force"):
         model.fit(coords, z, energies=E)
 
@@ -125,7 +125,7 @@ def test_energy_only_raises() -> None:
 def test_force_only_raises() -> None:
     """force_only mode must raise NotImplementedError."""
     coords, z, _, F = _load_ethanol()
-    model = CudaLocalKRRModel(sigma=2.0, l2=1e-5, elements=_ELEMENTS)
+    model = CudaLocalKRRModel(sigma=2.0, l2=1e-4, elements=_ELEMENTS)
     with pytest.raises(NotImplementedError, match="energy_and_force"):
         model.fit(coords, z, forces=F)
 
@@ -150,7 +150,7 @@ def test_cuda_vs_cpu_agreement() -> None:
     tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
     ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
 
-    sigma, l2 = 2.0, 1e-5
+    sigma, l2 = 2.0, 1e-4
 
     cpu_model = LocalKRRModel(sigma=sigma, l2=l2, elements=_ELEMENTS)
     cpu_model.fit(tr, ztr, energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
@@ -199,7 +199,7 @@ def test_no_nan_tight_sigma() -> None:
 def test_train_score() -> None:
     """Training scores must be finite and non-negative."""
     coords, z, E, F = _load_ethanol()
-    model = CudaLocalKRRModel(sigma=2.0, l2=1e-5, elements=_ELEMENTS)
+    model = CudaLocalKRRModel(sigma=2.0, l2=1e-4, elements=_ELEMENTS)
     model.fit(coords[:_N_TRAIN], z[:_N_TRAIN], energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
 
     scores = model.train_score_
@@ -222,7 +222,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
     ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
 
-    model = CudaLocalKRRModel(sigma=2.0, l2=1e-5, elements=_ELEMENTS)
+    model = CudaLocalKRRModel(sigma=2.0, l2=1e-4, elements=_ELEMENTS)
     model.fit(tr, ztr, energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
     E_orig, F_orig = model.predict(te, zte)
 
@@ -254,7 +254,7 @@ def test_score_method() -> None:
     tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
     ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
 
-    model = CudaLocalKRRModel(sigma=2.0, l2=1e-5, elements=_ELEMENTS)
+    model = CudaLocalKRRModel(sigma=2.0, l2=1e-4, elements=_ELEMENTS)
     model.fit(tr, ztr, energies=E[:_N_TRAIN], forces=F[:_N_TRAIN])
     scores = model.score(te, zte, energies=E[_N_TRAIN:], forces=F[_N_TRAIN:])
 

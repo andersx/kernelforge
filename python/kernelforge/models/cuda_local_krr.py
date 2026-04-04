@@ -7,11 +7,11 @@ Training:
      Q (nm,max_atoms), N (nm,) in float64 on CPU.
   2. Upload float32 CUDA tensors.
   3. Call ``cuda_local_kernels.kernel_gaussian_full_symm`` (GPU, float32)
-     to build K_full (nm+naq)² on GPU.
-  4. Cast K_full to float64 on GPU and solve with ``torch.linalg.cholesky``
-     + ``torch.cholesky_solve`` (cuSOLVER) — avoids float32 conditioning issues.
-  5. Download alpha, cast alpha_F to float32, call
-     ``cuda_local_kernels.compute_alpha_desc`` (GPU) → alpha_desc_F.
+     to build K_full (nm+naq)² on GPU.  Symmetrise: K = (K + K^T) / 2.
+  4. Solve with ``torch.linalg.cholesky`` + ``torch.cholesky_solve``
+     entirely in float32 on GPU.  Use l2 ≥ 1e-4 for reliable conditioning
+     (float32 K_FF accumulation introduces ~1e-5 errors for large rep_size).
+  5. Call ``cuda_local_kernels.compute_alpha_desc`` (GPU, float32).
   6. Store X_train, dX_train, Q_train, N_train, alpha_E, alpha_desc_F as
      persistent float32 CUDA tensors.
 
@@ -94,12 +94,16 @@ _DEFAULT_ELEMENTS: list[int] = [1, 6, 7, 8, 16]
 class CudaLocalKRRModel(BaseModel):
     """GPU-accelerated KRR model using FCHL19 local descriptors.
 
-    Training uses a GPU float32 local kernel assembly followed by a GPU float64
-    Cholesky solve (``torch.linalg.cholesky``), which avoids float32 conditioning
-    failures for large training sets.  The ``alpha_desc`` precomputation also runs
-    on GPU.  Inference uses the GPU J^T·alpha contracted matvec.
+    Training uses GPU float32 throughout: kernel assembly, Cholesky solve
+    (``torch.linalg.cholesky``), and ``alpha_desc`` precomputation.  Inference
+    uses the GPU J^T·alpha contracted matvec.
 
     **Only** ``energy_and_force`` training mode is supported.
+
+    .. note::
+        Float32 K_FF accumulation introduces ~1e-5 rounding errors for FCHL19
+        descriptors (rep_size ≈ 300).  Use ``l2 ≥ 1e-4`` to guarantee a
+        positive-definite kernel matrix and a successful Cholesky solve.
 
     Parameters
     ----------
@@ -124,7 +128,7 @@ class CudaLocalKRRModel(BaseModel):
     def __init__(
         self,
         sigma: float = 2.0,
-        l2: float = 1e-8,
+        l2: float = 1e-4,
         elements: list[int] | None = None,
         repr_params: dict[str, Any] | None = None,
     ) -> None:
@@ -203,41 +207,22 @@ class CudaLocalKRRModel(BaseModel):
             X_cuda, dX_cuda, Q_cuda, N_cuda, float(self.sigma)
         )
         # K_full_cuda: (nm+naq, nm+naq) float32 CUDA
-        # Enforce exact symmetry: K = (K + K^T) / 2 to guard against any tiny
-        # float32 atomicAdd-ordering asymmetries from the CUDA kernel.
+        # Symmetrise: (K + K^T) / 2 eliminates atomicAdd-ordering asymmetries.
         K_full_cuda = (K_full_cuda + K_full_cuda.T).mul_(0.5)
+        K_full_cuda.diagonal().add_(self.l2)
 
-        # ---- Step 4: GPU float64 Cholesky solve ----
-        K_f64_cuda = K_full_cuda.to(torch.float64)
-        del K_full_cuda
+        # ---- Step 4: float32 Cholesky solve on GPU ----
+        # RHS: [E; -F.ravel()] as float32
+        F_neg = -forces  # sign convention: training target is -F = dE/dR
+        rhs_f32 = np.concatenate([energies, F_neg.ravel()]).astype(np.float32)
+        rhs_gpu = torch.from_numpy(rhs_f32).cuda()
 
-        # Float32 kernel assembly accumulates rounding errors proportional to
-        # rep_size (~312 for FCHL19).  Estimate the float32 conditioning floor:
-        #   error_floor ~ rep_size * eps_float32 * mean(|K_diag|)
-        # and use max(self.l2, error_floor) so Cholesky is guaranteed to succeed.
-        diag_mean = float(K_f64_cuda.diagonal().abs().mean())
-        float32_floor = diag_mean * rep_size * 2e-7  # ~1.5x float32 ULP per term
-        effective_l2 = max(self.l2, float32_floor)
-        K_f64_cuda.diagonal().add_(effective_l2)
+        chol_L = torch.linalg.cholesky(K_full_cuda)
+        alpha_f32_gpu = torch.cholesky_solve(rhs_gpu.unsqueeze(-1), chol_L).squeeze(-1)
+        del K_full_cuda, chol_L, rhs_gpu
 
-        # RHS: [E; -F.ravel()]
-        F_neg = -forces  # sign convention: KRR uses -F as training target
-        rhs_np = np.concatenate([energies, F_neg.ravel()]).astype(np.float64)
-        rhs_gpu = torch.from_numpy(rhs_np).cuda()
-
-        # Cholesky factorisation + triangular solve, entirely on GPU (float64).
-        chol_L = torch.linalg.cholesky(K_f64_cuda)
-        alpha_gpu = torch.cholesky_solve(rhs_gpu.unsqueeze(-1), chol_L).squeeze(-1)
-        del K_f64_cuda, chol_L, rhs_gpu
-
-        alpha_f64: NDArray[np.float64] = alpha_gpu.cpu().numpy()
-        del alpha_gpu
-
-        # ---- Step 5: precompute alpha_desc_F on GPU ----
-        alpha_E_f64 = alpha_f64[:nm]
-        alpha_F_f64 = alpha_f64[nm:]  # shape (naq,)
-
-        alpha_F_cuda = _to_cuda_f32(alpha_F_f64.astype(np.float32))
+        # ---- Step 5: precompute alpha_desc_F on GPU (float32) ----
+        alpha_F_cuda = alpha_f32_gpu[nm:]
         alpha_desc_F_cuda: Any = _ext.compute_alpha_desc(  # type: ignore[union-attr]
             dX_cuda, N_cuda, alpha_F_cuda
         )
@@ -248,19 +233,22 @@ class CudaLocalKRRModel(BaseModel):
         self._dX_train_np: NDArray[np.float32] = dX.astype(np.float32)
         self._Q_train_np: NDArray[np.int32] = Q_krr.astype(np.int32)
         self._N_train_np: NDArray[np.int32] = N.astype(np.int32)
-        self._alpha_E_np: NDArray[np.float32] = alpha_E_f64.astype(np.float32)
+        self._alpha_E_np: NDArray[np.float32] = alpha_f32_gpu[:nm].cpu().numpy()
         self._alpha_desc_F_np: NDArray[np.float32] = alpha_desc_F_cuda.cpu().numpy()
 
         self._X_train_cuda: Any = X_cuda
         self._dX_train_cuda: Any = dX_cuda
         self._Q_train_cuda: Any = Q_cuda
         self._N_train_cuda: Any = N_cuda
-        self._alpha_E_cuda: Any = _to_cuda_f32(self._alpha_E_np)
+        self._alpha_E_cuda: Any = alpha_f32_gpu[:nm]
         self._alpha_desc_F_cuda: Any = alpha_desc_F_cuda
 
-        # For training score and save/load
-        self._alpha: NDArray[np.float64] = alpha_f64
-        self._y_train: NDArray[np.float64] = rhs_np
+        # For training score (kept in float64 for reporting accuracy)
+        alpha_np = alpha_f32_gpu.cpu().numpy().astype(np.float64)
+        rhs_f64 = np.concatenate([energies, F_neg.ravel()]).astype(np.float64)
+        self._alpha: NDArray[np.float64] = alpha_np
+        self._y_train: NDArray[np.float64] = rhs_f64
+        del alpha_f32_gpu
 
     # ------------------------------------------------------------------
     # predict

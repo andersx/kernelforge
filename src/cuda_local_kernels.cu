@@ -117,18 +117,38 @@ __global__ static void compute_alpha_desc_kernel(
 }
 
 
+// Maximum number of Cartesian DOFs per molecule supported by the training
+// kernel (= 3 * max_atoms_per_molecule).  This bounds the per-thread
+// local-memory arrays VA[], VB[], and sff[].  Increase if needed.
+#define LOCAL_MAX_NCOLS 96   // covers up to 32 atoms/mol
+
 // ---------------------------------------------------------------------------
 // assemble_full_symm_local_kernel
 //
 // Grid (nm, nm): block (bx=b, by=a) handles molecule pair (a,b), a ≤ b.
 // Threads within the block are spread across atom pairs (i1, j2).
 //
-// Shared-memory layout (dynamic):
-//   [0]              : sh_KEE        (1 float)
-//   [1 .. ncM]       : sh_KFE        (ncols_max floats)
-//   [1+ncM .. 1+2ncM]: sh_Kjact      (ncols_max floats)
-//   [1+2ncM ..]      : sh_KFF        (ncols_max × ncols_max floats)
-// where ncM = 3 * max_atoms (worst-case column count).
+// Performance optimisations vs the naive multi-pass version:
+//   1. Shared memory caches X_a and X_b — eliminates 784× redundant global
+//      reads of X that the multi-pass design required.
+//   2. Single k-loop computes l2, VA[], VB[], and sff[][] simultaneously —
+//      each of dX_a[k,:] and dX_b[k,:] is read once per k with stride-1
+//      (coalesced) access.
+//   3. All arithmetic is float32 — avoids the 16-64× fp64 penalty on
+//      consumer GPUs.
+//
+// Shared-memory layout (dynamic, total bytes passed at launch):
+//   [0]                       : sh_KEE   (1 float)
+//   [1 .. ncM]                : sh_KFE   (ncM floats)   ncM = 3*max_atoms
+//   [1+ncM .. 1+2ncM]         : sh_Kjact (ncM floats)
+//   [1+2ncM .. 1+2ncM+ncM²]  : sh_KFF   (ncM² floats)
+//   [acc_sz .. +na*rep]       : sh_Xa    (na*rep_size floats, cached X for mol a)
+//   [+na*rep .. +(na+nb)*rep] : sh_Xb    (nb*rep_size floats, cached X for mol b)
+//
+// Per-thread local memory (spills to L2-backed local memory for large rep_size):
+//   VA[LOCAL_MAX_NCOLS]       : K_FE accumulator per atom pair
+//   VB[LOCAL_MAX_NCOLS]       : K_jact accumulator
+//   sff[LOCAL_MAX_NCOLS²]     : K_FF static term accumulator
 // ---------------------------------------------------------------------------
 __global__ static void assemble_full_symm_local_kernel(
     const float *d_X,      // (nm, max_atoms, rep)
@@ -153,25 +173,37 @@ __global__ static void assemble_full_symm_local_kernel(
     int col_off_a = d_offs[a];
     int row_off_b = d_offs[b];
     int lda       = 3 * max_atoms;
-    int ncM       = 3 * max_atoms; // shared-memory stride for KFF
+    int ncM       = 3 * max_atoms;
 
-    // Shared memory layout
+    // ---- Shared memory layout ----
     extern __shared__ float sh[];
-    float *sh_KEE   = sh;                          // 1 float
-    float *sh_KFE   = sh + 1;                      // ncM floats
-    float *sh_Kjact = sh + 1 + ncM;               // ncM floats
-    float *sh_KFF   = sh + 1 + 2 * ncM;           // ncM * ncM floats
+    int acc_sz = 1 + 2 * ncM + ncM * ncM;
 
-    // Zero accumulators
-    int total_sh = 1 + 2 * ncM + ncM * ncM;
-    for (int t = threadIdx.x; t < total_sh; t += blockDim.x)
+    float *sh_KEE   = sh;
+    float *sh_KFE   = sh + 1;
+    float *sh_Kjact = sh + 1 + ncM;
+    float *sh_KFF   = sh + 1 + 2 * ncM;
+    float *sh_Xa    = sh + acc_sz;                      // (na, rep_size)
+    float *sh_Xb    = sh + acc_sz + na * rep_size;      // (nb, rep_size)
+
+    // Zero accumulator region (not the X cache, that gets populated next)
+    for (int t = threadIdx.x; t < acc_sz; t += blockDim.x)
         sh[t] = 0.0f;
+
+    // Cooperatively load X_a and X_b into shared memory.
+    // d_X[(m*max_atoms+i)*rep+k] is contiguous for sequential (i,k) → coalesced.
+    for (int t = threadIdx.x; t < na * rep_size; t += blockDim.x)
+        sh_Xa[t] = d_X[(long long)(a * max_atoms + t / rep_size) * rep_size + t % rep_size];
+    for (int t = threadIdx.x; t < nb * rep_size; t += blockDim.x)
+        sh_Xb[t] = d_X[(long long)(b * max_atoms + t / rep_size) * rep_size + t % rep_size];
+
     __syncthreads();
 
-    // Each thread handles one or more atom pairs (i1, j2).
-    // No large local arrays — all intermediate results stored in a few scalars
-    // and recomputed via extra passes.  This avoids register/local-memory
-    // overflow for large rep_size (e.g. FCHL19 rep_size ≈ 312).
+    // ---- Per-atom-pair computation ----
+    // Each thread handles one or more atom pairs.
+    // Local arrays VA, VB (small: ncols ≤ LOCAL_MAX_NCOLS) stay in registers.
+    // sff (up to LOCAL_MAX_NCOLS²) spills to L2-backed local memory for large
+    // rep_size, but is accessed sequentially so cache behaviour is good.
     int total_pairs = na * nb;
     for (int pair = (int)threadIdx.x; pair < total_pairs; pair += (int)blockDim.x) {
         int i1 = pair / nb;
@@ -179,59 +211,63 @@ __global__ static void assemble_full_symm_local_kernel(
 
         if (d_Q[a * max_atoms + i1] != d_Q[b * max_atoms + j2]) continue;
 
-        const float *xa  = d_X   + (long long)(a * max_atoms + i1) * rep_size;
-        const float *xb  = d_X   + (long long)(b * max_atoms + j2) * rep_size;
-        const float *dxa = d_dX  + (long long)(a * max_atoms + i1) * rep_size * lda;
-        const float *dxb = d_dX  + (long long)(b * max_atoms + j2) * rep_size * lda;
+        // Pointers for dX (global memory, stride-1 on c-dimension at each k)
+        const float *dxa = d_dX + (long long)(a * max_atoms + i1) * rep_size * lda;
+        const float *dxb = d_dX + (long long)(b * max_atoms + j2) * rep_size * lda;
 
-        // ---- Pass 1: l2, exp scalars, K_EE ----
+        // Per-thread accumulators
+        float VA[LOCAL_MAX_NCOLS];
+        float VB[LOCAL_MAX_NCOLS];
+        float sff[LOCAL_MAX_NCOLS * LOCAL_MAX_NCOLS];
+
+        for (int c = 0; c < ncols_a; c++) VA[c]  = 0.0f;
+        for (int c = 0; c < ncols_b; c++) VB[c]  = 0.0f;
+        for (int c = 0; c < ncols_a * ncols_b; c++) sff[c] = 0.0f;
+
         float l2 = 0.0f;
+
+        // Single k-pass: shared X for dk (fast), coalesced dX reads for c.
+        const float *sh_xa = sh_Xa + i1 * rep_size;
+        const float *sh_xb = sh_Xb + j2 * rep_size;
+
         for (int k = 0; k < rep_size; k++) {
-            float dk = xa[k] - xb[k];
+            float dk = sh_xa[k] - sh_xb[k];   // shared memory — no global read
             l2 += dk * dk;
+
+            const float *dxa_k = dxa + (long long)k * lda;  // stride-1 over c
+            const float *dxb_k = dxb + (long long)k * lda;
+
+            // K_FE accumulation: VA[c1] = Σ_k dX_a[k,c1]*dk
+            for (int c1 = 0; c1 < ncols_a; c1++) {
+                float v1 = dxa_k[c1];
+                VA[c1] += v1 * dk;
+                // K_FF static: sff[c1,c2] = Σ_k dX_a[k,c1]*dX_b[k,c2]
+                for (int c2 = 0; c2 < ncols_b; c2++)
+                    sff[c1 * ncols_b + c2] += v1 * dxb_k[c2];
+            }
+            // K_jact accumulation: VB[c2] = Σ_k dX_b[k,c2]*dk
+            for (int c2 = 0; c2 < ncols_b; c2++)
+                VB[c2] += dxb_k[c2] * dk;
         }
+
         float exp_base = expf(l2 * inv_2s2);
         float expdiag  = exp_base * inv_s2;
         float expd     = -(exp_base * inv_s4);
 
+        // Accumulate to shared memory (one atomicAdd per entry, no k-loop)
         atomicAdd(sh_KEE, exp_base);
 
-        // ---- Pass 2: K_FE and K_jact ----
-        // Iterate c (outer) then k (inner), recomputing d[k] each time.
-        // Use double accumulators to reduce float32 rounding errors
-        // (rep_size can be ~300, so single-precision sums accumulate ~1e-5 error).
-        int nc_max = (ncols_a > ncols_b) ? ncols_a : ncols_b;
-        for (int c = 0; c < nc_max; c++) {
-            double va = 0.0, vb = 0.0;
-            for (int k = 0; k < rep_size; k++) {
-                double dk = (double)xa[k] - (double)xb[k];
-                if (c < ncols_a) va += (double)dxa[(long long)k * lda + c] * dk;
-                if (c < ncols_b) vb += (double)dxb[(long long)k * lda + c] * dk;
-            }
-            if (c < ncols_a) atomicAdd(sh_KFE  + c, -expdiag * (float)va);
-            if (c < ncols_b) atomicAdd(sh_Kjact + c,  expdiag * (float)vb);
-        }
+        for (int c1 = 0; c1 < ncols_a; c1++)
+            atomicAdd(sh_KFE + c1, -expdiag * VA[c1]);
 
-        // ---- Pass 3: K_FF (static + rank-1) ----
-        // Outer: c1, then inner loop recomputes VA[c1] and iterates c2.
-        // Double accumulators for static term (Σ_k dX_a * dX_b, ~300 terms).
+        for (int c2 = 0; c2 < ncols_b; c2++)
+            atomicAdd(sh_Kjact + c2, expdiag * VB[c2]);
+
         for (int c1 = 0; c1 < ncols_a; c1++) {
-            double va = 0.0;
-            for (int k = 0; k < rep_size; k++)
-                va += (double)dxa[(long long)k * lda + c1]
-                    * ((double)xa[k] - (double)xb[k]);
-
-            for (int c2 = 0; c2 < ncols_b; c2++) {
-                double vb = 0.0, sff = 0.0;
-                for (int k = 0; k < rep_size; k++) {
-                    double dxb_kc2 = (double)dxb[(long long)k * lda + c2];
-                    double dk      = (double)xa[k] - (double)xb[k];
-                    vb  += dxb_kc2 * dk;
-                    sff += (double)dxa[(long long)k * lda + c1] * dxb_kc2;
-                }
+            float ev = expd * VA[c1];
+            for (int c2 = 0; c2 < ncols_b; c2++)
                 atomicAdd(sh_KFF + c1 * ncM + c2,
-                    expdiag * (float)sff + expd * (float)(va * vb));
-            }
+                    expdiag * sff[c1 * ncols_b + c2] + ev * VB[c2]);
         }
     }
 
@@ -513,28 +549,51 @@ void kernel_gaussian_full_symm_local_cu(
     // Zero the output matrix
     CUDA_CHECK(cudaMemset(d_K_full, 0, (long long)BIG * BIG * sizeof(float)));
 
-    // Shared memory per block: 1 + 2*ncM + ncM*ncM floats, ncM = 3*max_atoms
-    int ncM      = 3 * max_atoms;
-    size_t smem  = (size_t)(1 + 2 * ncM + ncM * ncM) * sizeof(float);
+    // Validate LOCAL_MAX_NCOLS
+    int ncols_max = 3 * max_atoms;
+    if (ncols_max > LOCAL_MAX_NCOLS) {
+        fprintf(stderr,
+            "cuda_local_kernels: ncols_max=%d exceeds LOCAL_MAX_NCOLS=%d.  "
+            "Recompile with a larger LOCAL_MAX_NCOLS or reduce max_atoms.\n",
+            ncols_max, LOCAL_MAX_NCOLS);
+        abort();
+    }
 
-    // Check shared memory limit — bail out with a clear message if exceeded
+    // Shared memory per block:
+    //   accumulators: 1 + 2*ncM + ncM² floats
+    //   X cache:      max_atoms * rep_size * 2 floats (mol a + mol b)
+    // Using max possible atoms per molecule for the X cache dimension.
+    int ncM       = 3 * max_atoms;
+    int acc_sz    = 1 + 2 * ncM + ncM * ncM;
+    size_t smem   = (size_t)(acc_sz + 2 * max_atoms * rep_size) * sizeof(float);
+
+    // Check shared memory limit — request extended shared memory (up to 96 KB)
+    // if available; fall back gracefully with a clear message if still exceeded.
     int device;
     CUDA_CHECK(cudaGetDevice(&device));
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
-    if (smem > prop.sharedMemPerBlock) {
+    if (smem > prop.sharedMemPerBlockOptin) {
         fprintf(stderr,
-            "cuda_local_kernels: max_atoms=%d requires %zu bytes shared memory "
-            "but device only provides %zu.  Reduce max_atoms or pad to a smaller value.\n",
-            max_atoms, smem, prop.sharedMemPerBlock);
+            "cuda_local_kernels: max_atoms=%d, rep_size=%d requires %zu bytes "
+            "shared memory but device supports at most %zu.  "
+            "Reduce max_atoms or rep_size.\n",
+            max_atoms, rep_size, smem, prop.sharedMemPerBlockOptin);
         abort();
     }
+    if (smem > prop.sharedMemPerBlock) {
+        // Request extended shared memory (Volta+ supports up to 96 KB)
+        CUDA_CHECK(cudaFuncSetAttribute(
+            assemble_full_symm_local_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            (int)smem));
+    }
 
-    // Number of threads per block: enough to cover max atom pairs, rounded to warp
+    // Threads per block: cover max atom pairs, rounded to warp size
     int max_pairs = max_atoms * max_atoms;
     int block_sz  = ((max_pairs + 31) / 32) * 32;
     if (block_sz < 32)  block_sz = 32;
-    if (block_sz > 256) block_sz = 256;  // cap at 256 for occupancy
+    if (block_sz > 128) block_sz = 128;  // cap at 128 for register pressure
 
     dim3 grid(nm, nm);
     assemble_full_symm_local_kernel<<<grid, block_sz, smem>>>(
