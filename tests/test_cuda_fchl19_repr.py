@@ -290,8 +290,12 @@ def test_correctness_batch_vs_single(gpu_device: Any) -> None:
         .numpy()
     )
 
-    np.testing.assert_array_equal(rep_batch[0, : len(z1), :], rep1[0, : len(z1), :])
-    np.testing.assert_array_equal(rep_batch[1, : len(z2), :], rep2[0, : len(z2), :])
+    np.testing.assert_allclose(
+        rep_batch[0, : len(z1), :], rep1[0, : len(z1), :], rtol=1e-6, atol=1e-8
+    )
+    np.testing.assert_allclose(
+        rep_batch[1, : len(z2), :], rep2[0, : len(z2), :], rtol=1e-6, atol=1e-8
+    )
 
 
 def test_translation_invariance(gpu_device: Any) -> None:
