@@ -1118,6 +1118,22 @@ __global__ static void inference_build_expd_iF_kernel(
 //
 // One thread per query atom.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// inference_E_and_diag_kernel: tiled 2-D version for coalesced memory access.
+//
+// Block = (TILE_Q=32, TILE_T=8) = 256 threads.
+//   tq = threadIdx.x  (0..31): which query atom within the tile
+//   tt = threadIdx.y  (0..7):  which subset of train atoms this thread handles
+//
+// Each of the 32 tq-lanes processes one query atom q = blockIdx.x*32 + tq.
+// The 8 tt-lanes split the N_t train atoms into strided slices, accumulate
+// partial sums in registers, then reduce across tt via warp-shuffle.
+//
+// All reads of d_C_qt / d_inner_F / d_expd_iF are coalesced: for a fixed tt
+// all 32 tq threads read 32 consecutive floats (stride-1 along q dimension).
+// ---------------------------------------------------------------------------
+#define TILE_Q 32
+#define TILE_T 8
 __global__ static void inference_E_and_diag_kernel(
     const float *d_C_qt,       // (N_q, N_t) col-major
     const float *d_inner_F,    // (N_q, N_t) col-major (corrected)
@@ -1130,30 +1146,58 @@ __global__ static void inference_E_and_diag_kernel(
     float sigma2,
     int N_q, int N_t, int max_atoms_t, int nm_t)
 {
-    int q = blockIdx.x * blockDim.x + threadIdx.x;
-    if (q >= N_q) return;
+    int tq = threadIdx.x;  // 0..TILE_Q-1
+    int tt = threadIdx.y;  // 0..TILE_T-1
+    int q  = blockIdx.x * TILE_Q + tq;
+    bool valid_q = (q < N_q);
 
-    float E_loc = 0.0f;
-    float wE_loc = 0.0f;
-    float r_expd_iF = 0.0f;
+    float E_loc     = 0.0f;
+    float wE_loc    = 0.0f;
+    float riF_loc   = 0.0f;
 
-    for (int t = 0; t < N_t; t++) {
-        long long idx = q + (long long)t * N_q;
-        float c = d_C_qt[idx];
-        if (c == 0.0f) continue;
-
-        int mol_t = t / max_atoms_t;
-        float aE = d_alpha_E[mol_t];
-
-        E_loc += c * sigma2 * aE + c * d_inner_F[idx];
-        wE_loc += c * aE;
-        r_expd_iF += d_expd_iF[idx];
+    if (valid_q) {
+        for (int t = tt; t < N_t; t += TILE_T) {
+            long long idx = q + (long long)t * N_q;
+            float c = d_C_qt[idx];
+            if (c != 0.0f) {
+                int mol_t = t / max_atoms_t;
+                float aE  = d_alpha_E[mol_t];
+                E_loc   += c * (sigma2 * aE + d_inner_F[idx]);
+                wE_loc  += c * aE;
+                riF_loc += d_expd_iF[idx];
+            }
+        }
     }
 
-    d_E_partial[q] = E_loc;
-    d_wE[q] = wE_loc;
-    d_row_expd_iF[q] = r_expd_iF;
+    // Reduce partial sums across the TILE_T tt-lanes using warp shuffle.
+    // All 32*8=256 threads form a single warp group but occupy 8 warps.
+    // Threads with same tq but different tt are in different warps, so we
+    // use __shfl_down_sync within the 32-thread sub-warp of each tt-lane,
+    // but must use shared memory to aggregate across tt.
+    __shared__ float sh_E[TILE_T][TILE_Q];
+    __shared__ float sh_wE[TILE_T][TILE_Q];
+    __shared__ float sh_riF[TILE_T][TILE_Q];
+
+    sh_E[tt][tq]   = E_loc;
+    sh_wE[tt][tq]  = wE_loc;
+    sh_riF[tt][tq] = riF_loc;
+    __syncthreads();
+
+    // Only the tt=0 threads write the final result
+    if (tt == 0 && valid_q) {
+        float sum_E = 0.0f, sum_wE = 0.0f, sum_riF = 0.0f;
+        for (int s = 0; s < TILE_T; s++) {
+            sum_E   += sh_E[s][tq];
+            sum_wE  += sh_wE[s][tq];
+            sum_riF += sh_riF[s][tq];
+        }
+        d_E_partial[q]    = sum_E;
+        d_wE[q]           = sum_wE;
+        d_row_expd_iF[q]  = sum_riF;
+    }
 }
+#undef TILE_Q
+#undef TILE_T
 
 
 // ---------------------------------------------------------------------------
@@ -2125,11 +2169,15 @@ void kernel_gaussian_full_matvec_local_cu(
         // 8. E_partial and wE (per query atom), plus row_sum_expd_iF
         float *d_row_expd_iF;
         CUDA_CHECK(cudaMalloc(&d_row_expd_iF, N_q * sizeof(float)));
-        inference_E_and_diag_kernel<<<(N_q + 255) / 256, 256>>>(
-            d_C_qt, d_inner_F, d_expd_iF, d_alpha_E, d_N_t,
-            d_E_partial, d_wE_arr, d_row_expd_iF,
-            sigma * sigma,
-            N_q, N_t, max_atoms_t, nm_t);
+        {
+            dim3 blk_e(32, 8);
+            dim3 grd_e((N_q + 31) / 32);
+            inference_E_and_diag_kernel<<<grd_e, blk_e>>>(
+                d_C_qt, d_inner_F, d_expd_iF, d_alpha_E, d_N_t,
+                d_E_partial, d_wE_arr, d_row_expd_iF,
+                sigma * sigma,
+                N_q, N_t, max_atoms_t, nm_t);
+        }
 
         // 9. Diagonal correction: G_acc[q,k] += (row_expd_iF[q] - wE[q]) * X_q[q,k]
         {
