@@ -41,6 +41,28 @@ void kernel_gaussian_full_symm_local_cu(
 );
 
 // ---------------------------------------------------------------------------
+// kernel_gaussian_full_symm_rfp_local_cu
+//
+// RFP-packed variant of kernel_gaussian_full_symm_local_cu.
+//
+// Builds the symmetric (BIG, BIG) energy+force training kernel matrix where
+// BIG = nm + naq, and stores it directly in RFP packed format
+// (TRANSR=N, UPLO=L) without materialising the dense buffer.  d_K_rfp must
+// point to BIG*(BIG+1)/2 floats.
+//
+// Unpack in Python with: kernelmath.rfp_to_full(..., uplo='U', transr='N')
+// ---------------------------------------------------------------------------
+void kernel_gaussian_full_symm_rfp_local_cu(
+    const float *d_X,
+    const float *d_dX,
+    const int   *d_Q,
+    const int   *d_N,
+    float       *d_K_rfp,
+    float        sigma,
+    int nm, int max_atoms, int rep_size, int naq
+);
+
+// ---------------------------------------------------------------------------
 // compute_alpha_desc_local_cu
 //
 // GPU version of kernel_gaussian_local_compute_alpha_desc.
@@ -105,6 +127,53 @@ void kernel_gaussian_full_matvec_local_cu(
     int nm_q, int nm_t,
     int max_atoms_q, int max_atoms_t,
     int rep_size, int naq_q
+);
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_symm_local_cu — energy-only K_EE (nm × nm)
+//
+// Builds the symmetric energy kernel matrix (no force terms).
+// ---------------------------------------------------------------------------
+void kernel_gaussian_symm_local_cu(
+    const float *d_X,
+    const int   *d_Q,
+    const int   *d_N,
+    float       *d_KEE,
+    float        sigma,
+    int nm, int max_atoms, int rep_size
+);
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_symm_rfp_local_cu — energy-only K_EE in RFP packed format
+//
+// Builds the symmetric nm×nm energy kernel and returns it packed in RFP
+// format (TRANSR=N, UPLO=L).  d_K_rfp must point to nm*(nm+1)/2 floats.
+// Unpack in Python with: kernelmath.rfp_to_full(..., uplo='U', transr='N')
+// ---------------------------------------------------------------------------
+void kernel_gaussian_symm_rfp_local_cu(
+    const float *d_X,
+    const int   *d_Q,
+    const int   *d_N,
+    float       *d_K_rfp,
+    float        sigma,
+    int nm, int max_atoms, int rep_size
+);
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_rect_local_cu — rectangular energy-only K_EE (nm_q × nm_t)
+// ---------------------------------------------------------------------------
+void kernel_gaussian_rect_local_cu(
+    const float *d_X_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    float       *d_KEE,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size
 );
 
 }  // namespace fchl19

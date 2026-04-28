@@ -38,7 +38,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -84,6 +84,12 @@ SMALL_MOLS_TRAIN_NPZ = _EXAMPLES_DIR / "small_mols_mini_train.npz"
 SMALL_MOLS_TEST_NPZ = _EXAMPLES_DIR / "small_mols_mini_test.npz"
 
 VALID_DATASETS = ["qm7b", "small_mols_mini"] + [f"rmd17_{m}" for m in RMD17_MOLECULES]
+_DEFAULT_CUDA_LOCAL_SOLVER = "eigh"
+_DEFAULT_CUDA_LOCAL_PREPROCESSING = "diagonal_scale"
+_DEFAULT_SPECTRAL_RTOL = 0.0
+_DEFAULT_SPECTRAL_ATOL = 0.0
+_DEFAULT_CG_RTOL = 2e-2
+_DEFAULT_CG_ATOL = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +323,14 @@ def _build_model(
     representation: str,
     sigma: float,
     l2: float,
+    solver: str,
+    preprocessing: str,
+    spectral_rtol: float,
+    spectral_atol: float,
+    spectral_max_rank: int | None,
+    cg_rtol: float,
+    cg_atol: float,
+    cg_max_iter: int | None,
     elements: list[int] | None,
     max_size: int | None,
     d_rff: int,
@@ -364,7 +378,18 @@ def _build_model(
     # FCHL19 — GPU (CudaLocalKRRModel), KRR, or RFF
     if cuda:
         return CudaLocalKRRModel(
-            sigma=sigma, l2=l2, elements=elements, repr_params=repr_params or None
+            sigma=sigma,
+            l2=l2,
+            elements=elements,
+            repr_params=repr_params or None,
+            solver=cast("Literal['cholesky', 'eigh', 'cg']", solver),
+            preprocessing=cast("Literal['none', 'diagonal_scale']", preprocessing),
+            spectral_rtol=spectral_rtol,
+            spectral_atol=spectral_atol,
+            spectral_max_rank=spectral_max_rank,
+            cg_rtol=cg_rtol,
+            cg_atol=cg_atol,
+            cg_max_iter=cg_max_iter,
         )
     if regressor == "krr":
         return LocalKRRModel(sigma=sigma, l2=l2, elements=elements, repr_params=repr_params or None)
@@ -397,6 +422,17 @@ def _print_header(args: argparse.Namespace) -> None:
     print(f"  mode           : {args.mode}")
     print(f"  sigma          : {args.sigma}")
     print(f"  l2             : {args.l2}")
+    if args.cuda and args.representation == "fchl19":
+        print(f"  solver         : {args.solver}")
+        print(f"  preprocessing  : {args.preprocessing}")
+        if args.solver == "eigh":
+            print(f"  spectral_rtol  : {args.spectral_rtol}")
+            print(f"  spectral_atol  : {args.spectral_atol}")
+            print(f"  spectral_max_rank: {args.spectral_max_rank}")
+        if args.solver == "cg":
+            print(f"  cg_rtol        : {args.cg_rtol}")
+            print(f"  cg_atol        : {args.cg_atol}")
+            print(f"  cg_max_iter    : {args.cg_max_iter}")
     if args.regressor == "rff":
         print(f"  d_rff          : {args.d_rff}")
     if args.dataset.startswith("rmd17_"):
@@ -470,6 +506,54 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--sigma", type=float, default=20.0, help="Kernel length-scale.")
     p.add_argument("--l2", type=float, default=1e-8, help="L2 regularisation.")
+    p.add_argument(
+        "--solver",
+        default=_DEFAULT_CUDA_LOCAL_SOLVER,
+        choices=["eigh", "cholesky", "cg"],
+        help="CUDA local KRR solver (--cuda --representation fchl19 only).",
+    )
+    p.add_argument(
+        "--preprocessing",
+        default=_DEFAULT_CUDA_LOCAL_PREPROCESSING,
+        choices=["none", "diagonal_scale"],
+        help="Optional linear-system preprocessing for CUDA local KRR.",
+    )
+    p.add_argument(
+        "--spectral-rtol",
+        type=float,
+        default=_DEFAULT_SPECTRAL_RTOL,
+        help="Relative eigenvalue cutoff for truncated eigh (0.0 = keep all positive eigenvalues).",
+    )
+    p.add_argument(
+        "--spectral-atol",
+        type=float,
+        default=_DEFAULT_SPECTRAL_ATOL,
+        help="Absolute eigenvalue cutoff for CUDA local truncated eigh.",
+    )
+    p.add_argument(
+        "--spectral-max-rank",
+        type=int,
+        default=None,
+        help="Optional rank cap for CUDA local truncated eigh.",
+    )
+    p.add_argument(
+        "--cg-rtol",
+        type=float,
+        default=_DEFAULT_CG_RTOL,
+        help="Relative residual tolerance for CUDA local CG solve.",
+    )
+    p.add_argument(
+        "--cg-atol",
+        type=float,
+        default=_DEFAULT_CG_ATOL,
+        help="Absolute residual tolerance for CUDA local CG solve.",
+    )
+    p.add_argument(
+        "--cg-max-iter",
+        type=int,
+        default=None,
+        help="Optional iteration cap for CUDA local CG solve.",
+    )
     p.add_argument("--d-rff", type=int, default=1024, help="RFF feature dimension (RFF only).")
     p.add_argument("--seed", type=int, default=42, help="RNG seed (RFF weights + QM7b split).")
     p.add_argument(
@@ -538,10 +622,18 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 )
         elif args.representation == "fchl19":
             try:
-                from kernelforge import cuda_local_kernels as _  # noqa: F401
+                from kernelforge import cuda_local_kernels as _
             except ImportError:
                 parser.error(
                     "--cuda with --representation fchl19 requires cuda_local_kernels "
+                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
+                    "and PyTorch:\n    make install-linux-mkl-ilp64"
+                )
+            try:
+                from kernelforge import cuda_fchl19_repr as _  # noqa: F401
+            except ImportError:
+                parser.error(
+                    "--cuda with --representation fchl19 requires cuda_fchl19_repr "
                     "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
                     "and PyTorch:\n    make install-linux-mkl-ilp64"
                 )
@@ -550,13 +642,75 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 f"--cuda requires --representation invdist or fchl19 "
                 f"(got --representation {args.representation})."
             )
-        if args.mode != "energy_and_force":
+        if args.mode not in ("energy_only", "energy_and_force"):
             parser.error(
-                f"--cuda only supports energy_and_force mode "
-                f"(got --mode {args.mode}). Add --mode energy_and_force."
+                f"--cuda supports energy_only and energy_and_force modes (got --mode {args.mode})."
             )
         if args.regressor != "krr":
             parser.error(f"--cuda requires --regressor krr (got --regressor {args.regressor}).")
+        if args.representation != "fchl19" and args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
+            parser.error("--solver is only configurable for --cuda --representation fchl19.")
+        if (
+            args.representation != "fchl19"
+            and args.preprocessing != _DEFAULT_CUDA_LOCAL_PREPROCESSING
+        ):
+            parser.error("--preprocessing is only supported with --cuda --representation fchl19.")
+        if args.representation != "fchl19" and args.spectral_max_rank is not None:
+            parser.error(
+                "--spectral-max-rank is only supported with --cuda --representation fchl19."
+            )
+        if args.representation != "fchl19" and args.cg_max_iter is not None:
+            parser.error("--cg-max-iter is only supported with --cuda --representation fchl19.")
+        if args.representation != "fchl19" and (
+            args.spectral_rtol != _DEFAULT_SPECTRAL_RTOL
+            or args.spectral_atol != _DEFAULT_SPECTRAL_ATOL
+        ):
+            parser.error(
+                "--spectral-rtol/--spectral-atol are only supported with "
+                "--cuda --representation fchl19."
+            )
+        if args.representation != "fchl19" and (
+            args.cg_rtol != _DEFAULT_CG_RTOL or args.cg_atol != _DEFAULT_CG_ATOL
+        ):
+            parser.error(
+                "--cg-rtol/--cg-atol are only supported with --cuda --representation fchl19."
+            )
+        if args.representation == "fchl19":
+            if args.spectral_rtol < 0.0:
+                parser.error("--spectral-rtol must be >= 0.")
+            if args.spectral_atol < 0.0:
+                parser.error("--spectral-atol must be >= 0.")
+            if args.spectral_max_rank is not None and args.spectral_max_rank <= 0:
+                parser.error("--spectral-max-rank must be > 0 when provided.")
+            if args.cg_rtol < 0.0:
+                parser.error("--cg-rtol must be >= 0.")
+            if args.cg_atol < 0.0:
+                parser.error("--cg-atol must be >= 0.")
+            if args.cg_max_iter is not None and args.cg_max_iter <= 0:
+                parser.error("--cg-max-iter must be > 0 when provided.")
+    else:
+        if args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
+            parser.error("--solver is only supported with --cuda --representation fchl19.")
+        if args.preprocessing != _DEFAULT_CUDA_LOCAL_PREPROCESSING:
+            parser.error("--preprocessing is only supported with --cuda --representation fchl19.")
+        if (
+            args.spectral_rtol != _DEFAULT_SPECTRAL_RTOL
+            or args.spectral_atol != _DEFAULT_SPECTRAL_ATOL
+        ):
+            parser.error(
+                "--spectral-rtol/--spectral-atol are only supported with "
+                "--cuda --representation fchl19."
+            )
+        if args.spectral_max_rank is not None:
+            parser.error(
+                "--spectral-max-rank is only supported with --cuda --representation fchl19."
+            )
+        if args.cg_rtol != _DEFAULT_CG_RTOL or args.cg_atol != _DEFAULT_CG_ATOL:
+            parser.error(
+                "--cg-rtol/--cg-atol are only supported with --cuda --representation fchl19."
+            )
+        if args.cg_max_iter is not None:
+            parser.error("--cg-max-iter is only supported with --cuda --representation fchl19.")
 
     if args.representation == "fchl18" and args.regressor == "rff":
         parser.error(
@@ -625,6 +779,14 @@ def run(args: argparse.Namespace) -> None:
         representation=args.representation,
         sigma=args.sigma,
         l2=args.l2,
+        solver=args.solver,
+        preprocessing=args.preprocessing,
+        spectral_rtol=args.spectral_rtol,
+        spectral_atol=args.spectral_atol,
+        spectral_max_rank=args.spectral_max_rank,
+        cg_rtol=args.cg_rtol,
+        cg_atol=args.cg_atol,
+        cg_max_iter=args.cg_max_iter,
         elements=args.elements,
         max_size=args.max_size,
         d_rff=args.d_rff,

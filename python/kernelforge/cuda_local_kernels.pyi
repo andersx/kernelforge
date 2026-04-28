@@ -1,6 +1,100 @@
-"""Type stubs for cuda_local_kernels — CUDA Gaussian kernels for FCHL19 descriptors."""
+"""Type stubs for cuda_local_kernels — CUDA Gaussian kernels for FCHL19 local descriptors.
+
+Implements atom-pair-wise kernels with label-based screening (z1 == z2).
+All functions operate on CUDA (GPU) tensors.
+"""
 
 import torch
+
+def kernel_gaussian_rect(
+    X_q: torch.Tensor,
+    Q_q: torch.Tensor,
+    N_q: torch.Tensor,
+    X_t: torch.Tensor,
+    Q_t: torch.Tensor,
+    N_t: torch.Tensor,
+    sigma: float,
+) -> torch.Tensor:
+    """Build kernel matrix for two molecule sets (asymmetric/rectangular case).
+
+    Parameters
+    ----------
+    X_q : torch.Tensor, shape (nm_q, max_atoms_q, rep), float32, CUDA
+        Query descriptor vectors.
+    Q_q : torch.Tensor, shape (nm_q, max_atoms_q), int32, CUDA
+        Query atomic labels.
+    N_q : torch.Tensor, shape (nm_q,), int32, CUDA
+        Query active atom counts.
+    X_t : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+        Training descriptor vectors.
+    Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
+        Training atomic labels.
+    N_t : torch.Tensor, shape (nm_t,), int32, CUDA
+        Training active atom counts.
+    sigma : float
+        Gaussian kernel length-scale.
+
+    Returns
+    -------
+    K : torch.Tensor, shape (nm1, nm2), float64, CUDA
+        Kernel matrix aggregated by label-matching atom pairs.
+    """
+    ...
+
+def kernel_gaussian_symm(
+    X: torch.Tensor,
+    Q: torch.Tensor,
+    N: torch.Tensor,
+    sigma: float,
+) -> torch.Tensor:
+    """Build symmetric kernel matrix for a single molecule set.
+
+    Parameters
+    ----------
+    X : torch.Tensor, shape (nm, max_atoms, rep), float32, CUDA
+        Descriptor vectors.
+    Q : torch.Tensor, shape (nm, max_atoms), int32, CUDA
+        Atomic labels.
+    N : torch.Tensor, shape (nm,), int32, CUDA
+        Active atom counts per molecule.
+    sigma : float
+        Gaussian kernel length-scale.
+
+    Returns
+    -------
+    K_symm : torch.Tensor, shape (nm, nm), float64, CUDA
+        Symmetric kernel matrix (both triangles filled).
+    """
+    ...
+
+def kernel_gaussian_symm_rfp(
+    X: torch.Tensor,
+    Q: torch.Tensor,
+    N: torch.Tensor,
+    sigma: float,
+) -> torch.Tensor:
+    """Build the symmetric energy-only kernel matrix K_EE in RFP packed format.
+
+    Uses TRANSR=N, UPLO=L convention.
+    Unpack with: kernelmath.rfp_to_full(K_rfp, nm, uplo='U', transr='N')
+
+    Parameters
+    ----------
+    X : torch.Tensor, shape (nm, max_atoms, rep), float32, CUDA
+        Descriptor vectors.
+    Q : torch.Tensor, shape (nm, max_atoms), int32, CUDA
+        Atomic labels.
+    N : torch.Tensor, shape (nm,), int32, CUDA
+        Active atom counts per molecule.
+    sigma : float
+        Gaussian kernel length-scale.
+
+    Returns
+    -------
+    K_rfp : torch.Tensor, shape (nm*(nm+1)//2,), float32, CUDA
+        Lower-triangle kernel packed in RFP format.
+    """
+    ...
 
 def kernel_gaussian_full_symm(
     X: torch.Tensor,
@@ -28,6 +122,38 @@ def kernel_gaussian_full_symm(
     -------
     K_full : torch.Tensor, shape (nm+naq, nm+naq), float32, CUDA
         Fully symmetric kernel matrix.  naq = 3 * sum(N).
+    """
+    ...
+
+def kernel_gaussian_full_symm_rfp(
+    X: torch.Tensor,
+    dX: torch.Tensor,
+    Q: torch.Tensor,
+    N: torch.Tensor,
+    sigma: float,
+) -> torch.Tensor:
+    """Build the symmetric energy+force training kernel matrix in RFP packed format.
+
+    Uses TRANSR=N, UPLO=L convention.  BIG = nm + naq, naq = 3*sum(N).
+    Unpack with: kernelmath.rfp_to_full(K_rfp, BIG, uplo='U', transr='N')
+
+    Parameters
+    ----------
+    X : torch.Tensor, shape (nm, max_atoms, rep), float32, CUDA
+        Training atom descriptors (padded with zeros beyond N[m]).
+    dX : torch.Tensor, shape (nm, max_atoms, rep, 3*max_atoms), float32, CUDA
+        Training Jacobians (padded).
+    Q : torch.Tensor, shape (nm, max_atoms), int32, CUDA
+        Atomic labels (nuclear charges; zero-padded).
+    N : torch.Tensor, shape (nm,), int32, CUDA
+        Active atom counts per molecule.
+    sigma : float
+        Gaussian kernel length-scale.
+
+    Returns
+    -------
+    K_rfp : torch.Tensor, shape (BIG*(BIG+1)//2,), float32, CUDA
+        Lower-triangle kernel packed in RFP format.
     """
     ...
 
@@ -67,12 +193,13 @@ def kernel_gaussian_full_matvec(
     Q_t: torch.Tensor,
     N_t: torch.Tensor,
     alpha_E: torch.Tensor,
-    alpha_desc: torch.Tensor,
+    alpha_desc_F: torch.Tensor,
     sigma: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Contracted energy+force inference (J^T·alpha trick, local version).
+    """Contracted energy+force inference (J^T·alpha trick, local version with label screening).
 
     Does not materialise the full test-train kernel matrix.
+    Uses label-based atom screening (z1 == z2) for efficiency.
 
     Parameters
     ----------
@@ -92,7 +219,7 @@ def kernel_gaussian_full_matvec(
         Training active atom counts.
     alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
         Energy dual coefficients.
-    alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+    alpha_desc_F : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
         Precomputed force weights (from ``compute_alpha_desc``).
     sigma : float
         Gaussian kernel length-scale.
@@ -100,7 +227,7 @@ def kernel_gaussian_full_matvec(
     Returns
     -------
     E_pred : torch.Tensor, shape (nm_q,), float32, CUDA
-        Predicted energies (baseline-subtracted).
+        Predicted energies.
     F_pred : torch.Tensor, shape (naq_q,), float32, CUDA
         Predicted forces as flat Cartesian vector.  naq_q = 3*sum(N_q).
     """
