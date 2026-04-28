@@ -65,6 +65,8 @@
 
 static cublasHandle_t s_cublas = nullptr;
 
+#define KF_UNUSED_GLOBAL __attribute__((unused))
+
 static void ensure_cublas()
 {
     if (!s_cublas) {
@@ -376,7 +378,7 @@ __global__ static void prepare_WA_VB_and_scalars_kernel(
 //
 // Grid: (nm, nm), Block: (128)
 // ---------------------------------------------------------------------------
-__global__ static void assemble_from_precomputed_kernel(
+__global__ static KF_UNUSED_GLOBAL void assemble_from_precomputed_kernel(
     const float *d_C,       // (N_total, N_total) col-major — C_label
     const float *d_S,       // (N_total, lda) self-dot products
     const float *d_P_ab,    // precomputed cross-terms for VA
@@ -522,7 +524,7 @@ __global__ static void assemble_from_precomputed_kernel(
 // mirror_lower_to_upper_f_kernel: copy lower triangle to upper for a col-major
 // N×N float matrix.  A[col, row] = A[row, col] for row > col.
 // ---------------------------------------------------------------------------
-__global__ static void mirror_lower_to_upper_f_kernel(float *A, int N)
+__global__ static KF_UNUSED_GLOBAL void mirror_lower_to_upper_f_kernel(float *A, int N)
 {
     int col = blockIdx.x * blockDim.x + threadIdx.x;
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -580,7 +582,7 @@ __global__ static void build_C_label_kernel(
 
 // build_C_label_lower_kernel: same as build_C_label_kernel but only processes
 // the lower triangle (i >= j).  Used after cublasSsyrk which only fills lower.
-__global__ static void build_C_label_lower_kernel(
+__global__ static KF_UNUSED_GLOBAL void build_C_label_lower_kernel(
     float *G, const float *norms,
     const int *Q, const int *N_arr,
     float inv_s2, int N_total, int max_atoms)
@@ -659,7 +661,7 @@ __global__ static void scatter_K_FF_kernel(
 //
 // Grid: (nm, nm), Block: (128)
 // ---------------------------------------------------------------------------
-__global__ static void assemble_scalar_kernel(
+__global__ static KF_UNUSED_GLOBAL void assemble_scalar_kernel(
     const float *d_X,       // (nm, max_atoms, rep)
     const float *d_dX,      // (nm, max_atoms, rep, 3*max_atoms)
     const float *d_C,       // (N_total, N_total) col-major — C_label from Stage 1
@@ -815,7 +817,7 @@ __global__ static void assemble_scalar_kernel(
 //
 // Grid: (nm, nm), Block: (256)
 // ---------------------------------------------------------------------------
-__global__ static void build_KEE_from_C_label_kernel(
+__global__ static KF_UNUSED_GLOBAL void build_KEE_from_C_label_kernel(
     const float *d_C,      // (N_total, N_total) col-major — lower triangle valid
     const int   *d_N,      // (nm,) active atom counts
     float       *d_KEE,    // (nm, nm) col-major output
@@ -993,7 +995,7 @@ __global__ static void scatter_C_to_KEE_kernel(
 //
 // Grid: (na_mols, nb_mols), Block: (256)
 // ---------------------------------------------------------------------------
-__global__ static void reduce_C_tile_to_KEE_kernel(
+__global__ static KF_UNUSED_GLOBAL void reduce_C_tile_to_KEE_kernel(
     const float *d_C,         // (Na, Nb) col-major tile
     const int   *d_N_a,       // (na_mols,) — N array offset to tile_a start
     const int   *d_N_b,       // (nb_mols,) — N array offset to tile_b start
@@ -1094,7 +1096,6 @@ __global__ static void inference_build_expd_iF_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N_q * N_t) return;
 
-    int i = idx % N_q;  // query atom
     int j = idx / N_q;  // train atom (col-major)
 
     // Correct inner_F: subtract S_adF[t]
@@ -1196,8 +1197,6 @@ __global__ static void precompute_combined_train_kernel(
     if (idx >= N_t * rep_size) return;
 
     int t = idx / rep_size;
-    int k = idx % rep_size;
-
     int mol = t / max_atoms_t;
     int atom = t % max_atoms_t;
 
@@ -1251,7 +1250,7 @@ __global__ static void precompute_S_adF_kernel(
 // Grid: ceil(nm_q * max_atoms_q / BLOCK)
 // Block: BLOCK threads
 // ---------------------------------------------------------------------------
-__global__ static void local_inference_accumulate_kernel(
+__global__ static KF_UNUSED_GLOBAL void local_inference_accumulate_kernel(
     const float *d_X_q,       // (nm_q, max_atoms_q, rep)
     const float *d_X_t,       // (nm_t, max_atoms_t, rep)
     const float *d_alpha_E,   // (nm_t,)
@@ -2216,7 +2215,7 @@ void kernel_gaussian_symm_local_cu(
     int N = nm * max_atoms;
     float inv_s2 = 1.0f / (sigma * sigma);
     float sigma2 = sigma * sigma;
-    const float neg2 = -2.0f, zero_f = 0.0f, one_f = 1.0f;
+    const float neg2 = -2.0f, zero_f = 0.0f;
 
     // Zero K_EE
     CUDA_CHECK(cudaMemset(d_KEE, 0, (long long)nm * nm * sizeof(float)));
@@ -2303,31 +2302,7 @@ void kernel_gaussian_symm_local_cu(
                     &zero_f, d_C_elem, ni));
 
                 // Apply norms + exp (no label check needed — all same element)
-                {
-                    dim3 blk(16, 16), grd((ni + 15) / 16, (nj + 15) / 16);
-                    // Reuse build_C_qt_kernel but with dummy Q arrays (all match).
-                    // Actually simpler: inline the norms+exp without label check.
-                    // For now use a simple element-wise kernel.
-                    // C_elem[i + j*ni] = exp((-0.5*inv_s2*(C_elem[i+j*ni] + n[ri+i] + n[rj+j]))) * inv_s2
-                    // We need a kernel that doesn't do label screening.
-                }
-                // Inline: apply norms+exp via build_C_qt_kernel with matching Q.
-                // All atoms have the same label so Q check always passes.
-                // We just need the norms+exp part. Use a simple lambda-style kernel.
-                // For simplicity, just use build_C_qt_kernel with dummy N arrays (all active).
-                {
-                    // Create temp N arrays on device: all atoms active (1 per "molecule")
-                    // Actually, trick: treat each atom as its own molecule with 1 atom.
-                    // N_arr = [1, 1, 1, ...], max_atoms = 1, Q = [label, label, ...].
-                    // Then build_C_qt_kernel will process all pairs with matching Q.
-                    // But that requires uploading temp arrays...
-
-                    // Simpler: just do the norms+exp inline on host... no, everything
-                    // should stay on GPU.
-
-                    // Simplest: write a trivial kernel for norms+exp without label check.
-                }
-                // Actually the simplest approach: just launch a 2D kernel that does
+                // Apply norms and exponentiate in-place:
                 // C[i,j] = exp(-0.5 * inv_s2 * (C[i,j] + norms[ri+i] + norms[rj+j])) * inv_s2
                 // No label check needed since all atoms have the same element.
                 {

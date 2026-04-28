@@ -46,7 +46,9 @@ from numpy.typing import NDArray
 from kernelforge.cli import load_qm7b_raw_data
 from kernelforge.models import (
     CudaGlobalKRRModel,
+    CudaGlobalRFFModel,
     CudaLocalKRRModel,
+    CudaLocalRFFModel,
     FCHL18KRRModel,
     GlobalKRRModel,
     GlobalRFFModel,
@@ -346,7 +348,9 @@ def _build_model(
     | GlobalKRRModel
     | GlobalRFFModel
     | CudaGlobalKRRModel
+    | CudaGlobalRFFModel
     | CudaLocalKRRModel
+    | CudaLocalRFFModel
 ):
     """Construct and return the appropriate model instance."""
     repr_params = repr_params or {}
@@ -354,6 +358,13 @@ def _build_model(
     # Inverse-distance global descriptor (no element list or atom-padding needed)
     if representation == "invdist":
         if cuda:
+            if regressor == "rff":
+                return CudaGlobalRFFModel(
+                    sigma=sigma,
+                    l2=l2,
+                    d_rff=d_rff,
+                    seed=seed,
+                )
             return CudaGlobalKRRModel(sigma=sigma, l2=l2)
         if regressor == "krr":
             return GlobalKRRModel(sigma=sigma, l2=l2)
@@ -377,6 +388,15 @@ def _build_model(
 
     # FCHL19 — GPU (CudaLocalKRRModel), KRR, or RFF
     if cuda:
+        if regressor == "rff":
+            return CudaLocalRFFModel(
+                sigma=sigma,
+                l2=l2,
+                d_rff=d_rff,
+                seed=seed,
+                elements=elements,
+                repr_params=repr_params or None,
+            )
         return CudaLocalKRRModel(
             sigma=sigma,
             l2=l2,
@@ -583,9 +603,10 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "Use GPU-accelerated model (cuBLAS + cuSOLVER via PyTorch). "
-            "With --representation invdist uses CudaGlobalKRRModel; "
+            "With --representation invdist uses CudaGlobalKRRModel for KRR or "
+            "CudaGlobalRFFModel for energy-only RFF; "
             "with --representation fchl19 uses CudaLocalKRRModel. "
-            "Requires --mode energy_and_force and a CUDA-enabled build of kernelforge."
+            "Requires a CUDA-enabled build of kernelforge."
         ),
     )
     p.add_argument(
@@ -620,6 +641,15 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                     "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
                     "and PyTorch:\n    make install-linux-mkl-ilp64"
                 )
+            if args.regressor == "rff":
+                try:
+                    from kernelforge import cuda_rff_features as _
+                except ImportError:
+                    parser.error(
+                        "--cuda --regressor rff with --representation invdist requires "
+                        "cuda_rff_features (not built). Re-build kernelforge with a CUDA "
+                        "compiler, CUDAToolkit, and PyTorch:\n    make install-linux-mkl-ilp64"
+                    )
         elif args.representation == "fchl19":
             try:
                 from kernelforge import cuda_local_kernels as _
@@ -629,6 +659,15 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                     "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
                     "and PyTorch:\n    make install-linux-mkl-ilp64"
                 )
+            if args.regressor == "rff":
+                try:
+                    from kernelforge import cuda_rff_features as _
+                except ImportError:
+                    parser.error(
+                        "--cuda --regressor rff with --representation fchl19 requires "
+                        "cuda_rff_features (not built). Re-build kernelforge with a CUDA "
+                        "compiler, CUDAToolkit, and PyTorch:\n    make install-linux-mkl-ilp64"
+                    )
             try:
                 from kernelforge import cuda_fchl19_repr as _  # noqa: F401
             except ImportError:
@@ -646,8 +685,14 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
             parser.error(
                 f"--cuda supports energy_only and energy_and_force modes (got --mode {args.mode})."
             )
-        if args.regressor != "krr":
-            parser.error(f"--cuda requires --regressor krr (got --regressor {args.regressor}).")
+        if args.regressor == "rff" and (
+            args.representation not in ("invdist", "fchl19")
+            or args.mode not in ("energy_only", "energy_and_force")
+        ):
+            parser.error(
+                "--cuda --regressor rff is currently supported only with "
+                "--representation invdist/fchl19 and --mode energy_only or energy_and_force."
+            )
         if args.representation != "fchl19" and args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only configurable for --cuda --representation fchl19.")
         if (
