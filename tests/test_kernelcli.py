@@ -120,7 +120,24 @@ class TestBuildModel:
         from kernelforge.models import LocalKRRModel
 
         model = _build_model(
-            "krr", "fchl19", 20.0, 1e-8, None, None, 512, 42, self._z_tr(), self._z_tr()
+            "krr",
+            "fchl19",
+            20.0,
+            1e-8,
+            solver="eigh",
+            preprocessing="diagonal_scale",
+            spectral_rtol=0.0,
+            spectral_atol=0.0,
+            spectral_max_rank=None,
+            cg_rtol=2e-2,
+            cg_atol=0.0,
+            cg_max_iter=None,
+            elements=None,
+            max_size=None,
+            d_rff=512,
+            seed=42,
+            z_tr=self._z_tr(),
+            z_te=self._z_tr(),
         )
         assert isinstance(model, LocalKRRModel)
 
@@ -128,7 +145,24 @@ class TestBuildModel:
         from kernelforge.models import LocalRFFModel
 
         model = _build_model(
-            "rff", "fchl19", 20.0, 1e-8, None, None, 512, 42, self._z_tr(), self._z_tr()
+            "rff",
+            "fchl19",
+            20.0,
+            1e-8,
+            solver="eigh",
+            preprocessing="diagonal_scale",
+            spectral_rtol=0.0,
+            spectral_atol=0.0,
+            spectral_max_rank=None,
+            cg_rtol=2e-2,
+            cg_atol=0.0,
+            cg_max_iter=None,
+            elements=None,
+            max_size=None,
+            d_rff=512,
+            seed=42,
+            z_tr=self._z_tr(),
+            z_te=self._z_tr(),
         )
         assert isinstance(model, LocalRFFModel)
 
@@ -136,7 +170,24 @@ class TestBuildModel:
         from kernelforge.models import FCHL18KRRModel
 
         model = _build_model(
-            "krr", "fchl18", 2.5, 1e-4, None, None, 512, 42, self._z_tr(), self._z_tr()
+            "krr",
+            "fchl18",
+            2.5,
+            1e-4,
+            solver="eigh",
+            preprocessing="diagonal_scale",
+            spectral_rtol=0.0,
+            spectral_atol=0.0,
+            spectral_max_rank=None,
+            cg_rtol=2e-2,
+            cg_atol=0.0,
+            cg_max_iter=None,
+            elements=None,
+            max_size=None,
+            d_rff=512,
+            seed=42,
+            z_tr=self._z_tr(),
+            z_te=self._z_tr(),
         )
         assert isinstance(model, FCHL18KRRModel)
 
@@ -144,7 +195,24 @@ class TestBuildModel:
         from kernelforge.models import LocalKRRModel
 
         model = _build_model(
-            "krr", "fchl19", 20.0, 1e-8, None, None, 512, 42, self._z_tr(), self._z_tr()
+            "krr",
+            "fchl19",
+            20.0,
+            1e-8,
+            solver="eigh",
+            preprocessing="diagonal_scale",
+            spectral_rtol=0.0,
+            spectral_atol=0.0,
+            spectral_max_rank=None,
+            cg_rtol=2e-2,
+            cg_atol=0.0,
+            cg_max_iter=None,
+            elements=None,
+            max_size=None,
+            d_rff=512,
+            seed=42,
+            z_tr=self._z_tr(),
+            z_te=self._z_tr(),
         )
         assert isinstance(model, LocalKRRModel)
         # elements not exposed on model but auto-detection didn't crash
@@ -154,7 +222,24 @@ class TestBuildModel:
         from kernelforge.models import LocalKRRModel
 
         model = _build_model(
-            "krr", "fchl19", 20.0, 1e-8, [1, 6, 8], None, 512, 42, self._z_tr(), self._z_tr()
+            "krr",
+            "fchl19",
+            20.0,
+            1e-8,
+            solver="eigh",
+            preprocessing="diagonal_scale",
+            spectral_rtol=0.0,
+            spectral_atol=0.0,
+            spectral_max_rank=None,
+            cg_rtol=2e-2,
+            cg_atol=0.0,
+            cg_max_iter=None,
+            elements=[1, 6, 8],
+            max_size=None,
+            d_rff=512,
+            seed=42,
+            z_tr=self._z_tr(),
+            z_te=self._z_tr(),
         )
         assert isinstance(model, LocalKRRModel)
 
@@ -162,7 +247,24 @@ class TestBuildModel:
         from kernelforge.models import FCHL18KRRModel
 
         model = _build_model(
-            "krr", "fchl18", 2.5, 1e-4, None, None, 512, 42, self._z_tr(), self._z_tr()
+            "krr",
+            "fchl18",
+            2.5,
+            1e-4,
+            solver="eigh",
+            preprocessing="diagonal_scale",
+            spectral_rtol=0.0,
+            spectral_atol=0.0,
+            spectral_max_rank=None,
+            cg_rtol=2e-2,
+            cg_atol=0.0,
+            cg_max_iter=None,
+            elements=None,
+            max_size=None,
+            d_rff=512,
+            seed=42,
+            z_tr=self._z_tr(),
+            z_te=self._z_tr(),
         )
         assert isinstance(model, FCHL18KRRModel)
         assert model.max_size == 9  # both z_tr and z_te have 9-atom molecules
@@ -171,7 +273,24 @@ class TestBuildModel:
         from kernelforge.models import FCHL18KRRModel
 
         model = _build_model(
-            "krr", "fchl18", 2.5, 1e-4, None, 15, 512, 42, self._z_tr(), self._z_tr()
+            "krr",
+            "fchl18",
+            2.5,
+            1e-4,
+            solver="eigh",
+            preprocessing="diagonal_scale",
+            spectral_rtol=0.0,
+            spectral_atol=0.0,
+            spectral_max_rank=None,
+            cg_rtol=2e-2,
+            cg_atol=0.0,
+            cg_max_iter=None,
+            elements=None,
+            max_size=15,
+            d_rff=512,
+            seed=42,
+            z_tr=self._z_tr(),
+            z_te=self._z_tr(),
         )
         assert isinstance(model, FCHL18KRRModel)
         assert model.max_size == 15
@@ -228,6 +347,14 @@ def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
         "split": 1,
         "sigma": 20.0,
         "l2": 1e-6,
+        "solver": "eigh",
+        "preprocessing": "diagonal_scale",
+        "spectral_rtol": 0.0,
+        "spectral_atol": 0.0,
+        "spectral_max_rank": None,
+        "cg_rtol": 2e-2,
+        "cg_atol": 0.0,
+        "cg_max_iter": None,
         "d_rff": 64,
         "seed": 42,
         "elements": None,

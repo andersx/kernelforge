@@ -18,6 +18,7 @@
 //       Analogue of kf::kernel_gaussian_full_matvec on CPU.
 
 #include "cuda_global_kernels.hpp"
+#include "curfp.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -51,6 +52,16 @@
         }                                                                   \
     } while (0)
 
+#define CURFP_CHECK(call)                                                   \
+    do {                                                                    \
+        curfpStatus_t _s = (call);                                          \
+        if (_s != CURFP_STATUS_SUCCESS) {                                   \
+            fprintf(stderr, "cuRFP error at %s:%d — status %d\n",          \
+                    __FILE__, __LINE__, (int)_s);                           \
+            abort();                                                        \
+        }                                                                   \
+    } while (0)
+
 
 // ============================================================================
 // Module-level cuBLAS handle (lazily initialised, shared across all calls)
@@ -63,6 +74,23 @@ static void ensure_cublas()
     if (!s_cublas) {
         if (cublasCreate(&s_cublas) != CUBLAS_STATUS_SUCCESS) {
             fprintf(stderr, "cublasCreate failed\n");
+            abort();
+        }
+    }
+}
+
+
+// ============================================================================
+// Module-level cuRFP handle (lazily initialised, shared across all calls)
+// ============================================================================
+
+static curfpHandle_t s_curfp = nullptr;
+
+static void ensure_curfp()
+{
+    if (!s_curfp) {
+        if (curfpCreate(&s_curfp) != CURFP_STATUS_SUCCESS) {
+            fprintf(stderr, "curfpCreate failed\n");
             abort();
         }
     }
@@ -155,7 +183,8 @@ __global__ static void extract_U_kernel(
 
 // assemble_row_kernel
 // Fills one block-row a of K_full (col-major) from precomputed C, C4, G_row, V1X2, U1.
-// Launched with (a+1) blocks × (D*D) threads.
+// Launched with (a+1) blocks × min(D*D, 1024) threads per block.
+// Stride loop handles D*D > 1024 (e.g. azobenzene: D=72, D*D=5184).
 __global__ static void assemble_row_kernel(
     float       *K_full,
     const float *G_row,       // row slice of G_batch starting at column a_start
@@ -169,38 +198,125 @@ __global__ static void assemble_row_kernel(
     long long full_rows)
 {
     int b   = blockIdx.x;
-    int tid = threadIdx.x;
     int DD  = D * D;
-    if (tid >= DD) return;
-
-    int d1 = tid / D;
-    int d2 = tid % D;
-    int ND = N * D;
-    int g1 = a * D + d1;
-    int g2 = b * D + d2;
+    int ND  = N * D;
 
     float c  = C [a + (long long)b * N];
     float c4 = C4[a + (long long)b * N];
 
-    float p = V1X2[g1 + (long long)b * ND] - U1[g1];
-    float q = V1X2[g2 + (long long)a * ND] - U1[g2];
-
-    float g = G_row[d1 + (long long)(b * D + d2) * G_lda];
-
     /* K_EE[a,b] = K[a,b] */
-    if (tid == 0)
+    if (threadIdx.x == 0)
         K_full[a + (long long)b * full_rows] = c * sigma2;
 
-    /* K_FE[N+g1, b] = C[a,b] * p */
-    if (d2 == 0)
-        K_full[(N + g1) + (long long)b * full_rows] = c * p;
-    /* K_FE mirror [N+g2, a] — only when a > b */
-    if (a > b && d1 == 0)
-        K_full[(N + g2) + (long long)a * full_rows] = c * q;
+    for (int tid = (int)threadIdx.x; tid < DD; tid += (int)blockDim.x) {
+        int d1 = tid / D;
+        int d2 = tid % D;
+        int g1 = a * D + d1;
+        int g2 = b * D + d2;
 
-    /* K_FF lower triangle */
-    if (a > b || g1 >= g2)
-        K_full[(N + g1) + (long long)(N + g2) * full_rows] = c * g + c4 * p * q;
+        float p = V1X2[g1 + (long long)b * ND] - U1[g1];
+        float q = V1X2[g2 + (long long)a * ND] - U1[g2];
+
+        float g = G_row[d1 + (long long)(b * D + d2) * G_lda];
+
+        /* K_FE[N+g1, b] = C[a,b] * p */
+        if (d2 == 0)
+            K_full[(N + g1) + (long long)b * full_rows] = c * p;
+        /* K_FE mirror [N+g2, a] — only when a > b */
+        if (a > b && d1 == 0)
+            K_full[(N + g2) + (long long)a * full_rows] = c * q;
+
+        /* K_FF lower triangle */
+        if (a > b || g1 >= g2)
+            K_full[(N + g1) + (long long)(N + g2) * full_rows] = c * g + c4 * p * q;
+    }
+}
+
+
+// rfp_index_lower_N
+//
+// Returns the 1-D index into a TRANSR=N, UPLO=L RFP buffer for element
+// A[row, col] where row >= col (lower triangle).  n is the matrix dimension.
+//
+// Even n (nk = n/2, column stride = n+1):
+//   j < nk  →  1 + i + j*(n+1)
+//   j >= nk →  (j-nk) + (i-nk)*(n+1)
+//
+// Odd n (n1 = ceil(n/2), column stride = n):
+//   j < n1  →  i + j*n
+//   j >= n1 →  n + (j-n1) + (i-n1)*n
+__device__ static long long rfp_index_lower_N(int n, int row, int col)
+{
+    int i = row, j = col;   /* lower triangle: i >= j */
+    if (n & 1) {
+        int n1 = (n + 1) / 2;
+        if (j < n1)
+            return (long long)i + (long long)j * n;
+        else
+            return (long long)n + (j - n1) + (long long)(i - n1) * n;
+    } else {
+        int nk = n / 2;
+        if (j < nk)
+            return 1LL + i + (long long)j * (n + 1);
+        else
+            return (long long)(j - nk) + (long long)(i - nk) * (n + 1);
+    }
+}
+
+
+// assemble_rfp_row_kernel
+//
+// Like assemble_row_kernel but writes elements directly into the RFP
+// packed buffer (TRANSR=N, UPLO=L) using rfp_index_lower_N.
+// Only lower-triangle elements are stored; no mirror step is needed.
+// Launched with (a+1) blocks × min(D*D, 1024) threads per block.
+// Stride loop handles D*D > 1024 (e.g. azobenzene: D=72, D*D=5184).
+__global__ static void assemble_rfp_row_kernel(
+    float       *K_rfp,
+    const float *G_row,
+    int          G_lda,
+    const float *V1X2,
+    const float *U1,
+    const float *C,
+    const float *C4,
+    float        sigma2,
+    int a, int N, int D,
+    int BIG)
+{
+    int b   = blockIdx.x;
+    int DD  = D * D;
+    int ND  = N * D;
+
+    float c  = C [a + (long long)b * N];
+    float c4 = C4[a + (long long)b * N];
+
+    /* K_EE[a, b]: a >= b always → lower triangle */
+    if (threadIdx.x == 0)
+        K_rfp[rfp_index_lower_N(BIG, a, b)] = c * sigma2;
+
+    for (int tid = (int)threadIdx.x; tid < DD; tid += (int)blockDim.x) {
+        int d1 = tid / D;
+        int d2 = tid % D;
+        int g1 = a * D + d1;
+        int g2 = b * D + d2;
+
+        float p = V1X2[g1 + (long long)b * ND] - U1[g1];
+        float q = V1X2[g2 + (long long)a * ND] - U1[g2];
+
+        float g = G_row[d1 + (long long)(b * D + d2) * G_lda];
+
+        /* K_FE[N+g1, b]: always lower triangle (N+g1 >= N > b) */
+        if (d2 == 0)
+            K_rfp[rfp_index_lower_N(BIG, N + g1, b)] = c * p;
+
+        /* K_FE[N+g2, a]: lower triangle, only when a > b */
+        if (a > b && d1 == 0)
+            K_rfp[rfp_index_lower_N(BIG, N + g2, a)] = c * q;
+
+        /* K_FF lower triangle: g1 >= g2 */
+        if (a > b || g1 >= g2)
+            K_rfp[rfp_index_lower_N(BIG, N + g1, N + g2)] = c * g + c4 * p * q;
+    }
 }
 
 
@@ -287,6 +403,61 @@ __global__ static void fused_energy_kernel(
 
 
 // ============================================================================
+// RFP device kernels (fixed convention: TRANSR=N, UPLO=L)
+// ============================================================================
+
+// fill_ones_kernel — fills a float device vector with 1.0f
+__global__ static void fill_ones_kernel(float *v, int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) v[i] = 1.0f;
+}
+
+
+// apply_gaussian_rfp_kernel
+//
+// In-place: x → exp(-0.5 * inv_s2 * x)
+__global__ static void apply_gaussian_rfp_kernel(
+    float *K_rfp, float inv_s2, int nt)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nt) return;
+    K_rfp[i] = expf(-0.5f * inv_s2 * K_rfp[i]);
+}
+
+
+// add_l2_diag_rfp_kernel
+// Adds l2 to the N diagonal elements K_rfp[i,i] in the packed RFP buffer.
+// Diagonal index formula (TRANSR=N, UPLO=L):
+//   Odd  N: i >= n1  →  (i-n2)*N + (i-n1)
+//           else     →  i*N + i
+//   Even N: i >= nk  →  (i-nk)*(N+2)
+//           else     →  i*(N+2) + 1
+__global__ static void add_l2_diag_rfp_kernel(float *K_rfp, float l2, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= N) return;
+
+    long arf_idx;
+    if (N & 1) {
+        int n1 = N - N / 2;
+        int n2 = N / 2;
+        if (i >= n1)
+            arf_idx = (long)(i - n2) * N + (i - n1);
+        else
+            arf_idx = (long)i * N + i;
+    } else {
+        int nk = N / 2;
+        if (i >= nk)
+            arf_idx = (long)(i - nk) * (N + 2);
+        else
+            arf_idx = (long)i * (N + 2) + 1;
+    }
+    K_rfp[arf_idx] += l2;
+}
+
+
+// ============================================================================
 // build_kernel_gpu_symm_lower
 //
 // Internal helper: fills the lower triangle of K_full (col-major) using
@@ -362,12 +533,13 @@ static void build_kernel_gpu_symm_lower(
                 d_G_batch, n_rows * D));
 
             for (int a = a_start; a < a_end; a++) {
-                assemble_row_kernel<<<a + 1, DD>>>(
+                assemble_row_kernel<<<a + 1, (DD < 1024 ? DD : 1024)>>>(
                     d_K_full,
                     d_G_batch + (long long)(a - a_start) * D,
                     n_rows * D,
                     d_V1X2, d_U1, d_C, d_C4,
                     sigma2, a, N, D, full_rows);
+                CUDA_CHECK(cudaGetLastError());
             }
         }
     }
@@ -573,6 +745,222 @@ void kernel_gaussian_full_matvec_cu(
     cudaFree(d_sum_F);      cudaFree(d_combined);
     cudaFree(d_W_combined); cudaFree(d_G_full);
     cudaFree(d_ones_t);
+}
+
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_symm_rfp_cu
+//
+// Build the energy-only (N×N) Gaussian kernel matrix in RFP packed format.
+//
+// Convention fixed to TRANSR=N, UPLO=L throughout.  The caller must pass d_K_rfp pointing to
+// N*(N+1)/2 floats of device memory.
+//
+// Parameters (device pointers, cuBLAS col-major):
+//   d_X    : (M, N) col-major — descriptor columns
+//   d_K_rfp: (N*(N+1)/2,) — output RFP buffer (col-major, TRANSR=N, UPLO=L)
+//   sigma  : Gaussian length-scale
+//   N, M   : dimensions
+// ---------------------------------------------------------------------------
+void kernel_gaussian_symm_rfp_cu(
+    const float *d_X, float *d_K_rfp, float sigma, int N, int M)
+{
+    ensure_curfp();
+
+    float inv_s2 = 1.0f / (sigma * sigma);
+    float neg2   = -2.0f;
+    float zero   =  0.0f;
+    int   nt     = N * (N + 1) / 2;
+
+    /* Allocate squared norms and a ones vector (freed after Phase 4 sync) */
+    float *d_norms, *d_ones;
+    CUDA_CHECK(cudaMalloc(&d_norms, (size_t)N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_ones,  (size_t)N * sizeof(float)));
+
+    /* Phase 1: d_norms[i] = ||X[:,i]||² */
+    compute_sqnorms_kernel<<<(N + 255) / 256, 256>>>(d_X, d_norms, M, N);
+
+    /* Phase 1b: fill d_ones with 1.0f (can overlap with sqnorms) */
+    fill_ones_kernel<<<(N + 255) / 256, 256>>>(d_ones, N);
+
+    /* Phase 2: d_K_rfp = -2 * X^T * X  (in RFP, TRANSR=N, UPLO=L, trans=T) */
+    CURFP_CHECK(curfpSsfrk(s_curfp,
+        CURFP_OP_N,           /* transr = N */
+        CURFP_FILL_MODE_LOWER,/* uplo   = L */
+        CURFP_OP_T,           /* trans  = T: C = alpha * A^T * A + beta * C */
+        N, M,
+        &neg2, d_X, M,        /* alpha=-2, A=(M,N) col-major, lda=M */
+        &zero, d_K_rfp));     /* beta=0 */
+
+    /* Phase 3: d_K_rfp[i,j] += norms[i] + norms[j]  (TRANSR=N, UPLO=L)
+     * curfpSsfr2 computes C := alpha*x*y^T + alpha*y*x^T + C.
+     * With x=d_norms, y=d_ones, alpha=1: C[i,j] += norms[i] + norms[j]. */
+    {
+        float one = 1.0f;
+        CURFP_CHECK(curfpSsfr2(s_curfp,
+            CURFP_OP_N,            /* transr = N */
+            CURFP_FILL_MODE_LOWER, /* uplo   = L */
+            N, &one,
+            d_norms, 1,
+            d_ones,  1,
+            d_K_rfp));
+    }
+
+    /* Phase 4: d_K_rfp[i] = exp(-0.5 * inv_s2 * d_K_rfp[i]) */
+    apply_gaussian_rfp_kernel<<<(nt + 255) / 256, 256>>>(
+        d_K_rfp, inv_s2, nt);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    cudaFree(d_norms);
+    cudaFree(d_ones);
+}
+
+
+// ---------------------------------------------------------------------------
+// rfp_potrf_cu
+//
+// Adds l2 to the diagonal of the RFP matrix (regularisation), then performs
+// Cholesky factorisation in-place.
+//
+// Convention fixed to TRANSR=N, UPLO=L.
+// On exit d_K_rfp contains the lower Cholesky factor L in RFP format.
+// *info: 0 = success, >0 = leading minor of order *info is not positive definite.
+// ---------------------------------------------------------------------------
+void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info)
+{
+    ensure_curfp();
+
+    /* Add l2 to diagonal */
+    if (l2 != 0.0f)
+        add_l2_diag_rfp_kernel<<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    /* Cholesky factorisation in-place */
+    CURFP_CHECK(curfpSpftrf(s_curfp,
+        CURFP_OP_N,            /* transr = N */
+        CURFP_FILL_MODE_LOWER, /* uplo   = L */
+        N, d_K_rfp, info));
+}
+
+
+// ---------------------------------------------------------------------------
+// rfp_potrs_cu
+//
+// Triangular solve using the Cholesky factor produced by rfp_potrf_cu.
+// Solves (L * L^T) * X = B in-place, overwriting d_B with the solution.
+//
+// d_B  : (N, nrhs) col-major device pointer, leading dimension N.
+// Convention fixed to TRANSR=N, UPLO=L.
+// ---------------------------------------------------------------------------
+void rfp_potrs_cu(const float *d_L_rfp, float *d_B, int N, int nrhs)
+{
+    ensure_curfp();
+    CURFP_CHECK(curfpSpftrs(s_curfp,
+        CURFP_OP_N,            /* transr = N */
+        CURFP_FILL_MODE_LOWER, /* uplo   = L */
+        N, nrhs, d_L_rfp, d_B, N));
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_full_symm_rfp_cu
+//
+// Build the symmetric energy+force kernel matrix K_full for training,
+// stored directly in RFP packed format (TRANSR=N, UPLO=L).
+//
+// No dense BIG×BIG intermediate is allocated; assemble_rfp_row_kernel
+// writes each lower-triangle element exactly once via rfp_index_lower_N.
+// No mirror step is needed.
+//
+// Parameters (device pointers, cuBLAS col-major):
+//   d_X      : (M, N)    — descriptor columns
+//   d_dXT    : (M, N*D)  — Jacobian columns (dX[a,d,:] is column a*D+d)
+//   d_K_rfp  : (BIG*(BIG+1)/2,) — output RFP buffer, BIG = N*(1+D)
+//   sigma, N, M, D: dimensions
+// ---------------------------------------------------------------------------
+void kernel_gaussian_full_symm_rfp_cu(
+    const float *d_X, const float *d_dXT, float *d_K_rfp,
+    float sigma, int N, int M, int D)
+{
+    ensure_cublas();
+
+    long long ND  = (long long)N * D;
+    int       BIG = N * (1 + D);
+
+    float inv_s2 = 1.0f / (sigma * sigma);
+    float sigma2 = sigma * sigma;
+
+    float *d_norms, *d_C, *d_C4, *d_V1X2, *d_U1, *d_G_batch;
+
+    CUDA_CHECK(cudaMalloc(&d_norms,   (size_t)N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_C,       (size_t)N * N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_C4,      (size_t)N * N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_V1X2,    ND * N * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_U1,      ND * sizeof(float)));
+    {
+        int brows = (N < BUILD_BATCH) ? N : BUILD_BATCH;
+        CUDA_CHECK(cudaMalloc(&d_G_batch, (long long)brows * D * ND * sizeof(float)));
+    }
+
+    const float one = 1.0f, neg2 = -2.0f, zero = 0.0f;
+
+    /* Phase 1: squared distances → C, C4 */
+    compute_sqnorms_kernel<<<(N + 255) / 256, 256>>>(d_X, d_norms, M, N);
+    CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+        N, N, M, &neg2, d_X, M, d_X, M, &zero, d_C, N));
+    {
+        dim3 blk(16, 16);
+        dim3 grd((N + 15) / 16, (N + 15) / 16);
+        add_sym_norms_kernel<<<grd, blk>>>(d_C, d_norms, N);
+        build_C_C4_kernel<<<grd, blk>>>(d_C, d_C4, inv_s2, N, N);
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    /* Phase 2: V1X2 = dXT^T @ X, then U1 from diagonal */
+    CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+        (int)ND, N, M,
+        &one, d_dXT, M, d_X, M,
+        &zero, d_V1X2, (int)ND));
+    extract_U_kernel<<<((int)ND + 255) / 256, 256>>>(d_V1X2, d_U1, N, D);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    /* Phase 3: row-batched SGEMM + scatter into RFP buffer */
+    {
+        int brows = (N < BUILD_BATCH) ? N : BUILD_BATCH;
+        int DD    = D * D;
+
+        for (int a_start = 0; a_start < N; a_start += brows) {
+            int a_end  = a_start + brows;
+            if (a_end > N) a_end = N;
+            int n_rows = a_end - a_start;
+            int n_cols = a_end * D;
+
+            CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                n_rows * D, n_cols, M,
+                &one,
+                d_dXT + (long long)a_start * D * M, M,
+                d_dXT, M,
+                &zero,
+                d_G_batch, n_rows * D));
+
+            for (int a = a_start; a < a_end; a++) {
+                assemble_rfp_row_kernel<<<a + 1, (DD < 1024 ? DD : 1024)>>>(
+                    d_K_rfp,
+                    d_G_batch + (long long)(a - a_start) * D,
+                    n_rows * D,
+                    d_V1X2, d_U1, d_C, d_C4,
+                    sigma2, a, N, D, BIG);
+                CUDA_CHECK(cudaGetLastError());
+            }
+        }
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    cudaFree(d_norms);
+    cudaFree(d_C);   cudaFree(d_C4);
+    cudaFree(d_V1X2); cudaFree(d_U1);
+    cudaFree(d_G_batch);
 }
 
 }  // namespace kf

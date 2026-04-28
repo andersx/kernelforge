@@ -104,26 +104,19 @@ def compute_fchl19(
     X_list: list[NDArray[np.float64]] = []
     dX_list: list[NDArray[np.float64]] = []
 
-    # Pin to 1 OpenMP thread for the duration of representation generation.
-    # fchl19_repr uses #pragma omp parallel over atoms; parallel reductions are
-    # non-associative in floating-point, so X varies by ~1 ULP between calls,
-    # which amplifies to ~1e-6 in K@alpha for large training sets.
-    with _single_omp_thread():
-        for coords, z in zip(coords_list, z_list, strict=True):
-            coords_f64 = np.asarray(coords, dtype=np.float64)
-            z_i32 = np.asarray(z, dtype=np.int32)
+    for coords, z in zip(coords_list, z_list, strict=True):
+        coords_f64 = np.asarray(coords, dtype=np.float64)
+        z_i32 = np.asarray(z, dtype=np.int32)
 
-            if with_gradients:
-                x, dx = fchl19_repr.generate_fchl_acsf_and_gradients(
-                    coords_f64, z_i32, elements=elements, **repr_params
-                )
-                dX_list.append(dx)
-            else:
-                x = fchl19_repr.generate_fchl_acsf(
-                    coords_f64, z_i32, elements=elements, **repr_params
-                )
+        if with_gradients:
+            x, dx = fchl19_repr.generate_fchl_acsf_and_gradients(
+                coords_f64, z_i32, elements=elements, **repr_params
+            )
+            dX_list.append(dx)
+        else:
+            x = fchl19_repr.generate_fchl_acsf(coords_f64, z_i32, elements=elements, **repr_params)
 
-            X_list.append(x)
+        X_list.append(x)
 
     n_mols = len(coords_list)
     N = np.array([len(z) for z in z_list], dtype=np.int32)
@@ -136,14 +129,11 @@ def compute_fchl19(
         X[i, : len(x_i), :] = x_i
 
     # Pad dX to (n_mols, max_atoms, rep_size, max_atoms*3) — same zero-padding.
-    # Shape when computed: (n_mols, max_atoms, rep_size, max_atoms*3) — matches local KRR kernels.
-    # LocalRFFModel reshapes to 5D (n_mols, max_atoms, rep_size, max_atoms, 3) internally.
     dX: NDArray[np.float64] | None
     if with_gradients:
         dX = np.zeros((n_mols, max_atoms, rep_size, max_atoms * 3), dtype=np.float64)
         for i, dx_i in enumerate(dX_list):
             n_i = len(z_list[i])
-            # dx_i shape: (n_i, rep_size, n_i*3) — pad both atom dims
             dX[i, :n_i, :, : n_i * 3] = dx_i
     else:
         dX = None
