@@ -342,7 +342,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
 
 def test_predict_torch() -> None:
     """predict_torch must return CUDA tensors matching predict() to float32."""
-    from kernelforge import invdist_repr
+    from kernelforge import cuda_invdist_repr
 
     coords, z, E, F = _load_ethanol()
     tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
@@ -358,17 +358,13 @@ def test_predict_torch() -> None:
     _E_np, F_np = model.predict(te, zte)
     E_raw, _F_raw = model._predict(te, zte)
 
-    # Build float32 CUDA tensors from the same representations
-    X_list, dX_list = [], []
-    for c in te:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(
-            np.asarray(c, dtype=np.float64), 1e-12
-        )
-        X_list.append(x.astype(np.float32))
-        dX_list.append(dx.astype(np.float32))
-
-    X_cuda = torch.tensor(np.array(X_list)).cuda()
-    dX_cuda = torch.tensor(np.array(dX_list)).cuda()
+    # Build float32 CUDA tensors via the same GPU path used internally
+    n_atoms = te[0].shape[0]
+    coords_np = np.stack([c.astype(np.float32) for c in te], axis=0)  # (N_test, n_atoms, 3)
+    coords_cuda = torch.from_numpy(np.ascontiguousarray(coords_np)).cuda()
+    X_cuda, dX_cuda = cuda_invdist_repr.inverse_distance_upper_and_jacobian(
+        coords_cuda, n_atoms, model.eps
+    )
 
     E_t, F_t = model.predict_torch(X_cuda, dX_cuda)
 

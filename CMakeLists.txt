@@ -348,6 +348,29 @@ if(CMAKE_CUDA_COMPILER)
 
       list(APPEND _KF_ALL_MODULES cuda_local_kernels)
 
+      # ---- cuda_invdist_repr ----
+      pybind11_add_module(cuda_invdist_repr MODULE
+        src/cuda_invdist_repr.cu
+        src/cuda_invdist_repr_bindings.cpp)
+
+      target_include_directories(cuda_invdist_repr BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
+
+      target_link_libraries(cuda_invdist_repr PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}")
+
+      set_property(TARGET cuda_invdist_repr PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_invdist_repr PROPERTY POSITION_INDEPENDENT_CODE ON)
+      set_property(TARGET cuda_invdist_repr PROPERTY CUDA_ARCHITECTURES "70;80;86;89;90")
+
+      target_compile_options(cuda_invdist_repr PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_invdist_repr)
+
       # ---- cuda_fchl19_repr ----
       pybind11_add_module(cuda_fchl19_repr MODULE
         src/cuda_fchl19_repr.cu
