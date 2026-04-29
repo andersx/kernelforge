@@ -2052,9 +2052,7 @@ void kernel_gaussian_full_matvec_local_cu(
 
     // Phase 1: SGEMM-based accumulation of E_partial, G_acc, wE
     //
-    // Instead of one thread per query atom serially looping over all training
-    // atoms, decompose into large matrix multiplies:
-    //
+    // Decompose into large matrix multiplies:
     //   C_qt(Nq, Nt) — query-train Gaussian kernel with label screening
     //   inner_F(Nq, Nt) = X_q @ adF^T - broadcast(S_adF)
     //   expd_iF = -(C_qt/σ²) ⊙ inner_F
@@ -2099,8 +2097,7 @@ void kernel_gaussian_full_matvec_local_cu(
             d_X_t, d_alpha_desc, d_N_t, d_S_adF,
             N_t, max_atoms_t, rep_size, nm_t);
 
-        // 3. inner_F(Nq, Nt) = X_q @ adF^T   (SGEMM, then subtract S_adF per column)
-        //    Col-major: C(Nq, Nt) = X_q_cm(rep, Nq)^T @ adF_cm(rep, Nt) = (Nq, rep) @ (rep, Nt)
+        // 3. inner_F(Nq, Nt) = X_q @ adF^T
         float *d_inner_F;
         CUDA_CHECK(cudaMalloc(&d_inner_F, (long long)N_q * N_t * sizeof(float)));
         CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
@@ -2133,32 +2130,14 @@ void kernel_gaussian_full_matvec_local_cu(
                 N_t, max_atoms_t, rep_size, nm_t);
         }
 
-        // 6. G_acc SGEMM 1: G_acc = C_qt @ combined_t
-        //    Col-major: G_acc_cm(rep, Nq) = combined_cm(rep, Nt) @ C_qt^T(Nt, Nq)
-        //    Row-major: G_acc(Nq, rep) = C_qt(Nq, Nt) @ combined_t(Nt, rep)
-        //    cublasSgemm(N, N, rep, Nq, Nt, 1, combined_cm, rep, C_qt_cm^T, ...)
-        //    Actually: G_cm(rep, Nq) = comb_cm(rep, Nt) @ C_qt_cm^T ... but we want C_qt @ comb.
-        //    Easier: use the row-major→col-major rule:
-        //    C_rm(Nq, rep) = A_rm(Nq, Nt) @ B_rm(Nt, rep)
-        //    → C_cm(rep, Nq) = B_cm(rep, Nt) @ A_cm(Nt, Nq)
-        //    cublasSgemm(N, N, rep, Nq, Nt, 1, combined_cm, rep, C_qt_cm, Nq, ...)
-        //    Wait, C_qt_cm is (Nq, Nt) col-major. A_cm = C_qt transposed from row-major...
-        //    C_qt is already col-major (Nq, Nt). For the col-major GEMM:
-        //    G_cm(rep, Nq) = B_cm(rep, Nt) @ A_cm(Nt, Nq)
-        //    A_cm(Nt, Nq) = C_qt^T. So transa = T on C_qt.
-        //    cublasSgemm(N, T, rep, Nq, Nt, 1, combined_cm, rep, C_qt, Nq, 0, G, rep)
+        // 6. G_acc = C_qt @ combined_t  (col-major NT)
         CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
             rep_size, N_q, N_t,
             &one_f, d_combined_t, rep_size, d_C_qt, N_q,
             &zero_f, d_G_acc, rep_size));
-
         cudaFree(d_combined_t);
 
-        // 7. G_acc SGEMM 2: G_acc -= expd_iF @ X_t
-        //    Row-major: G_acc(Nq, rep) -= expd_iF(Nq, Nt) @ X_t(Nt, rep)
-        //    Col-major: G_cm(rep, Nq) -= X_t_cm(rep, Nt) @ expd_iF_cm^T(Nt, Nq)
-        //    = X_t_cm(rep, Nt) @ expd_iF^T. expd_iF_cm is (Nq, Nt), so ^T = (Nt, Nq).
-        //    cublasSgemm(N, T, rep, Nq, Nt, -1, X_t, rep, expd_iF, Nq, 1, G, rep)
+        // 7. G_acc -= expd_iF @ X_t  (col-major NT, beta=1 accumulate)
         CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
             rep_size, N_q, N_t,
             &neg1, d_X_t, rep_size, d_expd_iF, N_q,
