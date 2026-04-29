@@ -219,6 +219,322 @@ __global__ void elemental_gradient_from_phase_kernel(
     G[idx] = s;
 }
 
+// ---------------------------------------------------------------------------
+// Additional kernels for the memory-efficient rff_predict_force_elemental path
+// ---------------------------------------------------------------------------
+
+// Gather sin(phase[m_ci, a_ci, d]) * scale into sin_phase_q[ci, d].
+__global__ void gather_sin_phase_kernel(
+    float *sin_phase_q,      // (n_centers_q, D)
+    const float *phase,      // (nmol, max_atoms, D)
+    const float *weights,    // (D,)
+    const int *atom_map,     // (n_centers_q, 4): [m_local, a_center, row_offset, n_grads_mol]
+    int n_centers_q,
+    int max_atoms,
+    int D,
+    float scale
+) {
+    long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long total = (long long)n_centers_q * D;
+    if (idx >= total) return;
+    int ci = (int)(idx / D);
+    int d  = (int)(idx % D);
+    int m_local  = atom_map[ci * 4 + 0];
+    int a_center = atom_map[ci * 4 + 1];
+    float ph = phase[((long long)m_local * max_atoms + a_center) * D + d];
+    sin_phase_q[idx] = sinf(ph) * scale * weights[d];
+}
+
+// Scatter-dot: for each row r of gathered_dX, dot with eff[ci(r), :] and atomicAdd into F[g_row].
+__global__ void scatter_dot_into_F_kernel(
+    float *F,                    // (total_grads,) — output forces (scalar per grad)
+    const float *gathered_dX,    // (total_rows_q, rep_size)
+    const float *eff,            // (n_centers_q, rep_size)
+    const int *atom_map,         // (n_centers_q, 4)
+    const int *offsets_chunk,    // (nmol+1,) grad offsets
+    int n_centers_q,
+    int rep_size,
+    int total_rows_q
+) {
+    long long row = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= total_rows_q) return;
+
+    // Binary-search for center ci.
+    int lo = 0, hi = n_centers_q - 1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (atom_map[mid * 4 + 2] <= (int)row) lo = mid;
+        else hi = mid - 1;
+    }
+    int ci          = lo;
+    int row_offset  = atom_map[ci * 4 + 2];
+    int m_local     = atom_map[ci * 4 + 0];
+    int n_grads_mol = atom_map[ci * 4 + 3];
+    int n_atoms_m   = n_grads_mol / 3;
+
+    int coord_flat = (int)(row - row_offset);
+    int coord_atom = coord_flat / 3;
+    if (coord_atom >= n_atoms_m) return;
+
+    const float *dxrow  = gathered_dX + row * rep_size;
+    const float *effrow = eff         + ci  * rep_size;
+    float s = 0.0f;
+    for (int r = 0; r < rep_size; ++r) s += dxrow[r] * effrow[r];
+
+    int g_row = offsets_chunk[m_local] + coord_flat;
+    atomicAdd(&F[g_row], s);
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Optimised elemental gradient path (SGEMM-based)
+// ---------------------------------------------------------------------------
+//
+// For each element q, gather the dX rows for centre-atoms of that element
+// into a contiguous buffer, run a single cublasSgemm against W[q], then
+// scale by sin(phase) and scatter-add into G[ngrads, D].
+//
+// Handles variable n_atoms per molecule correctly.
+//
+// atom_map layout: (n_centers_q, 4) int32
+//   col 0: m_local      (chunk-relative molecule index)
+//   col 1: a_center     (atom index within molecule)
+//   col 2: row_offset   (start row in gathered_dX for this center)
+//   col 3: n_grads_mol  (= N[m] * 3 = rows contributed by this center)
+
+// Kernel 1: gather dX rows for one element into a contiguous buffer.
+// total_rows_q = sum of atom_map[ci, 3] over all ci.
+__global__ void gather_dX_for_element_kernel(
+    float *out,              // (total_rows_q, rep_size)
+    const float *dX,         // (nmol_total, max_atoms, rep_size, max_atoms, 3)
+    const int *atom_map,     // (n_centers_q, 4): [m_local, a_center, row_offset, n_grads_mol]
+    int n_centers_q,
+    int max_atoms,
+    int rep_size,
+    int total_rows_q,
+    int start                // chunk start (m offset into full nmol_total)
+) {
+    long long row = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long col = (long long)blockIdx.y * blockDim.y + threadIdx.y;
+    if (row >= total_rows_q || col >= rep_size) return;
+
+    // Binary-search for the center ci such that row_offset[ci] <= row < row_offset[ci+1].
+    int lo = 0, hi = n_centers_q - 1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (atom_map[mid * 4 + 2] <= (int)row) lo = mid;
+        else hi = mid - 1;
+    }
+    int ci          = lo;
+    int row_offset  = atom_map[ci * 4 + 2];
+    int m_local     = atom_map[ci * 4 + 0];
+    int a_center    = atom_map[ci * 4 + 1];
+    int n_grads_mol = atom_map[ci * 4 + 3];
+    int n_atoms_m   = n_grads_mol / 3;
+
+    int coord_flat = (int)(row - row_offset);
+    int coord_atom = coord_flat / 3;
+    int xyz        = coord_flat % 3;
+    if (coord_atom >= n_atoms_m) { out[row * rep_size + col] = 0.0f; return; }
+
+    int m_global        = start + m_local;
+    int ncoords_per_mol = max_atoms * 3;
+
+    // dX[m_global, a_center, col, coord_atom, xyz]
+    long long dX_idx =
+        ((long long)m_global * max_atoms + a_center) * (long long)rep_size * ncoords_per_mol
+        + col * ncoords_per_mol
+        + (long long)coord_atom * 3 + xyz;
+
+    out[row * rep_size + col] = dX[dX_idx];
+}
+
+// Kernel 2: scale rows of P by sin(phase) and scatter-add into G.
+__global__ void scatter_add_sin_phase_kernel(
+    float *G,                // (ngrads, D)
+    const float *P,          // (total_rows_q, D)
+    const float *phase,      // (nc, max_atoms, D)
+    const int *atom_map,     // (n_centers_q, 4): [m_local, a_center, row_offset, n_grads_mol]
+    const int *offsets_chunk,// (nc+1,) grad offsets relative to chunk
+    int n_centers_q,
+    int max_atoms,
+    int total_rows_q,
+    int D,
+    float scale
+) {
+    long long row = (long long)blockIdx.x * blockDim.x + threadIdx.x;
+    long long d   = (long long)blockIdx.y * blockDim.y + threadIdx.y;
+    if (row >= total_rows_q || d >= D) return;
+
+    // Binary-search for center ci.
+    int lo = 0, hi = n_centers_q - 1;
+    while (lo < hi) {
+        int mid = (lo + hi + 1) / 2;
+        if (atom_map[mid * 4 + 2] <= (int)row) lo = mid;
+        else hi = mid - 1;
+    }
+    int ci          = lo;
+    int row_offset  = atom_map[ci * 4 + 2];
+    int m_local     = atom_map[ci * 4 + 0];
+    int a_center    = atom_map[ci * 4 + 1];
+    int n_grads_mol = atom_map[ci * 4 + 3];
+    int n_atoms_m   = n_grads_mol / 3;
+
+    int coord_flat = (int)(row - row_offset);
+    int coord_atom = coord_flat / 3;
+    int xyz        = coord_flat % 3;
+    if (coord_atom >= n_atoms_m) return;
+
+    float coeff = sinf(phase[((long long)m_local * max_atoms + a_center) * D + d]) * scale;
+    int g_row   = offsets_chunk[m_local] + coord_atom * 3 + xyz;
+    atomicAdd(&G[g_row * D + d], coeff * P[row * D + d]);
+}
+
+// Build atom_map on CPU for element q in a chunk [start, start+nc).
+// Returns flat int32 vector of 4 ints per center.
+// Sets total_rows_out = total gathered rows for this element.
+static std::vector<int> build_atom_map(
+    const int *Q_cpu,
+    const int *N_cpu,
+    int start, int nc,
+    int max_atoms, int q_elem,
+    int &total_rows_out
+) {
+    std::vector<int> map;
+    map.reserve(nc * max_atoms * 4);
+    int row_offset = 0;
+    for (int m_local = 0; m_local < nc; ++m_local) {
+        int m       = start + m_local;
+        int n_atoms = N_cpu[m];
+        for (int a = 0; a < n_atoms; ++a) {
+            if (Q_cpu[m * max_atoms + a] == q_elem) {
+                map.push_back(m_local);
+                map.push_back(a);
+                map.push_back(row_offset);
+                map.push_back(n_atoms * 3);
+                row_offset += n_atoms * 3;
+            }
+        }
+    }
+    total_rows_out = row_offset;
+    return map;
+}
+
+torch::Tensor rff_gradient_elemental_chunk_sgemm(
+    const torch::Tensor &X,
+    const torch::Tensor &dX,
+    const torch::Tensor &Q,
+    const torch::Tensor &N,
+    const torch::Tensor &W,
+    const torch::Tensor &b,
+    const torch::Tensor &phase,      // (nc, max_atoms, D)  pre-computed
+    int start,
+    int nc,
+    const int *Q_cpu,
+    const int *N_cpu,
+    const int *offsets_cpu_ptr
+) {
+    int max_atoms = (int)X.size(1);
+    int rep_size  = (int)X.size(2);
+    int nelements = (int)W.size(0);
+    int D         = (int)b.size(1);
+
+    int chunk_start = offsets_cpu_ptr[start];
+    int chunk_end   = offsets_cpu_ptr[start + nc];
+    int ngrads      = chunk_end - chunk_start;
+
+    auto G = torch::zeros({ngrads, D}, X.options());
+
+    // Build chunk-local mol offsets (0-based within chunk).
+    std::vector<int> off_chunk(nc + 1);
+    for (int i = 0; i <= nc; ++i) off_chunk[i] = offsets_cpu_ptr[start + i] - chunk_start;
+    auto off_chunk_dev = torch::empty({nc + 1}, Q.options());
+    CUDA_CHECK(cudaMemcpy(off_chunk_dev.data_ptr<int>(), off_chunk.data(),
+                          (size_t)(nc + 1) * sizeof(int), cudaMemcpyHostToDevice));
+
+    const float scale = std::sqrt(2.0f / (float)D);
+    const float one   = 1.0f;
+    const float zero  = 0.0f;
+
+    for (int q = 0; q < nelements; ++q) {
+        int total_rows_q = 0;
+        std::vector<int> atom_map_cpu =
+            build_atom_map(Q_cpu, N_cpu, start, nc, max_atoms, q, total_rows_q);
+        int n_centers_q = (int)(atom_map_cpu.size() / 4);
+        if (n_centers_q == 0 || total_rows_q == 0) continue;
+
+        auto atom_map_dev = torch::empty({n_centers_q * 4}, Q.options());
+        CUDA_CHECK(cudaMemcpy(atom_map_dev.data_ptr<int>(), atom_map_cpu.data(),
+                              (size_t)atom_map_cpu.size() * sizeof(int), cudaMemcpyHostToDevice));
+
+        // Step 1: gather dX rows → gathered_dX (total_rows_q, rep_size)
+        auto gathered_dX = torch::empty({total_rows_q, rep_size}, X.options());
+        {
+            dim3 block(32, 8);
+            dim3 grid(
+                (unsigned int)((total_rows_q + block.x - 1) / block.x),
+                (unsigned int)((rep_size + block.y - 1) / block.y)
+            );
+            gather_dX_for_element_kernel<<<grid, block>>>(
+                gathered_dX.data_ptr<float>(),
+                dX.data_ptr<float>(),
+                atom_map_dev.data_ptr<int>(),
+                n_centers_q,
+                max_atoms,
+                rep_size,
+                total_rows_q,
+                start
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+
+        // Step 2: SGEMM  gathered_dX (total_rows_q, rep_size) @ W[q] (rep_size, D)
+        //   Row-major: P = gathered_dX @ W[q]
+        //   cuBLAS col-major: P^T(D,n) = W[q]^T(D,rep) * gathered_dX^T(rep,n)
+        //   W[q] row-major (rep_size, D) = col-major (D, rep_size), lda = D
+        //   gathered_dX row-major (n, rep) = col-major (rep, n), ldb = rep_size
+        auto P = torch::empty({total_rows_q, D}, X.options());
+        CUBLAS_CHECK(cublasSgemm(
+            s_cublas,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            D,            // m
+            total_rows_q, // n
+            rep_size,     // k
+            &one,
+            W.data_ptr<float>() + (long long)q * rep_size * D,
+            D,            // lda
+            gathered_dX.data_ptr<float>(),
+            rep_size,     // ldb
+            &zero,
+            P.data_ptr<float>(),
+            D             // ldc
+        ));
+
+        // Step 3: scatter-add P * sin(phase) into G
+        {
+            dim3 block(32, 8);
+            dim3 grid(
+                (unsigned int)((total_rows_q + block.x - 1) / block.x),
+                (unsigned int)((D + block.y - 1) / block.y)
+            );
+            scatter_add_sin_phase_kernel<<<grid, block>>>(
+                G.data_ptr<float>(),
+                P.data_ptr<float>(),
+                phase.data_ptr<float>(),
+                atom_map_dev.data_ptr<int>(),
+                off_chunk_dev.data_ptr<int>(),
+                n_centers_q,
+                max_atoms,
+                total_rows_q,
+                D,
+                scale
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+    }
+    return G;
+}
+
 torch::Tensor make_offsets_cuda(const torch::Tensor &N) {
     int nmol = (int)N.size(0);
     std::vector<int> sizes(nmol);
@@ -396,20 +712,18 @@ torch::Tensor rff_gradient_elemental_chunk(
     const torch::Tensor &W,
     const torch::Tensor &b,
     int start,
-    int nc
+    int nc,
+    const int *Q_cpu,
+    const int *N_cpu,
+    const int *offsets_cpu_ptr
 ) {
     int max_atoms = (int)X.size(1);
-    int rep_size = (int)X.size(2);
+    int D         = (int)b.size(1);
+
+    // Compute phase (nc, max_atoms, D)
+    int rep_size  = (int)X.size(2);
     int nelements = (int)W.size(0);
-    int D = (int)b.size(1);
-    auto offsets = make_offsets_cuda(N);
-    int chunk_start = 0;
-    int chunk_end = 0;
-    CUDA_CHECK(cudaMemcpy(&chunk_start, offsets.data_ptr<int>() + start, sizeof(int), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(&chunk_end, offsets.data_ptr<int>() + start + nc, sizeof(int), cudaMemcpyDeviceToHost));
-    int ngrads = chunk_end - chunk_start;
     auto phase = torch::empty({nc, max_atoms, D}, X.options());
-    auto G = torch::empty({ngrads, D}, X.options());
     int threads = 256;
     int phase_blocks = (int)(((long long)nc * max_atoms * D + threads - 1) / threads);
     elemental_phase_kernel<<<phase_blocks, threads>>>(
@@ -427,26 +741,40 @@ torch::Tensor rff_gradient_elemental_chunk(
         D
     );
     CUDA_CHECK(cudaGetLastError());
-    const float scale = std::sqrt(2.0f / (float)D);
-    int g_blocks = (int)(((long long)ngrads * D + threads - 1) / threads);
-    elemental_gradient_from_phase_kernel<<<g_blocks, threads>>>(
-        G.data_ptr<float>(),
-        phase.data_ptr<float>(),
-        dX.data_ptr<float>(),
-        Q.data_ptr<int>(),
-        N.data_ptr<int>(),
-        offsets.data_ptr<int>(),
-        W.data_ptr<float>(),
-        start,
-        nc,
-        max_atoms,
-        rep_size,
-        nelements,
-        D,
-        scale
+
+    return rff_gradient_elemental_chunk_sgemm(
+        X, dX, Q, N, W, b, phase,
+        start, nc, Q_cpu, N_cpu, offsets_cpu_ptr
     );
-    CUDA_CHECK(cudaGetLastError());
-    return G;
+}
+
+// Legacy overload (no CPU mirrors): used by rff_full_gramian_elemental_rfp_cuda.
+// Copies Q, N to host then delegates.
+torch::Tensor rff_gradient_elemental_chunk(
+    const torch::Tensor &X,
+    const torch::Tensor &dX,
+    const torch::Tensor &Q,
+    const torch::Tensor &N,
+    const torch::Tensor &W,
+    const torch::Tensor &b,
+    int start,
+    int nc
+) {
+    int nmol_total = (int)N.size(0);
+    int max_atoms  = (int)X.size(1);
+    std::vector<int> Q_cpu((size_t)nmol_total * max_atoms);
+    std::vector<int> N_cpu((size_t)nmol_total);
+    CUDA_CHECK(cudaMemcpy(Q_cpu.data(), Q.data_ptr<int>(),
+                          (size_t)nmol_total * max_atoms * sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(N_cpu.data(), N.data_ptr<int>(),
+                          (size_t)nmol_total * sizeof(int), cudaMemcpyDeviceToHost));
+    // Build offsets on CPU
+    std::vector<int> off_cpu(nmol_total + 1, 0);
+    for (int i = 0; i < nmol_total; ++i) off_cpu[i + 1] = off_cpu[i] + 3 * N_cpu[i];
+    return rff_gradient_elemental_chunk(
+        X, dX, Q, N, W, b, start, nc,
+        Q_cpu.data(), N_cpu.data(), off_cpu.data()
+    );
 }
 
 }  // namespace
@@ -1150,32 +1478,131 @@ torch::Tensor rff_predict_force_elemental_cuda(
     TORCH_CHECK(chunk_size > 0, "chunk_size must be positive");
     ensure_cublas();
 
-    int nmol = (int)X.size(0);
-    int D = (int)b.size(1);
-    auto offsets = make_offsets_cuda(N);
-    auto offsets_cpu = offsets.cpu();
-    int total_grads = offsets_cpu.data_ptr<int>()[nmol];
-    auto F = torch::empty({total_grads}, X.options());
-    const float one = 1.0f;
-    const float zero = 0.0f;
-    for (int cs = 0; cs < nmol; cs += chunk_size) {
-        int nc = std::min(chunk_size, nmol - cs);
-        auto G = rff_gradient_elemental_chunk(X, dX, Q, N, W, b, cs, nc);
-        int ngrads = (int)G.size(0);
-        CUBLAS_CHECK(cublasSgemv(
+    int nmol       = (int)X.size(0);
+    int max_atoms  = (int)X.size(1);
+    int rep_size   = (int)X.size(2);
+    int nelements  = (int)W.size(0);
+    int D          = (int)b.size(1);
+
+    // Build CPU mirrors of Q, N, offsets once.
+    std::vector<int> Q_cpu((size_t)nmol * max_atoms);
+    std::vector<int> N_cpu((size_t)nmol);
+    CUDA_CHECK(cudaMemcpy(Q_cpu.data(), Q.data_ptr<int>(),
+                          (size_t)nmol * max_atoms * sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(N_cpu.data(), N.data_ptr<int>(),
+                          (size_t)nmol * sizeof(int), cudaMemcpyDeviceToHost));
+    std::vector<int> offsets_cpu(nmol + 1, 0);
+    for (int i = 0; i < nmol; ++i) offsets_cpu[i + 1] = offsets_cpu[i] + 3 * N_cpu[i];
+    int total_grads = offsets_cpu[nmol];
+
+    // Compute phase for all molecules at once.
+    auto phase = torch::empty({nmol, max_atoms, D}, X.options());
+    {
+        int threads = 256;
+        int blocks  = (int)(((long long)nmol * max_atoms * D + threads - 1) / threads);
+        elemental_phase_kernel<<<blocks, threads>>>(
+            phase.data_ptr<float>(),
+            X.data_ptr<float>(),
+            Q.data_ptr<int>(),
+            N.data_ptr<int>(),
+            W.data_ptr<float>(),
+            b.data_ptr<float>(),
+            0, nmol, max_atoms, rep_size, nelements, D
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Build mol-offsets on device (for scatter kernel).
+    auto off_dev = torch::empty({nmol + 1}, Q.options());
+    CUDA_CHECK(cudaMemcpy(off_dev.data_ptr<int>(), offsets_cpu.data(),
+                          (size_t)(nmol + 1) * sizeof(int), cudaMemcpyHostToDevice));
+
+    // F[total_grads] accumulates scalar contributions from all elements.
+    auto F = torch::zeros({total_grads}, X.options());
+
+    const float scale = std::sqrt(2.0f / (float)D);
+    const float one   = 1.0f;
+    const float zero  = 0.0f;
+
+    for (int q = 0; q < nelements; ++q) {
+        int total_rows_q = 0;
+        std::vector<int> atom_map_cpu =
+            build_atom_map(Q_cpu.data(), N_cpu.data(), 0, nmol, max_atoms, q, total_rows_q);
+        int n_centers_q = (int)(atom_map_cpu.size() / 4);
+        if (n_centers_q == 0 || total_rows_q == 0) continue;
+
+        auto atom_map_dev = torch::empty({n_centers_q * 4}, Q.options());
+        CUDA_CHECK(cudaMemcpy(atom_map_dev.data_ptr<int>(), atom_map_cpu.data(),
+                              (size_t)atom_map_cpu.size() * sizeof(int), cudaMemcpyHostToDevice));
+
+        // Gather sin(phase) * scale for all centres: sin_phase_q[n_centers_q, D]
+        auto sin_phase_q = torch::empty({n_centers_q, D}, X.options());
+        {
+            int threads = 256;
+            int blocks  = (int)(((long long)n_centers_q * D + threads - 1) / threads);
+            gather_sin_phase_kernel<<<blocks, threads>>>(
+                sin_phase_q.data_ptr<float>(),
+                phase.data_ptr<float>(),
+                weights.data_ptr<float>(),
+                atom_map_dev.data_ptr<int>(),
+                n_centers_q, max_atoms, D, scale
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+
+        // eff[n_centers_q, rep_size] = sin_phase_q[n_centers_q, D] @ W[q]^T[D, rep_size]
+        // Memory: n_centers_q * rep_size * 4B  (e.g. 12000 * 312 * 4 = 15MB — negligible)
+        // cuBLAS col-major:
+        //   eff^T[rep, nc] = W[q] (row-major rep×D, seen as col-major D×rep, OP_T → rep×D)
+        //                    × sin_phase_q^T [col-major D×nc]
+        //   m=rep_size, n=n_centers_q, k=D
+        //   A = W[q] OP_T:  lda=D  (W[q] stored as flat rep×D, col-stride = D)
+        //   B = sin_phase_q OP_N:  ldb=D
+        //   C = eff^T:  ldc=rep_size
+        auto eff = torch::empty({n_centers_q, rep_size}, X.options());
+        CUBLAS_CHECK(cublasSgemm(
             s_cublas,
-            CUBLAS_OP_T,
-            D,
-            ngrads,
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            rep_size, n_centers_q, D,
             &one,
-            G.data_ptr<float>(),
-            D,
-            weights.data_ptr<float>(),
-            1,
+            W.data_ptr<float>() + (long long)q * rep_size * D, D,
+            sin_phase_q.data_ptr<float>(), D,
             &zero,
-            F.data_ptr<float>() + offsets_cpu.data_ptr<int>()[cs],
-            1
+            eff.data_ptr<float>(), rep_size
         ));
+
+        // Gather dX rows: gathered_dX[total_rows_q, rep_size]
+        auto gathered_dX = torch::empty({total_rows_q, rep_size}, X.options());
+        {
+            dim3 block(32, 8);
+            dim3 grid(
+                (unsigned int)((total_rows_q + block.x - 1) / block.x),
+                (unsigned int)((rep_size + block.y - 1) / block.y)
+            );
+            gather_dX_for_element_kernel<<<grid, block>>>(
+                gathered_dX.data_ptr<float>(),
+                dX.data_ptr<float>(),
+                atom_map_dev.data_ptr<int>(),
+                n_centers_q, max_atoms, rep_size, total_rows_q, 0
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+
+        // For each row r: F[g_row(r)] += gathered_dX[r,:] · eff[ci(r),:]
+        // Multiple centres contribute to the same g_row → atomicAdd.
+        {
+            int threads = 256;
+            int blocks  = (int)(((long long)total_rows_q + threads - 1) / threads);
+            scatter_dot_into_F_kernel<<<blocks, threads>>>(
+                F.data_ptr<float>(),
+                gathered_dX.data_ptr<float>(),
+                eff.data_ptr<float>(),
+                atom_map_dev.data_ptr<int>(),
+                off_dev.data_ptr<int>(),
+                n_centers_q, rep_size, total_rows_q
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
     }
     return F;
 }
