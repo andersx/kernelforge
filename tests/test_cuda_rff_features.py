@@ -331,7 +331,11 @@ def test_rff_features_elemental_col_major_matches_row_major() -> None:
     b = rng.uniform(0, 2 * np.pi, size=(nel, D)).astype(np.float64)
 
     X_c, Q_c, N_c, W_c, b_c = (
-        _to_cuda(X), _to_cuda_i32(Q), _to_cuda_i32(N), _to_cuda(W), _to_cuda(b)
+        _to_cuda(X),
+        _to_cuda_i32(Q),
+        _to_cuda_i32(N),
+        _to_cuda(W),
+        _to_cuda(b),
     )
     Z_row = cuda_rff_features.rff_features_elemental(X_c, Q_c, N_c, W_c, b_c)
     Z_col = cuda_rff_features.rff_features_elemental_col_major(X_c, Q_c, N_c, W_c, b_c)
@@ -339,8 +343,9 @@ def test_rff_features_elemental_col_major_matches_row_major() -> None:
     assert Z_row.shape == (nmol, D), f"row-major shape wrong: {Z_row.shape}"
     assert Z_col.shape == (D, nmol), f"col-major shape wrong: {Z_col.shape}"
     np.testing.assert_array_equal(
-        Z_row.cpu().numpy(), Z_col.cpu().numpy().T,
-        err_msg="col-major output does not match transpose of row-major output"
+        Z_row.cpu().numpy(),
+        Z_col.cpu().numpy().T,
+        err_msg="col-major output does not match transpose of row-major output",
     )
 
 
@@ -358,7 +363,7 @@ def test_rff_gradient_elemental_col_major_matches_row_major() -> None:
     W = rng.normal(size=(nel, rep_size, D)).astype(np.float64)
     b = rng.uniform(0, 2 * np.pi, size=(nel, D)).astype(np.float64)
 
-    X_c  = _to_cuda(X)
+    X_c = _to_cuda(X)
     dX_c = _to_cuda(dX)
     Q_c, N_c, W_c, b_c = _to_cuda_i32(Q), _to_cuda_i32(N), _to_cuda(W), _to_cuda(b)
 
@@ -369,9 +374,11 @@ def test_rff_gradient_elemental_col_major_matches_row_major() -> None:
     assert G_row.shape == (total_naq, D), f"row-major shape wrong: {G_row.shape}"
     assert G_col.shape == (D, total_naq), f"col-major shape wrong: {G_col.shape}"
     np.testing.assert_allclose(
-        G_row.cpu().numpy(), G_col.cpu().numpy().T,
-        rtol=1e-5, atol=1e-5,
-        err_msg="col-major gradient output does not match transpose of row-major output"
+        G_row.cpu().numpy(),
+        G_col.cpu().numpy().T,
+        rtol=1e-5,
+        atol=1e-5,
+        err_msg="col-major gradient output does not match transpose of row-major output",
     )
 
 
@@ -397,14 +404,23 @@ def test_rff_gradient_elemental_multi_tile_matches_cpu() -> None:
     W = rng.normal(size=(nel, rep_size, D)).astype(np.float64)
     b = rng.uniform(0, 2 * np.pi, size=(nel, D)).astype(np.float64)
 
-    ref = rff_gradient_elemental(X, dX, _q_list_from_padded(Q, N), W, b).T  # → (total_naq, D) float64
+    ref = rff_gradient_elemental(
+        X, dX, _q_list_from_padded(Q, N), W, b
+    ).T  # → (total_naq, D) float64
 
     got = cuda_rff_features.rff_gradient_elemental(
-        _to_cuda(X), _to_cuda(dX), _to_cuda_i32(Q), _to_cuda_i32(N),
-        _to_cuda(W), _to_cuda(b), 3,
+        _to_cuda(X),
+        _to_cuda(dX),
+        _to_cuda_i32(Q),
+        _to_cuda_i32(N),
+        _to_cuda(W),
+        _to_cuda(b),
+        3,
     )
     np.testing.assert_allclose(
-        got.cpu().numpy().astype(np.float64), ref,
-        rtol=2e-4, atol=2e-4,
+        got.cpu().numpy().astype(np.float64),
+        ref,
+        rtol=2e-4,
+        atol=2e-4,
         err_msg="multi-tile gradient does not match CPU reference",
     )
