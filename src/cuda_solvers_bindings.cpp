@@ -42,9 +42,16 @@ PYBIND11_MODULE(cuda_solvers, m) {
         py::arg("Z"),
         py::arg("y"),
         py::arg("z_col_major") = false,
-        "Solve min_w ||Z @ w - y||_2 via cusolverDnSSgels IRS (GPU, FP32).\n"
+        py::arg("variant") = "SS",
+        "Solve min_w ||Z @ w - y||_2 via cusolverDn<variant>gels IRS (GPU, FP32 output).\n"
         "Z is (m, n) float32 torch.Tensor, y is (m,) float32 torch.Tensor, m >= n.\n"
         "If z_col_major=True, Z is (n, m) col-major (avoids internal transpose).\n"
+        "variant selects the internal precision used by the IRS solver:\n"
+        "  'SS' — single/single (default)\n"
+        "  'SH' — single/half\n"
+        "  'SB' — single/bfloat16\n"
+        "  'SX' — single/tensorfloat32\n"
+        "All variants produce float32 output.\n"
         "No rcond truncation — use cuda_solve_svd for rank-deficient systems.\n"
         "Returns w: (n,) float32 CPU tensor."
     );

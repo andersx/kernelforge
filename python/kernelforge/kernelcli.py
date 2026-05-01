@@ -342,6 +342,10 @@ def _build_model(
     repr_params: dict[str, Any] | None = None,
     cuda: bool = False,
     rcond: float = -1.0,
+    gels_variant: str = "SS",
+    n_pca: int | None = None,
+    pca_center: bool = False,
+    pca_whiten: bool = False,
 ) -> (
     LocalKRRModel
     | LocalRFFModel
@@ -399,6 +403,10 @@ def _build_model(
                 repr_params=repr_params or None,
                 solver=solver if solver in ("cholesky", "svd", "qr", "gels") else "cholesky",
                 rcond=rcond,
+                gels_variant=gels_variant,
+                n_pca=n_pca,
+                pca_center=pca_center,
+                pca_whiten=pca_whiten,
             )
         return CudaLocalKRRModel(
             sigma=sigma,
@@ -448,6 +456,8 @@ def _print_header(args: argparse.Namespace) -> None:
     if args.cuda and args.representation == "fchl19":
         print(f"  solver         : {args.solver}")
         print(f"  preprocessing  : {args.preprocessing}")
+        if args.solver == "gels":
+            print(f"  gels_variant   : {args.gels_variant}")
         if args.solver == "eigh":
             print(f"  spectral_rtol  : {args.spectral_rtol}")
             print(f"  spectral_atol  : {args.spectral_atol}")
@@ -458,6 +468,10 @@ def _print_header(args: argparse.Namespace) -> None:
             print(f"  cg_max_iter    : {args.cg_max_iter}")
     if args.regressor == "rff":
         print(f"  d_rff          : {args.d_rff}")
+        if args.cuda and args.n_pca is not None:
+            print(f"  n_pca          : {args.n_pca}")
+            print(f"  pca_center     : {args.pca_center}")
+            print(f"  pca_whiten     : {args.pca_whiten}")
     if args.dataset.startswith("rmd17_"):
         print(f"  split          : {args.split}")
     parsed_rp = _parse_repr_params(args.repr_param)
@@ -546,6 +560,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="rcond threshold for SVD truncation (--solver svd only). -1 uses eps heuristic.",
     )
     p.add_argument(
+        "--gels-variant",
+        default="SS",
+        choices=["SS", "SH", "SB", "SX"],
+        help=(
+            "Internal precision for --solver gels (cusolverDn<variant>gels IRS). "
+            "SS=single/single (default), SH=single/half, SB=single/bfloat16, "
+            "SX=single/tensorfloat32. All produce float32 output."
+        ),
+    )
+    p.add_argument(
         "--preprocessing",
         default=_DEFAULT_CUDA_LOCAL_PREPROCESSING,
         choices=["none", "diagonal_scale"],
@@ -589,6 +613,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--d-rff", type=int, default=1024, help="RFF feature dimension (RFF only).")
     p.add_argument("--seed", type=int, default=42, help="RNG seed (RFF weights + QM7b split).")
+    p.add_argument(
+        "--n-pca",
+        type=int,
+        default=None,
+        metavar="INT",
+        help="Per-element PCA compression: number of components (None = no PCA, CUDA RFF only).",
+    )
+    p.add_argument(
+        "--pca-center",
+        action="store_true",
+        default=False,
+        help="Subtract per-element mean before PCA projection (CUDA RFF only).",
+    )
+    p.add_argument(
+        "--pca-whiten",
+        action="store_true",
+        default=False,
+        help="Divide PCA components by their standard deviation (CUDA RFF only).",
+    )
     p.add_argument(
         "--elements",
         type=int,
@@ -854,6 +897,10 @@ def run(args: argparse.Namespace) -> None:
         repr_params=repr_params,
         cuda=args.cuda,
         rcond=args.rcond,
+        gels_variant=args.gels_variant,
+        n_pca=args.n_pca,
+        pca_center=args.pca_center,
+        pca_whiten=args.pca_whiten,
     )
     print(f"\n[2] Model: {type(model).__name__}")
 

@@ -232,3 +232,123 @@ def test_svd_energy_and_force_shapes() -> None:
     E_pred, F_pred = model.predict(te, zte)
     assert E_pred.shape == (5,)
     assert F_pred.shape == (5 * 9 * 3,)
+
+
+# ---------------------------------------------------------------------------
+# PCA compression tests
+# ---------------------------------------------------------------------------
+
+# ethanol: H6C2O1 per molecule, 20 training mols → n_valid: H≈120, C≈40, O≈20
+# Use n_pca=16 to stay below the O count (20) and far below rep_size (~420)
+_N_PCA = 16
+
+
+def test_pca_energy_only_shapes() -> None:
+    """PCA: energy_only output shapes are correct."""
+    coords, z_list, energies, _ = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-2, d_rff=32, seed=42, elements=_ELEMENTS,
+        chunk_size=8, n_pca=_N_PCA,
+    )
+    model.fit(tr, ztr, energies=energies[:20])
+
+    assert model.training_mode_ == "energy_only"
+    assert model._rep_size == _N_PCA
+    E_pred, F_pred = model.predict(te, zte)
+    assert E_pred.shape == (5,)
+    assert F_pred.shape == (5 * 9 * 3,)
+
+
+def test_pca_energy_and_force_shapes() -> None:
+    """PCA: energy_and_force output shapes are correct."""
+    coords, z_list, energies, forces = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-1, d_rff=32, seed=11, elements=_ELEMENTS,
+        chunk_size=5, n_pca=_N_PCA,
+    )
+    model.fit(tr, ztr, energies=energies[:20], forces=forces[:20])
+
+    assert model.training_mode_ == "energy_and_force"
+    assert model._rep_size == _N_PCA
+    E_pred, F_pred = model.predict(te, zte)
+    assert E_pred.shape == (5,)
+    assert F_pred.shape == (5 * 9 * 3,)
+
+
+def test_pca_center_whiten_shapes() -> None:
+    """PCA with centering and whitening: output shapes are correct."""
+    coords, z_list, energies, _ = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-2, d_rff=32, seed=5, elements=_ELEMENTS,
+        chunk_size=8, n_pca=_N_PCA, pca_center=True, pca_whiten=True,
+    )
+    model.fit(tr, ztr, energies=energies[:20])
+
+    assert model._rep_size == _N_PCA
+    E_pred, _ = model.predict(te, zte)
+    assert E_pred.shape == (5,)
+
+
+def test_pca_save_load_roundtrip(tmp_path: Path) -> None:
+    """PCA model: save and load produces identical predictions."""
+    coords, z_list, energies, _ = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-2, d_rff=32, seed=42, elements=_ELEMENTS,
+        chunk_size=8, n_pca=_N_PCA,
+    )
+    model.fit(tr, ztr, energies=energies[:20])
+    E_before, _ = model.predict(te, zte)
+
+    save_path = tmp_path / "pca_model.npz"
+    model.save(save_path)
+    loaded = CudaLocalRFFModel.load(save_path)
+
+    assert loaded.n_pca == _N_PCA
+    E_after, _ = loaded.predict(te, zte)
+    np.testing.assert_allclose(E_after, E_before, rtol=1e-5, atol=1e-5)
+
+
+def test_pca_save_load_force_roundtrip(tmp_path: Path) -> None:
+    """PCA model with forces: save and load produces identical predictions."""
+    coords, z_list, energies, forces = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-1, d_rff=32, seed=11, elements=_ELEMENTS,
+        chunk_size=5, n_pca=_N_PCA,
+    )
+    model.fit(tr, ztr, energies=energies[:20], forces=forces[:20])
+    E_before, F_before = model.predict(te, zte)
+
+    save_path = tmp_path / "pca_force_model.npz"
+    model.save(save_path)
+    loaded = CudaLocalRFFModel.load(save_path)
+
+    E_after, F_after = loaded.predict(te, zte)
+    np.testing.assert_allclose(E_after, E_before, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(F_after, F_before, rtol=1e-5, atol=1e-5)
+
+
+def test_pca_n_pca_too_large_raises() -> None:
+    """PCA: n_pca >= rep_size must raise ValueError."""
+    coords, z_list, energies, _ = _load_ethanol(20)
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-2, d_rff=32, seed=42, elements=_ELEMENTS,
+        chunk_size=8, n_pca=9999,
+    )
+    with pytest.raises(ValueError, match="n_pca"):
+        model.fit(coords[:15], z_list[:15], energies=energies[:15])

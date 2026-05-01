@@ -41,6 +41,7 @@
 
 #include <cmath>
 #include <limits>
+#include <string>
 
 // ---------------------------------------------------------------------------
 // Error-checking macros
@@ -349,7 +350,8 @@ at::Tensor cuda_solve_qr(at::Tensor Z, at::Tensor y, bool z_col_major) {
 // ---------------------------------------------------------------------------
 // cuda_solve_gels
 // ---------------------------------------------------------------------------
-at::Tensor cuda_solve_gels(at::Tensor Z, at::Tensor y, bool z_col_major) {
+at::Tensor cuda_solve_gels(at::Tensor Z, at::Tensor y, bool z_col_major,
+                            const std::string& variant) {
     const int m = z_col_major ? static_cast<int>(Z.size(1)) : static_cast<int>(Z.size(0));
     const int n = z_col_major ? static_cast<int>(Z.size(0)) : static_cast<int>(Z.size(1));
     TORCH_CHECK(Z.dim() == 2, "Z must be 2D");
@@ -389,19 +391,50 @@ at::Tensor cuda_solve_gels(at::Tensor Z, at::Tensor y, bool z_col_major) {
     // X: output (n x 1) col-major, lddx=n.
     at::Tensor X = at::empty({n}, at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
 
+    TORCH_CHECK(
+        variant == "SS" || variant == "SH" || variant == "SB" || variant == "SX",
+        "cuda_solve_gels: variant must be one of SS, SH, SB, SX (got \"", variant, "\")"
+    );
+
     // Query workspace size.
     size_t lwork_bytes = 0;
-    CUSOLVER_CHECK(cusolverDnSSgels_bufferSize(
-        s_cusolver,
-        static_cast<cusolver_int_t>(m),
-        static_cast<cusolver_int_t>(n),
-        static_cast<cusolver_int_t>(1),
-        A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
-        B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
-        X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
-        nullptr,
-        &lwork_bytes
-    ));
+    if (variant == "SS") {
+        CUSOLVER_CHECK(cusolverDnSSgels_bufferSize(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            nullptr, &lwork_bytes));
+    } else if (variant == "SH") {
+        CUSOLVER_CHECK(cusolverDnSHgels_bufferSize(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            nullptr, &lwork_bytes));
+    } else if (variant == "SB") {
+        CUSOLVER_CHECK(cusolverDnSBgels_bufferSize(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            nullptr, &lwork_bytes));
+    } else {  // SX
+        CUSOLVER_CHECK(cusolverDnSXgels_bufferSize(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            nullptr, &lwork_bytes));
+    }
 
     // Allocate workspace (byte buffer).
     at::Tensor ws = at::empty(
@@ -409,28 +442,54 @@ at::Tensor cuda_solve_gels(at::Tensor Z, at::Tensor y, bool z_col_major) {
         at::TensorOptions().dtype(at::kByte).device(at::kCUDA)
     );
 
-    // Allocate iter (host) and d_info (device) as required by cusolverDnSSgels.
-    // iter  → host pointer: cuSOLVER writes the iteration count directly to host memory.
-    // d_info → device pointer: cuSOLVER writes the status code to device memory.
     cusolver_int_t h_iter = 0;
     at::Tensor d_info = at::zeros({1}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
 
-    CUSOLVER_CHECK(cusolverDnSSgels(
-        s_cusolver,
-        static_cast<cusolver_int_t>(m),
-        static_cast<cusolver_int_t>(n),
-        static_cast<cusolver_int_t>(1),
-        A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
-        B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
-        X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
-        static_cast<void*>(ws.data_ptr<uint8_t>()), lwork_bytes,
-        &h_iter,
-        d_info.data_ptr<int>()
-    ));
+    if (variant == "SS") {
+        CUSOLVER_CHECK(cusolverDnSSgels(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            static_cast<void*>(ws.data_ptr<uint8_t>()), lwork_bytes,
+            &h_iter, d_info.data_ptr<int>()));
+    } else if (variant == "SH") {
+        CUSOLVER_CHECK(cusolverDnSHgels(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            static_cast<void*>(ws.data_ptr<uint8_t>()), lwork_bytes,
+            &h_iter, d_info.data_ptr<int>()));
+    } else if (variant == "SB") {
+        CUSOLVER_CHECK(cusolverDnSBgels(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            static_cast<void*>(ws.data_ptr<uint8_t>()), lwork_bytes,
+            &h_iter, d_info.data_ptr<int>()));
+    } else {  // SX
+        CUSOLVER_CHECK(cusolverDnSXgels(
+            s_cusolver,
+            static_cast<cusolver_int_t>(m), static_cast<cusolver_int_t>(n),
+            static_cast<cusolver_int_t>(1),
+            A.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            B.data_ptr<float>(), static_cast<cusolver_int_t>(m),
+            X.data_ptr<float>(), static_cast<cusolver_int_t>(n),
+            static_cast<void*>(ws.data_ptr<uint8_t>()), lwork_bytes,
+            &h_iter, d_info.data_ptr<int>()));
+    }
 
     int h_info = 0;
     CUDA_CHECK(cudaMemcpy(&h_info, d_info.data_ptr<int>(), sizeof(int), cudaMemcpyDeviceToHost));
-    TORCH_CHECK(h_info == 0, "cusolverDnSSgels failed, info=", h_info);
+    TORCH_CHECK(h_info == 0, "cusolverDn", variant, "gels failed, info=", h_info);
     if (h_iter < 0) {
         // iter < 0: IRS fell back to direct factorisation; result is still valid.
         // iter == -1: converged via direct method

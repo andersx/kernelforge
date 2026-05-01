@@ -44,6 +44,27 @@ except ImportError:
     pass
 
 
+def _torch_svd_solve(ZG: Any, EF: Any, rcond: float) -> Any:  # noqa: ANN401
+    """Least-squares solve via torch.linalg.svd (uses cusolverDnXgesvd 64-bit API on CUDA 12.x).
+
+    ZG: (d_rff, m) col-major CUDA float32 — transposed to (m, d_rff) before SVD.
+    EF: (m,) CUDA float32 target vector.
+    Returns: (d_rff,) CUDA float32 weight vector.
+    """
+    import torch
+
+    A = ZG.T.contiguous()  # (m, d_rff)
+    b = EF  # (m,)
+    _U, S, Vh = torch.linalg.svd(A, full_matrices=False)  # U:(m,k), S:(k,), Vh:(k,d_rff)
+    if rcond > 0.0:
+        thresh = rcond * S[0]
+    else:
+        thresh = float(torch.finfo(S.dtype).eps) * float(max(A.shape)) * S[0].item()
+    S_inv = torch.where(S > thresh, 1.0 / S, torch.zeros_like(S))
+    UTb = _U.T @ b  # (k,)
+    return Vh.T @ (S_inv * UTb)  # (d_rff,)
+
+
 def _require_cuda() -> None:
     if not _TORCH_AVAILABLE:
         msg = "PyTorch is required for CudaLocalRFFModel."
@@ -60,7 +81,7 @@ def _require_cuda_solvers() -> None:
     _require_cuda()
     if not _CUDA_SOLVERS_AVAILABLE:
         msg = (
-            "cuda_solvers is required for solver='svd'/'qr'. "
+            "cuda_solvers is required for solver='qr'/'gels'. "
             "Re-build kernelforge with CUDA, CUDAToolkit, and PyTorch."
         )
         raise ImportError(msg)
@@ -75,6 +96,18 @@ def _to_cuda_f32(arr: NDArray[np.float32] | NDArray[np.float64]) -> Any:  # noqa
 def _compact_forces(forces: NDArray[np.float64], N: NDArray[np.int32]) -> NDArray[np.float64]:
     F2 = np.asarray(forces, dtype=np.float64).reshape(len(N), -1)
     return np.concatenate([F2[i, : 3 * int(N[i])] for i in range(len(N))])
+
+
+def _build_elem_indices(
+    Q_idx_np: NDArray[np.int32],
+    N_np: NDArray[np.int32],
+    nelements: int,
+) -> list[Any]:
+    """Return per-element (mol_idx, atom_idx) pairs for all valid atoms."""
+    max_atoms = Q_idx_np.shape[1]
+    atom_range = np.arange(max_atoms)
+    valid_mask = atom_range[np.newaxis, :] < N_np[:, np.newaxis]  # (nmol, max_atoms)
+    return [np.where(valid_mask & (Q_idx_np == ei)) for ei in range(nelements)]
 
 
 def _compute_fchl19_cuda_rff(
@@ -135,6 +168,10 @@ class CudaLocalRFFModel(BaseModel):
         chunk_size: int = 256,
         solver: str = "cholesky",
         rcond: float = -1.0,
+        gels_variant: str = "SS",
+        n_pca: int | None = None,
+        pca_center: bool = False,
+        pca_whiten: bool = False,
     ) -> None:
         self.sigma = sigma
         self.l2 = l2
@@ -145,7 +182,167 @@ class CudaLocalRFFModel(BaseModel):
         self.chunk_size = chunk_size
         self.solver = solver
         self.rcond = rcond
+        self.gels_variant = gels_variant
+        self.n_pca = n_pca
+        self.pca_center = pca_center
+        self.pca_whiten = pca_whiten
         self.is_fitted_ = False
+
+    def _fit_pca(
+        self,
+        X_cuda: Any,  # (nmol, max_atoms, rep_size) float32 CUDA
+        Q_idx_np: NDArray[np.int32],
+        N_np: NDArray[np.int32],
+    ) -> None:
+        """Fit per-element PCA from training descriptors and store projection matrices."""
+        import torch
+
+        assert self.n_pca is not None
+        rep_size = int(X_cuda.shape[2])
+        n_pca = self.n_pca
+        nelements = len(self.elements)
+
+        if n_pca >= rep_size:
+            msg = f"n_pca={n_pca} must be strictly less than rep_size={rep_size}."
+            raise ValueError(msg)
+
+        elem_indices = _build_elem_indices(Q_idx_np, N_np, nelements)
+        pca_matrix_list = []
+        pca_mean_list = []
+        pca_scale_list = []
+
+        for ei, (mol_idx, atom_idx) in enumerate(elem_indices):
+            n_valid = len(mol_idx)
+            z_label = self.elements[ei]
+
+            if n_valid == 0:
+                print(
+                    f"  [PCA] element Z={z_label:2d}  WARNING: no training atoms; "
+                    "using identity projection."
+                )
+                P = torch.eye(rep_size, n_pca, dtype=torch.float32, device=X_cuda.device)
+                mean = torch.zeros(rep_size, dtype=torch.float32, device=X_cuda.device)
+                scale = torch.ones(n_pca, dtype=torch.float32, device=X_cuda.device)
+                pca_matrix_list.append(P)
+                pca_mean_list.append(mean)
+                pca_scale_list.append(scale)
+                continue
+
+            if n_valid < n_pca:
+                msg = (
+                    f"Element Z={z_label} has only {n_valid} training atoms, "
+                    f"which is fewer than n_pca={n_pca}. "
+                    "Reduce --n-pca or add more training data."
+                )
+                raise ValueError(msg)
+
+            mol_idx_t = torch.from_numpy(mol_idx).long().to(X_cuda.device)
+            atom_idx_t = torch.from_numpy(atom_idx).long().to(X_cuda.device)
+            x_elem = X_cuda[mol_idx_t, atom_idx_t, :].float()  # (n_valid, rep_size)
+
+            if self.pca_center:
+                mean = x_elem.mean(dim=0)  # (rep_size,)
+                x_elem = x_elem - mean
+            else:
+                mean = torch.zeros(rep_size, dtype=torch.float32, device=X_cuda.device)
+
+            # SVD: x_elem = U @ diag(S) @ Vh
+            # U: (n_valid, k), S: (k,), Vh: (k, rep_size), k = min(n_valid, rep_size)
+            _U, S, Vh = torch.linalg.svd(x_elem, full_matrices=False)
+            # P columns are the top n_pca principal directions
+            P = Vh[:n_pca, :].T.contiguous()  # (rep_size, n_pca)
+
+            if self.pca_whiten:
+                scale = S[:n_pca] / float(np.sqrt(n_valid)) + 1e-8
+            else:
+                scale = torch.ones(n_pca, dtype=torch.float32, device=X_cuda.device)
+
+            total_var = (S**2).sum().item()
+            explained_var = (S[:n_pca] ** 2).sum().item() / total_var * 100.0
+            print(
+                f"  [PCA] element Z={z_label:2d}  n_valid={n_valid:6d}  "
+                f"n_pca={n_pca:4d}/{rep_size:4d}  explained_var={explained_var:.1f}%"
+            )
+
+            pca_matrix_list.append(P)
+            pca_mean_list.append(mean)
+            pca_scale_list.append(scale)
+
+        # (nelements, rep_size, n_pca), (nelements, rep_size), (nelements, n_pca)
+        self._pca_matrix_cuda = torch.stack(pca_matrix_list, dim=0)
+        self._pca_mean_cuda = torch.stack(pca_mean_list, dim=0)
+        self._pca_scale_cuda = torch.stack(pca_scale_list, dim=0)
+
+    def _apply_pca_X(
+        self,
+        X_cuda: Any,  # (nmol, max_atoms, rep_size)
+        Q_idx_np: NDArray[np.int32],
+        N_np: NDArray[np.int32],
+    ) -> Any:  # (nmol, max_atoms, n_pca)
+        """Apply per-element PCA projection to descriptor tensor."""
+        import torch
+
+        assert self.n_pca is not None
+        nmol = int(X_cuda.shape[0])
+        max_atoms = int(X_cuda.shape[1])
+        n_pca = self.n_pca
+        nelements = len(self.elements)
+
+        X_pca = torch.zeros(nmol, max_atoms, n_pca, dtype=torch.float32, device=X_cuda.device)
+        elem_indices = _build_elem_indices(Q_idx_np, N_np, nelements)
+
+        for ei, (mol_idx, atom_idx) in enumerate(elem_indices):
+            if len(mol_idx) == 0:
+                continue
+            mol_idx_t = torch.from_numpy(mol_idx).long().to(X_cuda.device)
+            atom_idx_t = torch.from_numpy(atom_idx).long().to(X_cuda.device)
+            x_elem = X_cuda[mol_idx_t, atom_idx_t, :]  # (n_valid, rep_size)
+            if self.pca_center:
+                x_elem = x_elem - self._pca_mean_cuda[ei]
+            x_proj = x_elem @ self._pca_matrix_cuda[ei]  # (n_valid, n_pca)
+            if self.pca_whiten:
+                x_proj = x_proj / self._pca_scale_cuda[ei]
+            X_pca[mol_idx_t, atom_idx_t] = x_proj
+
+        return X_pca
+
+    def _apply_pca_dX(
+        self,
+        dX_cuda: Any,  # (nmol, max_atoms, rep_size, ncoords)
+        Q_idx_np: NDArray[np.int32],
+        N_np: NDArray[np.int32],
+    ) -> Any:  # (nmol, max_atoms, n_pca, ncoords)
+        """Apply per-element PCA projection to descriptor gradient tensor."""
+        import torch
+
+        assert self.n_pca is not None
+        nmol = int(dX_cuda.shape[0])
+        max_atoms = int(dX_cuda.shape[1])
+        ncoords = int(dX_cuda.shape[3])
+        n_pca = self.n_pca
+        nelements = len(self.elements)
+
+        dX_pca = torch.zeros(
+            nmol, max_atoms, n_pca, ncoords, dtype=torch.float32, device=dX_cuda.device
+        )
+        elem_indices = _build_elem_indices(Q_idx_np, N_np, nelements)
+
+        for ei, (mol_idx, atom_idx) in enumerate(elem_indices):
+            if len(mol_idx) == 0:
+                continue
+            mol_idx_t = torch.from_numpy(mol_idx).long().to(dX_cuda.device)
+            atom_idx_t = torch.from_numpy(atom_idx).long().to(dX_cuda.device)
+            # dx_elem: (n_valid, rep_size, ncoords)
+            dx_elem = dX_cuda[mol_idx_t, atom_idx_t, :, :]
+            # Project: (n_valid, ncoords, rep_size) @ (rep_size, n_pca) -> (n_valid, ncoords, n_pca)
+            P = self._pca_matrix_cuda[ei]  # (rep_size, n_pca)
+            dx_proj = dx_elem.permute(0, 2, 1) @ P  # (n_valid, ncoords, n_pca)
+            dx_proj = dx_proj.permute(0, 2, 1).contiguous()  # (n_valid, n_pca, ncoords)
+            if self.pca_whiten:
+                dx_proj = dx_proj / self._pca_scale_cuda[ei].view(1, -1, 1)
+            dX_pca[mol_idx_t, atom_idx_t] = dx_proj
+
+        return dX_pca
 
     def _fit(
         self,
@@ -176,7 +373,13 @@ class CudaLocalRFFModel(BaseModel):
                 "Use 'cholesky', 'svd', 'qr', or 'gels'."
             )
             raise ValueError(msg)
-        if self.solver in ("svd", "qr", "gels"):
+        if self.solver == "gels" and self.gels_variant not in ("SS", "SH", "SB", "SX"):
+            msg = (
+                f"CudaLocalRFFModel: unknown gels_variant '{self.gels_variant}'. "
+                "Use 'SS', 'SH', 'SB', or 'SX'."
+            )
+            raise ValueError(msg)
+        if self.solver in ("qr", "gels"):
             _require_cuda_solvers()
         if energies is None:
             msg = f"energies must be provided for {mode} mode"
@@ -210,6 +413,15 @@ class CudaLocalRFFModel(BaseModel):
         self._n_train = nmol
         self._max_atoms = max_atoms
         self._rep_size = rep_size
+
+        if self.n_pca is not None:
+            self._fit_pca(X_cuda, Q_idx_np, N_np)
+            X_cuda = self._apply_pca_X(X_cuda, Q_idx_np, N_np)
+            if dX_cuda is not None:
+                dX_cuda = self._apply_pca_dX(dX_cuda, Q_idx_np, N_np)
+            rep_size = self.n_pca
+            self._rep_size = rep_size
+            t0 = _t(f"Step 1b fit+apply PCA  (n_pca={self.n_pca})", t0)
 
         rng = np.random.default_rng(self.seed)
         W_np: NDArray[np.float32] = rng.standard_normal((nelements, rep_size, self.d_rff)).astype(
@@ -252,15 +464,13 @@ class CudaLocalRFFModel(BaseModel):
                 del Z_cuda, G_cuda
                 t0 = _t("Step 3c cat [Z;G] col-major and [E;F]", t0)
                 if self.solver == "svd":
-                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
-                        ZG_cuda, EF_cuda, float(self.rcond), True
-                    ).cuda()
-                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq)", t0)
+                    weights_cuda = _torch_svd_solve(ZG_cuda, EF_cuda, float(self.rcond))
+                    t0 = _t("Step 4  _torch_svd_solve (SVD lstsq, 64-bit)", t0)
                 elif self.solver == "gels":
                     weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
-                        ZG_cuda, EF_cuda, True
+                        ZG_cuda, EF_cuda, True, self.gels_variant
                     ).cuda()
-                    t0 = _t("Step 4  cuda_solve_gels (IRS lstsq)", t0)
+                    t0 = _t(f"Step 4  cuda_solve_gels/{self.gels_variant} (IRS lstsq)", t0)
                 else:
                     weights_cuda = _solvers_ext.cuda_solve_qr(  # type: ignore[union-attr]
                         ZG_cuda, EF_cuda, True
@@ -275,15 +485,13 @@ class CudaLocalRFFModel(BaseModel):
                 )
                 t0 = _t("Step 3  rff_features_elemental (materialize Z col-major)", t0)
                 if self.solver == "svd":
-                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
-                        Z_cuda, Y_cuda, float(self.rcond), True
-                    ).cuda()
-                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq)", t0)
+                    weights_cuda = _torch_svd_solve(Z_cuda, Y_cuda, float(self.rcond))
+                    t0 = _t("Step 4  _torch_svd_solve (SVD lstsq, 64-bit)", t0)
                 elif self.solver == "gels":
                     weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
-                        Z_cuda, Y_cuda, True
+                        Z_cuda, Y_cuda, True, self.gels_variant
                     ).cuda()
-                    t0 = _t("Step 4  cuda_solve_gels (IRS lstsq)", t0)
+                    t0 = _t(f"Step 4  cuda_solve_gels/{self.gels_variant} (IRS lstsq)", t0)
                 else:
                     weights_cuda = _solvers_ext.cuda_solve_qr(  # type: ignore[union-attr]
                         Z_cuda, Y_cuda, True
@@ -412,6 +620,11 @@ class CudaLocalRFFModel(BaseModel):
         )
         t0 = _tp(f"compute_fchl19 (GPU, {'grad' if need_gradients else 'no grad'})", t0)
         N_cuda = _to_cuda_i32(N_np)
+        if self.n_pca is not None:
+            X_cuda = self._apply_pca_X(X_cuda, _Q_idx_np, N_np)
+            if dX_cuda is not None:
+                dX_cuda = self._apply_pca_dX(dX_cuda, _Q_idx_np, N_np)
+            t0 = _tp(f"apply PCA  (n_pca={self.n_pca})", t0)
         E_cuda = _rff_ext.rff_predict_energy_elemental(  # type: ignore[union-attr]
             X_cuda,
             Q_idx_cuda,
@@ -450,7 +663,7 @@ class CudaLocalRFFModel(BaseModel):
         return E_pred, F_pred
 
     def _arrays_to_save(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "model_class": "CudaLocalRFFModel",
             "training_mode": self.training_mode_,
             "sigma": self.sigma,
@@ -462,6 +675,10 @@ class CudaLocalRFFModel(BaseModel):
             "chunk_size": self.chunk_size,
             "solver": self.solver,
             "rcond": self.rcond,
+            "gels_variant": self.gels_variant,
+            "n_pca": self.n_pca if self.n_pca is not None else -1,
+            "pca_center": self.pca_center,
+            "pca_whiten": self.pca_whiten,
             "baseline_elements": self.baseline_elements_,
             "element_energies": self.element_energies_,
             "weights": self._weights_cuda.cpu().numpy(),
@@ -477,6 +694,11 @@ class CudaLocalRFFModel(BaseModel):
             "f_train": self._f_train,
             "f_pred_train": self._f_pred_train,
         }
+        if self.n_pca is not None:
+            result["pca_matrix"] = self._pca_matrix_cuda.cpu().numpy()
+            result["pca_mean"] = self._pca_mean_cuda.cpu().numpy()
+            result["pca_scale"] = self._pca_scale_cuda.cpu().numpy()
+        return result
 
     def _load_from_arrays(self, data: np.lib.npyio.NpzFile) -> None:
         _require_cuda()
@@ -489,6 +711,11 @@ class CudaLocalRFFModel(BaseModel):
         self.chunk_size = int(data["chunk_size"]) if "chunk_size" in data else 256
         self.solver = str(data["solver"]) if "solver" in data else "cholesky"
         self.rcond = float(data["rcond"]) if "rcond" in data else -1.0
+        self.gels_variant = str(data["gels_variant"]) if "gels_variant" in data else "SS"
+        n_pca_val = int(data["n_pca"]) if "n_pca" in data else -1
+        self.n_pca = n_pca_val if n_pca_val > 0 else None
+        self.pca_center = bool(data["pca_center"]) if "pca_center" in data else False
+        self.pca_whiten = bool(data["pca_whiten"]) if "pca_whiten" in data else False
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = cast(TrainingMode, str(data["training_mode"]))
@@ -509,3 +736,7 @@ class CudaLocalRFFModel(BaseModel):
         self._W_cuda = _to_cuda_f32(self._W_np)
         self._b_cuda = _to_cuda_f32(self._b_np)
         self._weights_cuda = _to_cuda_f32(self._weights_np)
+        if self.n_pca is not None:
+            self._pca_matrix_cuda = _to_cuda_f32(data["pca_matrix"].astype(np.float32))
+            self._pca_mean_cuda = _to_cuda_f32(data["pca_mean"].astype(np.float32))
+            self._pca_scale_cuda = _to_cuda_f32(data["pca_scale"].astype(np.float32))
