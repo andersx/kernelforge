@@ -115,12 +115,104 @@ def test_fit_predict_smoke() -> None:
     assert np.all(np.isfinite(F_pred))
 
 
-def test_energy_only_raises() -> None:
-    """energy_only mode must raise NotImplementedError."""
+# ---------------------------------------------------------------------------
+# energy_only mode
+# ---------------------------------------------------------------------------
+
+
+def test_energy_only_smoke() -> None:
+    """energy_only mode: fit and predict without error; check output shapes."""
+    coords, z, E, _ = _load_ethanol()
+    tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
+    ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
+
+    model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
+    model.fit(tr, ztr, energies=E[:_N_TRAIN])
+
+    assert model.is_fitted_
+    assert model.training_mode_ == "energy_only"
+    assert model._M == 36
+
+    E_pred, _F_pred = model.predict(te, zte)
+    assert E_pred.shape == (_N_TEST,)
+    assert np.all(np.isfinite(E_pred))
+
+
+def test_energy_only_cuda_vs_cpu() -> None:
+    """energy_only CudaGlobalKRRModel energies must agree with GlobalKRRModel to 1e-3."""
+    coords, z, E, _ = _load_ethanol()
+    tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
+    ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
+
+    sigma, l2 = 3.0, 1e-5
+
+    cpu_model = GlobalKRRModel(sigma=sigma, l2=l2)
+    cpu_model.fit(tr, ztr, energies=E[:_N_TRAIN])
+    E_cpu, _ = cpu_model.predict(te, zte)
+
+    gpu_model = CudaGlobalKRRModel(sigma=sigma, l2=l2)
+    gpu_model.fit(tr, ztr, energies=E[:_N_TRAIN])
+    E_gpu, _ = gpu_model.predict(te, zte)
+
+    np.testing.assert_allclose(
+        E_gpu,
+        E_cpu,
+        rtol=1e-3,
+        atol=1e-2,
+        err_msg="energy_only: CUDA and CPU energy predictions disagree",
+    )
+
+
+def test_energy_only_train_score() -> None:
+    """energy_only train_score_ must contain finite 'energy' MAE."""
     coords, z, E, _ = _load_ethanol()
     model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
-    with pytest.raises(NotImplementedError, match="energy_and_force"):
-        model.fit(coords, z, energies=E)
+    model.fit(coords[:_N_TRAIN], z[:_N_TRAIN], energies=E[:_N_TRAIN])
+
+    scores = model.train_score_
+    assert "energy" in scores
+    assert "force" not in scores
+    assert np.isfinite(scores["energy"].mae)
+    assert scores["energy"].mae >= 0.0
+
+
+def test_energy_only_save_load(tmp_path: Path) -> None:
+    """energy_only save/load roundtrip must produce identical energy predictions."""
+    coords, z, E, _ = _load_ethanol()
+    tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
+    ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
+
+    model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
+    model.fit(tr, ztr, energies=E[:_N_TRAIN])
+    E_orig, _ = model.predict(te, zte)
+
+    path = tmp_path / "cuda_energy_only.npz"
+    model.save(path)
+
+    loaded = CudaGlobalKRRModel.load(path)
+    assert isinstance(loaded, CudaGlobalKRRModel)
+    assert loaded.is_fitted_
+    assert loaded.training_mode_ == "energy_only"
+    assert loaded.sigma == model.sigma
+
+    E_load, _ = loaded.predict(te, zte)
+    np.testing.assert_allclose(
+        E_orig, E_load, rtol=1e-6, err_msg="energy_only: energies changed after save/load"
+    )
+
+
+def test_predict_torch_raises_for_energy_only() -> None:
+    """predict_torch must raise RuntimeError for energy_only models."""
+    import torch
+
+    coords, z, E, _ = _load_ethanol()
+    model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
+    model.fit(coords[:_N_TRAIN], z[:_N_TRAIN], energies=E[:_N_TRAIN])
+
+    dummy_X = torch.randn(1, 36).cuda().float()
+    dummy_dX = torch.randn(1, 27, 36).cuda().float()
+    with pytest.raises(RuntimeError, match="energy_and_force"):
+        model.predict_torch(dummy_X, dummy_dX)
 
 
 def test_force_only_raises() -> None:
@@ -250,7 +342,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
 
 def test_predict_torch() -> None:
     """predict_torch must return CUDA tensors matching predict() to float32."""
-    from kernelforge import invdist_repr
+    from kernelforge import cuda_invdist_repr
 
     coords, z, E, F = _load_ethanol()
     tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
@@ -266,17 +358,13 @@ def test_predict_torch() -> None:
     _E_np, F_np = model.predict(te, zte)
     E_raw, _F_raw = model._predict(te, zte)
 
-    # Build float32 CUDA tensors from the same representations
-    X_list, dX_list = [], []
-    for c in te:
-        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(
-            np.asarray(c, dtype=np.float64), 1e-12
-        )
-        X_list.append(x.astype(np.float32))
-        dX_list.append(dx.astype(np.float32))
-
-    X_cuda = torch.tensor(np.array(X_list)).cuda()
-    dX_cuda = torch.tensor(np.array(dX_list)).cuda()
+    # Build float32 CUDA tensors via the same GPU path used internally
+    n_atoms = te[0].shape[0]
+    coords_np = np.stack([c.astype(np.float32) for c in te], axis=0)  # (N_test, n_atoms, 3)
+    coords_cuda = torch.from_numpy(np.ascontiguousarray(coords_np)).cuda()
+    X_cuda, dX_cuda = cuda_invdist_repr.inverse_distance_upper_and_jacobian(
+        coords_cuda, n_atoms, model.eps
+    )
 
     E_t, F_t = model.predict_torch(X_cuda, dX_cuda)
 
@@ -371,3 +459,192 @@ def test_kernel_gaussian_full_matvec_shape() -> None:
     assert F.shape == (N_q, D)
     assert E.device.type == "cuda"
     assert F.device.type == "cuda"
+
+
+# ---------------------------------------------------------------------------
+# Numerical equivalence: CUDA RFP kernel vs CPU double-precision reference
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 5, 8, 17, 32])
+@pytest.mark.parametrize("sigma", [0.5, 1.0, 2.5])
+@pytest.mark.parametrize("seed", [0, 42])
+def test_kernel_gaussian_symm_rfp_cuda_vs_cpu(n: int, sigma: float, seed: int) -> None:
+    """CUDA kernel_gaussian_symm_rfp must agree with the CPU reference within fp32 tolerance.
+
+    The CPU function (global_kernels.kernel_gaussian_symm_rfp) computes
+    K[i,j] = exp(-||X_i - X_j||^2 / (2*sigma^2)) in float64, stored in RFP
+    format with uplo='L', transr='N'.
+
+    The CUDA function (cuda_global_kernels.kernel_gaussian_symm_rfp) must
+    produce the same values in float32, stored in the same RFP convention.
+
+    Both packed buffers are unpacked via kernelmath.rfp_to_full and symmetrised
+    before comparison so that convention differences in the unused triangle do
+    not cause false failures.
+    """
+    from kernelforge import global_kernels, kernelmath
+
+    rng = np.random.default_rng(seed)
+    d = min(5, n)
+    X_f64 = rng.standard_normal((n, d))
+
+    # --- CPU reference (float64) ---
+    K_rfp_cpu = global_kernels.kernel_gaussian_symm_rfp(X_f64, sigma)
+    K_cpu_tri = kernelmath.rfp_to_full(K_rfp_cpu, n, uplo="L", transr="N")
+    K_cpu = np.tril(K_cpu_tri) + np.tril(K_cpu_tri, -1).T  # symmetrise
+
+    # --- CUDA (float32) ---
+    X_f32 = torch.tensor(X_f64, dtype=torch.float32).cuda()
+    K_rfp_cuda = cuda_global_kernels.kernel_gaussian_symm_rfp(X_f32, sigma)
+    assert K_rfp_cuda.shape == (n * (n + 1) // 2,)
+    assert K_rfp_cuda.dtype == torch.float32
+
+    K_rfp_cuda_np = K_rfp_cuda.cpu().numpy().astype(np.float64)
+    K_cuda_tri = kernelmath.rfp_to_full(K_rfp_cuda_np, n, uplo="U", transr="N")
+    K_cuda = np.tril(K_cuda_tri) + np.tril(K_cuda_tri, -1).T  # symmetrise
+
+    # --- Compare ---
+    # Diagonal must be 1.0 (self-distance = 0)
+    np.testing.assert_allclose(
+        np.diag(K_cuda),
+        np.ones(n),
+        rtol=1e-5,
+        atol=1e-5,
+        err_msg=f"CUDA kernel diagonal not 1.0 (sigma={sigma}, n={n})",
+    )
+
+    # Full matrix must agree within float32 precision
+    np.testing.assert_allclose(
+        K_cuda,
+        K_cpu,
+        rtol=1e-5,
+        atol=1e-5,
+        err_msg=f"CUDA and CPU RFP kernels differ (sigma={sigma}, n={n})",
+    )
+
+
+@pytest.mark.parametrize("n", [2, 3, 4, 5, 7, 8])
+def test_kernel_gaussian_symm_rfp_norms_step(n: int) -> None:
+    """Regression test for the curfpSsfr2 norms-addition step (Phase 3).
+
+    Uses orthonormal columns (||X[:,i]||=1 for all i) so that the squared
+    distance simplifies to a known value:
+
+        ||X_i - X_j||^2 = ||X_i||^2 + ||X_j||^2 - 2*<X_i,X_j>
+                        = 2 - 2*<X_i,X_j>
+
+    For the identity matrix (n <= M), <X_i,X_j> = delta_ij, so:
+        K[i,i] = exp(0)           = 1.0
+        K[i,j] = exp(-1/sigma^2)  for i != j
+
+    This directly exercises the norms-addition path: if Phase 3 is wrong
+    (zero norms, wrong sign, etc.) the off-diagonal values will differ.
+    """
+    import torch
+
+    from kernelforge import cuda_global_kernels, kernelmath
+
+    sigma = 1.0
+
+    # Build X = first n columns of the n*n identity (each col has norm 1)
+    X_f32 = torch.eye(n, dtype=torch.float32).cuda()  # shape (n, n)
+
+    K_rfp_cuda = cuda_global_kernels.kernel_gaussian_symm_rfp(X_f32, sigma)
+    K_rfp_np = K_rfp_cuda.cpu().numpy().astype(np.float64)
+    K_tri = kernelmath.rfp_to_full(K_rfp_np, n, uplo="U", transr="N")
+    K = np.tril(K_tri) + np.tril(K_tri, -1).T
+
+    # Diagonal must be 1.0
+    np.testing.assert_allclose(
+        np.diag(K),
+        np.ones(n),
+        rtol=1e-5,
+        atol=1e-5,
+        err_msg=f"Diagonal not 1.0 for n={n}",
+    )
+
+    # Off-diagonal: ||e_i - e_j||^2 = 2, so K[i,j] = exp(-2/(2*sigma^2)) = exp(-1)
+    expected_off = np.exp(-1.0)
+    mask = ~np.eye(n, dtype=bool)
+    np.testing.assert_allclose(
+        K[mask],
+        expected_off,
+        rtol=1e-5,
+        atol=1e-5,
+        err_msg=f"Off-diagonal != exp(-1) for n={n}: norms-addition (curfpSsfr2) likely wrong",
+    )
+
+
+# ---------------------------------------------------------------------------
+# kernel_gaussian_full_symm_rfp — shape and dtype
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("n", "d", "m"), [(2, 2, 3), (3, 3, 4), (5, 4, 6)])
+def test_kernel_gaussian_full_symm_rfp_shape(n: int, d: int, m: int) -> None:
+    """kernel_gaussian_full_symm_rfp must return a 1-D float32 CUDA tensor of
+    the correct RFP size BIG*(BIG+1)//2, where BIG = N*(1+D)."""
+    rng = np.random.default_rng(0)
+    X = torch.tensor(rng.standard_normal((n, m)), dtype=torch.float32).cuda()
+    dX = torch.tensor(rng.standard_normal((n, d, m)), dtype=torch.float32).cuda()
+
+    K_rfp = cuda_global_kernels.kernel_gaussian_full_symm_rfp(X, dX, sigma=1.0)
+
+    BIG = n * (1 + d)
+    expected_len = BIG * (BIG + 1) // 2
+    assert K_rfp.shape == (expected_len,), f"Expected shape ({expected_len},), got {K_rfp.shape}"
+    assert K_rfp.dtype == torch.float32, f"Expected float32, got {K_rfp.dtype}"
+    assert K_rfp.device.type == "cuda", f"Expected CUDA tensor, got {K_rfp.device}"
+
+
+# ---------------------------------------------------------------------------
+# kernel_gaussian_full_symm_rfp — numerical agreement with dense reference
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("n", "d", "m"), [(2, 2, 3), (3, 3, 4), (4, 3, 5), (5, 4, 6)])
+@pytest.mark.parametrize("sigma", [0.5, 1.0, 2.5])
+@pytest.mark.parametrize("seed", [0, 7])
+def test_kernel_gaussian_full_symm_rfp_cuda_vs_dense(
+    n: int, d: int, m: int, sigma: float, seed: int
+) -> None:
+    """kernel_gaussian_full_symm_rfp must agree with kernel_gaussian_full_symm
+    (dense) within float32 tolerance.
+
+    The dense function fills both triangles.  The RFP function stores only the
+    lower triangle (TRANSR=N, UPLO=L); it is unpacked via kernelmath.rfp_to_full
+    with uplo='U', transr='N' and then symmetrised for comparison.
+    """
+    from kernelforge import kernelmath
+
+    rng = np.random.default_rng(seed)
+    X_np = rng.standard_normal((n, m)).astype(np.float32)
+    dX_np = rng.standard_normal((n, d, m)).astype(np.float32)
+
+    X = torch.tensor(X_np).cuda()
+    dX = torch.tensor(dX_np).cuda()
+
+    # --- Dense reference (fully symmetric, both triangles) ---
+    K_dense = cuda_global_kernels.kernel_gaussian_full_symm(X, dX, sigma)
+    K_dense_np = K_dense.cpu().numpy().astype(np.float64)
+
+    # --- RFP result ---
+    K_rfp = cuda_global_kernels.kernel_gaussian_full_symm_rfp(X, dX, sigma)
+    K_rfp_np = K_rfp.cpu().numpy().astype(np.float64)
+
+    BIG = n * (1 + d)
+    # Unpack RFP (TRANSR=N, UPLO=L stored) — rfp_to_full with uplo='U', transr='N'
+    K_rfp_tri = kernelmath.rfp_to_full(K_rfp_np, BIG, uplo="U", transr="N")
+    K_rfp_full = np.tril(K_rfp_tri) + np.tril(K_rfp_tri, -1).T  # symmetrise
+
+    np.testing.assert_allclose(
+        K_rfp_full,
+        K_dense_np,
+        rtol=1e-4,
+        atol=1e-4,
+        err_msg=(
+            f"kernel_gaussian_full_symm_rfp != kernel_gaussian_full_symm "
+            f"(n={n}, d={d}, m={m}, sigma={sigma}, seed={seed})"
+        ),
+    )

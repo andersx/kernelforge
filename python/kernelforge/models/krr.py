@@ -78,7 +78,15 @@ class LocalKRRModel(BaseModel):
         energies: NDArray[np.float64] | None,
         forces: NDArray[np.float64] | None,
     ) -> None:
+        import time
+
+        def _t(label: str, t0: float) -> float:
+            dt = time.perf_counter() - t0
+            print(f"  [CPU]  {label:<45s} {dt * 1000:8.2f} ms")
+            return time.perf_counter()
+
         mode = self.training_mode_
+        t0 = time.perf_counter()
 
         X, dX, Q_krr, _Q_rff, N = compute_fchl19(
             coords_list,
@@ -87,6 +95,7 @@ class LocalKRRModel(BaseModel):
             with_gradients=True,
             repr_params=self.repr_params,
         )
+        t0 = _t("Step 1  compute_fchl19 (CPU, f64)", t0)
 
         # Store training representations for prediction kernels
         self._X_tr = X
@@ -135,20 +144,29 @@ class LocalKRRModel(BaseModel):
             if dX is None:
                 msg = "dX is None in energy_and_force mode — internal error"
                 raise RuntimeError(msg)
+            nm = len(coords_list)
+            naq = int(np.sum(N) * 3)
+            print(
+                f"  [CPU]    nm={nm}  max_atoms={X.shape[1]}  rep={X.shape[2]}  "
+                f"naq={naq}  BIG={nm + naq}"
+            )
             # Forces stored with negated sign for full-kernel convention:
             # the full kernel computes +dK/dR for the force-energy block,
             # so we pass -F (= +dE/dR) as training labels.
             F_neg = -forces  # (n_train, n_atoms*3)  dE/dR = -F
             y_tr = np.concatenate([energies, F_neg.ravel()])
             K_rfp = local_kernels.kernel_gaussian_full_symm_rfp(X, dX, Q_krr, N, self.sigma)
+            t0 = _t("Step 2  kernel_gaussian_full_symm_rfp (CPU)", t0)
             self._y_train = y_tr
             self._alpha = kernelmath.cho_solve_rfp(K_rfp, y_tr, l2=self.l2)
+            t0 = _t("Step 3  cho_solve_rfp (CPU, f64)", t0)
             # Precompute descriptor-space force coefficients for fast inference.
             # alpha[n_train:] are the Cartesian force coefficients.
             alpha_F = self._alpha[self._n_train :]
             self._alpha_desc = local_kernels.kernel_gaussian_local_compute_alpha_desc(
                 dX, Q_krr, N, alpha_F
             )
+            _t("Step 4  compute_alpha_desc (CPU)", t0)
 
     # ------------------------------------------------------------------
     # Internal predict

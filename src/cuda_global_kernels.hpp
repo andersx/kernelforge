@@ -67,4 +67,69 @@ void kernel_gaussian_full_matvec_cu(
     int N_q, int N_t, int M, int D
 );
 
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_full_symm_rfp_cu
+//
+// Build the symmetric energy+force kernel matrix K_full for training,
+// stored directly in RFP packed format (TRANSR=N, UPLO=L).
+// No dense BIG×BIG intermediate — each lower-triangle element is written
+// once via rfp_index_lower_N; no mirror step needed.
+//
+// Parameters (device pointers, cuBLAS col-major):
+//   d_X      : (M, N)              — descriptor columns
+//   d_dXT    : (M, N*D)            — Jacobian columns
+//   d_K_rfp  : (BIG*(BIG+1)/2,)   — output RFP buffer, BIG = N*(1+D)
+//   sigma, N, M, D: dimensions
+// ---------------------------------------------------------------------------
+void kernel_gaussian_full_symm_rfp_cu(
+    const float *d_X,
+    const float *d_dXT,
+    float       *d_K_rfp,
+    float        sigma,
+    int N, int M, int D
+);
+
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_symm_rfp_cu
+//
+// Build the energy-only N×N Gaussian kernel matrix in RFP packed format.
+// Convention: TRANSR=N, UPLO=L.
+//
+// Parameters (device pointers):
+//   d_X    : (M, N) col-major — descriptor columns
+//   d_K_rfp: (N*(N+1)/2,) — output RFP buffer
+//   sigma  : Gaussian length-scale
+//   N, M   : dimensions
+// ---------------------------------------------------------------------------
+void kernel_gaussian_symm_rfp_cu(
+    const float *d_X,
+    float       *d_K_rfp,
+    float        sigma,
+    int N, int M
+);
+
+
+// ---------------------------------------------------------------------------
+// rfp_potrf_cu
+//
+// Adds l2 to the diagonal of a RFP matrix, then Cholesky-factorises in-place.
+// On exit d_K_rfp holds the lower Cholesky factor L in RFP format.
+// *info: 0 = success, >0 = matrix not positive definite (leading minor).
+// Convention: TRANSR=N, UPLO=L.
+// ---------------------------------------------------------------------------
+void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info);
+
+
+// ---------------------------------------------------------------------------
+// rfp_potrs_cu
+//
+// Triangular solve with Cholesky factor from rfp_potrf_cu.
+// Solves (L * L^T) * X = B in-place, overwriting d_B.
+// d_B is (N, nrhs) col-major with leading dimension N.
+// Convention: TRANSR=N, UPLO=L.
+// ---------------------------------------------------------------------------
+void rfp_potrs_cu(const float *d_L_rfp, float *d_B, int N, int nrhs);
+
 }  // namespace kf

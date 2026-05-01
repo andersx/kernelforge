@@ -141,6 +141,109 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
 
 
 // ---------------------------------------------------------------------------
+// kernel_gaussian_full_symm_rfp
+// ---------------------------------------------------------------------------
+
+torch::Tensor kernel_gaussian_full_symm_rfp(
+    torch::Tensor X,   // (N, M)
+    torch::Tensor dX,  // (N, D, M)
+    double sigma)
+{
+    check_cuda_float32(X,  "X");
+    check_cuda_float32(dX, "dX");
+    TORCH_CHECK(X.dim() == 2,  "X must be 2-D (N, M)");
+    TORCH_CHECK(dX.dim() == 3, "dX must be 3-D (N, D, M)");
+    TORCH_CHECK(sigma > 0.0,   "sigma must be positive");
+
+    int N = (int)X.size(0);
+    int M = (int)X.size(1);
+    int D = (int)dX.size(1);
+    TORCH_CHECK(dX.size(0) == N, "dX.size(0) must equal N");
+    TORCH_CHECK(dX.size(2) == M, "dX.size(2) must equal M");
+
+    long long BIG = (long long)N * (1 + D);
+    long long nt  = BIG * (BIG + 1) / 2;
+
+    auto K_rfp = torch::empty({nt}, X.options());
+
+    // Reshape dX: (N, D, M) → (N*D, M), same contiguous storage.
+    auto dXT = dX.reshape({(long long)N * D, M});
+
+    kf::kernel_gaussian_full_symm_rfp_cu(
+        X.data_ptr<float>(),
+        dXT.data_ptr<float>(),
+        K_rfp.data_ptr<float>(),
+        (float)sigma, N, M, D);
+
+    return K_rfp;
+}
+
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_symm_rfp
+// ---------------------------------------------------------------------------
+
+torch::Tensor kernel_gaussian_symm_rfp(
+    torch::Tensor X,   // (N, M)
+    double sigma)
+{
+    check_cuda_float32(X, "X");
+    TORCH_CHECK(X.dim() == 2, "X must be 2-D (N, M)");
+    TORCH_CHECK(sigma > 0.0, "sigma must be positive");
+
+    int N = (int)X.size(0);
+    int M = (int)X.size(1);
+
+    long long nt = (long long)N * (N + 1) / 2;
+    auto K_rfp = torch::empty({nt}, X.options());
+
+    kf::kernel_gaussian_symm_rfp_cu(
+        X.data_ptr<float>(),
+        K_rfp.data_ptr<float>(),
+        (float)sigma, N, M);
+
+    return K_rfp;
+}
+
+
+// ---------------------------------------------------------------------------
+// rfp_potrf
+// ---------------------------------------------------------------------------
+
+int rfp_potrf(torch::Tensor K_rfp, int N, double l2)
+{
+    check_cuda_float32(K_rfp, "K_rfp");
+    TORCH_CHECK(K_rfp.dim() == 1, "K_rfp must be 1-D");
+    TORCH_CHECK(K_rfp.size(0) == (long long)N * (N + 1) / 2,
+                "K_rfp.size(0) must equal N*(N+1)/2");
+
+    int info = 0;
+    kf::rfp_potrf_cu(K_rfp.data_ptr<float>(), N, (float)l2, &info);
+    return info;
+}
+
+
+// ---------------------------------------------------------------------------
+// rfp_potrs
+// ---------------------------------------------------------------------------
+
+void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B)
+{
+    check_cuda_float32(L_rfp, "L_rfp");
+    check_cuda_float32(B,     "B");
+    TORCH_CHECK(L_rfp.dim() == 1, "L_rfp must be 1-D");
+    TORCH_CHECK(B.dim() == 2,     "B must be 2-D (N, nrhs)");
+
+    int N    = (int)B.size(0);
+    int nrhs = (int)B.size(1);
+    TORCH_CHECK(L_rfp.size(0) == (long long)N * (N + 1) / 2,
+                "L_rfp.size(0) must equal N*(N+1)/2");
+
+    kf::rfp_potrs_cu(L_rfp.data_ptr<float>(), B.data_ptr<float>(), N, nrhs);
+}
+
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -157,9 +260,24 @@ Functions
 kernel_gaussian_full_symm(X, dX, sigma)
     Build the symmetric (N*(1+D))² energy+force kernel matrix for training.
 
+kernel_gaussian_full_symm_rfp(X, dX, sigma)
+    Build the energy+force kernel matrix directly in RFP packed format
+    (TRANSR=N, UPLO=L).  No dense BIG×BIG intermediate is allocated.
+
 kernel_gaussian_full_matvec(X_q, dX_q, X_t, alpha_E, alpha_desc_F, sigma)
     Contracted E+F inference using the J^T·alpha trick (no full K_test_train
     materialisation).
+
+kernel_gaussian_symm_rfp(X, sigma)
+    Build the energy-only N×N Gaussian kernel matrix in RFP packed format.
+
+rfp_potrf(K_rfp, N, l2)
+    Cholesky factorisation of an RFP matrix (with optional diagonal shift l2).
+    Returns *info* (0 = success).
+
+rfp_potrs(L_rfp, B)
+    Triangular solve with Cholesky factor from rfp_potrf.  B is overwritten
+    with the solution X.
 )doc";
 
     m.def("kernel_gaussian_full_symm",
@@ -183,6 +301,35 @@ Returns
 -------
 K_full : torch.Tensor, shape (N*(1+D), N*(1+D)), float32, CUDA
     Fully symmetric kernel matrix (both triangles filled).
+)doc");
+
+    m.def("kernel_gaussian_full_symm_rfp",
+          &kernel_gaussian_full_symm_rfp,
+          py::arg("X"),
+          py::arg("dX"),
+          py::arg("sigma"),
+          R"doc(
+Build the energy+force kernel matrix directly in RFP packed format.
+
+Like kernel_gaussian_full_symm but stores the result as a 1-D RFP packed
+buffer (TRANSR=N, UPLO=L) instead of a dense BIG×BIG matrix.  Each
+lower-triangle element is written once; no dense intermediate is allocated
+and no mirror step is performed.
+
+Parameters
+----------
+X : torch.Tensor, shape (N, M), float32, CUDA
+    Training descriptors.
+dX : torch.Tensor, shape (N, D, M), float32, CUDA
+    Training Jacobians.
+sigma : float
+    Gaussian length-scale.
+
+Returns
+-------
+K_rfp : torch.Tensor, shape (BIG*(BIG+1)//2,), float32, CUDA
+    Lower-triangular RFP packed kernel matrix (TRANSR=N, UPLO=L),
+    where BIG = N*(1+D).
 )doc");
 
     m.def("kernel_gaussian_full_matvec",
@@ -220,5 +367,76 @@ Returns
 E_pred : torch.Tensor, shape (N_q,), float32, CUDA
 F_pred : torch.Tensor, shape (N_q, D), float32, CUDA
     Physical forces F = -dE/dR.
+)doc");
+
+    m.def("kernel_gaussian_symm_rfp",
+          &kernel_gaussian_symm_rfp,
+          py::arg("X"),
+          py::arg("sigma"),
+          R"doc(
+Build the energy-only N×N Gaussian kernel matrix in RFP packed format.
+
+Uses TRANSR=N, UPLO=L convention throughout.  The packed buffer has
+N*(N+1)/2 elements and can be passed directly to rfp_potrf / rfp_potrs.
+
+Parameters
+----------
+X : torch.Tensor, shape (N, M), float32, CUDA
+    Training descriptors.
+sigma : float
+    Gaussian length-scale.
+
+Returns
+-------
+K_rfp : torch.Tensor, shape (N*(N+1)//2,), float32, CUDA
+    Lower-triangular RFP packed kernel matrix (TRANSR=N, UPLO=L).
+)doc");
+
+    m.def("rfp_potrf",
+          &rfp_potrf,
+          py::arg("K_rfp"),
+          py::arg("N"),
+          py::arg("l2") = 0.0,
+          R"doc(
+Cholesky factorisation of an RFP-packed symmetric positive definite matrix.
+
+Optionally adds l2 to the diagonal before factorising (Tikhonov
+regularisation).  The input buffer is overwritten with the lower Cholesky
+factor L.
+
+Convention: TRANSR=N, UPLO=L.
+
+Parameters
+----------
+K_rfp : torch.Tensor, shape (N*(N+1)//2,), float32, CUDA
+    RFP-packed matrix.  Modified in-place.
+N : int
+    Matrix dimension.
+l2 : float, default 0.0
+    Diagonal regularisation added before factorisation.
+
+Returns
+-------
+info : int
+    0 on success; positive value k means the k-th leading minor is not
+    positive definite.
+)doc");
+
+    m.def("rfp_potrs",
+          &rfp_potrs,
+          py::arg("L_rfp"),
+          py::arg("B"),
+          R"doc(
+Triangular solve using a Cholesky factor produced by rfp_potrf.
+
+Solves (L * L^T) * X = B, overwriting B with the solution X.
+Convention: TRANSR=N, UPLO=L.
+
+Parameters
+----------
+L_rfp : torch.Tensor, shape (N*(N+1)//2,), float32, CUDA
+    Lower Cholesky factor in RFP format (from rfp_potrf).
+B : torch.Tensor, shape (N, nrhs), float32, CUDA
+    Right-hand side matrix.  Modified in-place; on exit holds the solution.
 )doc");
 }
