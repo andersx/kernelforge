@@ -16,6 +16,28 @@ def cuda_solve_svd(
     """
     ...
 
+def cuda_solve_svdr(
+    Z: torch.Tensor,
+    y: torch.Tensor,
+    rcond: float = 0.0,
+    k: int = ...,
+    p: int = 10,
+    niters: int = 2,
+    z_col_major: bool = False,
+) -> torch.Tensor:
+    """Solve min_w ||Z @ w - y||_2 via randomized truncated SVD (GPU, FP32).
+
+    Z is (m, n) float32 torch.Tensor, y is (m,) float32 torch.Tensor, m >= n.
+    If z_col_major=True, Z is (n, m) col-major (avoids an internal transpose).
+    k: target rank (1 <= k <= n); only the top-k singular triplets are computed.
+    p: oversampling parameter (k+p <= n); default 10.
+    niters: power iterations for accuracy; default 2.
+    rcond: singular values < rcond * S_max are treated as zero.
+           rcond <= 0 uses machine-epsilon heuristic.
+    Returns w: (n,) float32 CPU tensor.
+    """
+    ...
+
 def cuda_solve_qr(
     Z: torch.Tensor,
     y: torch.Tensor,
@@ -49,4 +71,3 @@ def cuda_solve_gels(
     Returns w: (n,) float32 CPU tensor.
     """
     ...
-

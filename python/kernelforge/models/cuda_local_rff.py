@@ -148,6 +148,9 @@ class CudaLocalRFFModel(BaseModel):
         solver: str = "cholesky",
         rcond: float = -1.0,
         gels_variant: str = "SS",
+        svdr_rank: int = 256,
+        svdr_p: int = 10,
+        svdr_niters: int = 2,
         n_pca: int | None = None,
         pca_center: bool = False,
         pca_whiten: bool = False,
@@ -162,6 +165,9 @@ class CudaLocalRFFModel(BaseModel):
         self.solver = solver
         self.rcond = rcond
         self.gels_variant = gels_variant
+        self.svdr_rank = svdr_rank
+        self.svdr_p = svdr_p
+        self.svdr_niters = svdr_niters
         self.n_pca = n_pca
         self.pca_center = pca_center
         self.pca_whiten = pca_whiten
@@ -346,10 +352,10 @@ class CudaLocalRFFModel(BaseModel):
         if mode not in ("energy_only", "energy_and_force"):
             msg = "CudaLocalRFFModel currently supports energy_only and energy_and_force training."
             raise NotImplementedError(msg)
-        if self.solver not in ("cholesky", "svd", "qr", "gels"):
+        if self.solver not in ("cholesky", "svd", "qr", "gels", "svdr"):
             msg = (
                 f"CudaLocalRFFModel: unknown solver '{self.solver}'. "
-                "Use 'cholesky', 'svd', 'qr', or 'gels'."
+                "Use 'cholesky', 'svd', 'qr', 'gels', or 'svdr'."
             )
             raise ValueError(msg)
         if self.solver == "gels" and self.gels_variant not in ("SS", "SH", "SB", "SX"):
@@ -358,7 +364,7 @@ class CudaLocalRFFModel(BaseModel):
                 "Use 'SS', 'SH', 'SB', or 'SX'."
             )
             raise ValueError(msg)
-        if self.solver in ("svd", "qr", "gels"):
+        if self.solver in ("svd", "qr", "gels", "svdr"):
             _require_cuda_solvers()
         if energies is None:
             msg = f"energies must be provided for {mode} mode"
@@ -416,7 +422,17 @@ class CudaLocalRFFModel(BaseModel):
 
         self._f_train: NDArray[np.float64] = np.array([], dtype=np.float64)
         self._f_pred_train: NDArray[np.float64] = np.array([], dtype=np.float64)
-        if self.solver in ("svd", "qr", "gels"):
+        if self.solver in ("svd", "qr", "gels", "svdr"):
+            if self.solver == "svdr":
+                # Clamp k so that k + p <= d_rff (constraint of cusolverDnXgesvdr).
+                k_eff = min(self.svdr_rank, self.d_rff - self.svdr_p)
+                if k_eff < 1:
+                    msg = (
+                        f"svdr_p={self.svdr_p} >= d_rff={self.d_rff}; "
+                        "cannot satisfy k+p<=d_rff with k>=1. "
+                        "Reduce --svdr-p or increase --d-rff."
+                    )
+                    raise ValueError(msg)
             if mode == "energy_and_force":
                 if forces is None or dX_cuda is None:
                     msg = "forces or dX_cuda missing in energy_and_force fit — internal error"
@@ -447,6 +463,21 @@ class CudaLocalRFFModel(BaseModel):
                         ZG_cuda, EF_cuda, float(self.rcond), True
                     ).cuda()
                     t0 = _t("Step 4  cuda_solve_svd (SVD lstsq, FP32)", t0)
+                elif self.solver == "svdr":
+                    weights_cuda = _solvers_ext.cuda_solve_svdr(  # type: ignore[union-attr]
+                        ZG_cuda,
+                        EF_cuda,
+                        float(self.rcond),
+                        k_eff,
+                        self.svdr_p,
+                        self.svdr_niters,
+                        True,
+                    ).cuda()
+                    t0 = _t(
+                        f"Step 4  cuda_solve_svdr (rSVD k={k_eff} p={self.svdr_p} "
+                        f"niters={self.svdr_niters})",
+                        t0,
+                    )
                 elif self.solver == "gels":
                     weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
                         ZG_cuda, EF_cuda, True, self.gels_variant
@@ -470,6 +501,21 @@ class CudaLocalRFFModel(BaseModel):
                         Z_cuda, Y_cuda, float(self.rcond), True
                     ).cuda()
                     t0 = _t("Step 4  cuda_solve_svd (SVD lstsq, FP32)", t0)
+                elif self.solver == "svdr":
+                    weights_cuda = _solvers_ext.cuda_solve_svdr(  # type: ignore[union-attr]
+                        Z_cuda,
+                        Y_cuda,
+                        float(self.rcond),
+                        k_eff,
+                        self.svdr_p,
+                        self.svdr_niters,
+                        True,
+                    ).cuda()
+                    t0 = _t(
+                        f"Step 4  cuda_solve_svdr (rSVD k={k_eff} p={self.svdr_p} "
+                        f"niters={self.svdr_niters})",
+                        t0,
+                    )
                 elif self.solver == "gels":
                     weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
                         Z_cuda, Y_cuda, True, self.gels_variant

@@ -25,6 +25,27 @@ PYBIND11_MODULE(cuda_solvers, m) {
     );
 
     m.def(
+        "cuda_solve_svdr",
+        &kf::solvers::cuda_solve_svdr,
+        py::arg("Z"),
+        py::arg("y"),
+        py::arg("rcond") = 0.0,
+        py::arg("k"),
+        py::arg("p") = 10,
+        py::arg("niters") = 2,
+        py::arg("z_col_major") = false,
+        "Solve min_w ||Z @ w - y||_2 via randomized truncated SVD (GPU, FP32).\n"
+        "Z is (m, n) float32 torch.Tensor, y is (m,) float32 torch.Tensor, m >= n.\n"
+        "If z_col_major=True, Z is (n, m) col-major (avoids internal transpose).\n"
+        "k: target rank (1 <= k <= n); only the top-k singular triplets are computed.\n"
+        "p: oversampling parameter (k+p <= n); default 10.\n"
+        "niters: power iterations for accuracy; default 2.\n"
+        "rcond: singular values < rcond * S_max are treated as zero.\n"
+        "rcond <= 0 uses machine-epsilon heuristic.\n"
+        "Returns w: (n,) float32 CPU tensor."
+    );
+
+    m.def(
         "cuda_solve_qr",
         &kf::solvers::cuda_solve_qr,
         py::arg("Z"),

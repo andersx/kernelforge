@@ -14,6 +14,17 @@ namespace solvers {
 at::Tensor cuda_solve_svd(at::Tensor Z, at::Tensor y, double rcond,
                            bool z_col_major = false);
 
+// Solve min_w ||Z @ w - y||_2 via randomized truncated SVD (GPU, FP32, cusolverDnXgesvdr).
+// Computes only the top-k singular triplets; much faster than cuda_solve_svd when k << n.
+// k:      target rank, 1 <= k <= n.
+// p:      oversampling parameter (k+p <= n); typical: 10.
+// niters: power iterations for accuracy (>= 0); typical: 2.
+// rcond <= 0 uses machine-epsilon heuristic.
+// Returns w: (n,) float32 CPU tensor.
+at::Tensor cuda_solve_svdr(at::Tensor Z, at::Tensor y, double rcond,
+                            int64_t k, int64_t p = 10, int64_t niters = 2,
+                            bool z_col_major = false);
+
 // Solve min_w ||Z @ w - y||_2 via QR (GPU, FP32).
 // Z: (m, n) float32 row-major, or (n, m) col-major when z_col_major=true.  m >= n.
 // Returns w: (n,) float32 CPU tensor.

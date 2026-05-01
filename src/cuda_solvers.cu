@@ -3,6 +3,9 @@
 // cuda_solve_svd:  min-norm least-squares via truncated SVD (cusolverDnXgesvd, FP32).
 //   Uses the generic/expert API (CUDA 11.1+) which has size_t workspace — no int overflow
 //   for large matrices (e.g. m=28000, n=16384 where cusolverDnSgesvd lwork overflows INT_MAX).
+// cuda_solve_svdr: min-norm least-squares via randomized truncated SVD (cusolverDnXgesvdr, FP32).
+//   Computes only the top-k singular triplets via random projections; much faster than
+//   gesvd when k << n.  Requires target rank k upfront; rcond provides secondary filtering.
 // cuda_solve_qr:   least-squares via QR (cusolverDnSgeqrf + Sormqr + Strsv).
 // cuda_solve_gels: least-squares via IRS (cusolverDnSSgels, FP32 working precision).
 //                  NOTE: the `iter` argument to cusolverDnSSgels is a HOST pointer;
@@ -24,6 +27,17 @@
 //   4. tmp = U^T y        (k,)   cublasSgemv op=T on (m x k) col-major
 //   5. tmp *= inv_S       (k,)   element-wise
 //   6. w   = Vt^T tmp     (n,)   cublasSgemv op=T on (k x n) col-major
+//
+// Randomized SVD algorithm (cusolverDnXgesvdr, CUDA 11.4+):
+//   Same back-solve as above, but with k < n rank truncation.
+//   cusolverDnXgesvdr outputs:
+//     Urand: (m x k) col-major, ldu=m
+//     Srand: (k,)  descending
+//     Vrand: (n x k) col-major, ldv=n   ← NOTE: V, not V^T (differs from gesvd output)
+//   Back-solve:
+//     tmp = Urand^T y   (k,)   cublasSgemv op=T on (m x k) col-major
+//     tmp *= inv_S
+//     w   = Vrand * tmp (n,)   cublasSgemv op=N on (n x k) col-major
 //
 // QR algorithm (cusolverDnSgeqrf + cusolverDnSormqr + cublasStrsv):
 //   1. Transpose Z → QR col-major (m x n) via cublasSgeam.
@@ -253,6 +267,184 @@ at::Tensor cuda_solve_svd(at::Tensor Z, at::Tensor y, double rcond, bool z_col_m
             k, n,                              // rows, cols of Vt
             &one,
             Vt_t.data_ptr<float>(), k,         // Vt: (k x n) col-major, lda=k
+            tmp_t.data_ptr<float>(), 1,
+            &zero,
+            w_t.data_ptr<float>(), 1
+        ));
+    }
+
+    return w_t.cpu();
+}
+
+// ---------------------------------------------------------------------------
+// cuda_solve_svdr
+// ---------------------------------------------------------------------------
+at::Tensor cuda_solve_svdr(
+    at::Tensor Z, at::Tensor y, double rcond,
+    int64_t k, int64_t p, int64_t niters,
+    bool z_col_major
+) {
+    const int m = z_col_major ? static_cast<int>(Z.size(1)) : static_cast<int>(Z.size(0));
+    const int n = z_col_major ? static_cast<int>(Z.size(0)) : static_cast<int>(Z.size(1));
+    TORCH_CHECK(Z.dim() == 2, "Z must be 2D");
+    TORCH_CHECK(y.dim() == 1, "y must be 1D (m,)");
+    TORCH_CHECK(y.size(0) == m, "Z rows must match y length");
+    TORCH_CHECK(m >= n, "cuda_solve_svdr requires m >= n (overdetermined system)");
+    TORCH_CHECK(Z.scalar_type() == at::kFloat, "Z must be float32");
+    TORCH_CHECK(y.scalar_type() == at::kFloat, "y must be float32");
+    TORCH_CHECK(k >= 1 && k <= static_cast<int64_t>(n),
+                "k must satisfy 1 <= k <= n, got k=", k, " n=", n);
+    TORCH_CHECK(p >= 0, "p must be >= 0, got p=", p);
+    TORCH_CHECK(k + p <= static_cast<int64_t>(n),
+                "k+p must be <= n (=min(m,n)), got k=", k, " p=", p, " n=", n);
+    TORCH_CHECK(niters >= 0, "niters must be >= 0, got niters=", niters);
+
+    ensure_handles();
+
+    at::Tensor Z_gpu = Z.to(at::kCUDA).contiguous();
+    at::Tensor y_gpu = y.to(at::kCUDA).contiguous();
+
+    const int64_t m64 = static_cast<int64_t>(m);
+    const int64_t n64 = static_cast<int64_t>(n);
+
+    // cusolverDnXgesvdr overwrites A in-place; always clone.
+    at::Tensor A;
+    if (z_col_major) {
+        A = Z_gpu.clone();  // already (n x m) stored as col-major (m x n), lda=m
+    } else {
+        A = at::empty({m, n}, at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+        const float one = 1.0f, zero = 0.0f;
+        CUBLAS_CHECK(cublasSgeam(
+            s_cublas,
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            m, n,
+            &one,
+            Z_gpu.data_ptr<float>(), n,
+            &zero,
+            A.data_ptr<float>(), m,
+            A.data_ptr<float>(), m
+        ));
+    }
+
+    // cusolverDnXgesvdr outputs (jobu='S', jobv='S'):
+    //   Urand: (m x k) col-major, ldUrand=m
+    //   Srand: (k,)  descending
+    //   Vrand: (n x k) col-major, ldVrand=n  ← V (not V^T)
+    at::Tensor U_t =
+        at::empty({m, static_cast<int>(k)},
+                  at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    at::Tensor S_t =
+        at::empty({static_cast<int>(k)},
+                  at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    at::Tensor V_t =
+        at::empty({n, static_cast<int>(k)},
+                  at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    at::Tensor d_info_t =
+        at::zeros({1}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
+
+    cusolverDnParams_t params;
+    CUSOLVER_CHECK(cusolverDnCreateParams(&params));
+
+    size_t dev_bytes = 0, host_bytes = 0;
+    CUSOLVER_CHECK(cusolverDnXgesvdr_bufferSize(
+        s_cusolver, params,
+        'S', 'S',
+        m64, n64, k, p, niters,
+        CUDA_R_32F, A.data_ptr<float>(), m64,
+        CUDA_R_32F, S_t.data_ptr<float>(),
+        CUDA_R_32F, U_t.data_ptr<float>(), m64,
+        CUDA_R_32F, V_t.data_ptr<float>(), n64,
+        CUDA_R_32F,
+        &dev_bytes, &host_bytes
+    ));
+
+    at::Tensor ws =
+        at::empty({static_cast<int64_t>(dev_bytes) + 1},
+                  at::TensorOptions().dtype(at::kByte).device(at::kCUDA));
+    std::vector<char> h_ws(host_bytes + 1);
+
+    CUSOLVER_CHECK(cusolverDnXgesvdr(
+        s_cusolver, params,
+        'S', 'S',
+        m64, n64, k, p, niters,
+        CUDA_R_32F, A.data_ptr<float>(), m64,
+        CUDA_R_32F, S_t.data_ptr<float>(),
+        CUDA_R_32F, U_t.data_ptr<float>(), m64,
+        CUDA_R_32F, V_t.data_ptr<float>(), n64,
+        CUDA_R_32F,
+        static_cast<void*>(ws.data_ptr<uint8_t>()), dev_bytes,
+        static_cast<void*>(h_ws.data()), host_bytes,
+        d_info_t.data_ptr<int>()
+    ));
+    CUSOLVER_CHECK(cusolverDnDestroyParams(params));
+
+    {
+        int h = 0;
+        CUDA_CHECK(
+            cudaMemcpy(&h, d_info_t.data_ptr<int>(), sizeof(int), cudaMemcpyDeviceToHost)
+        );
+        TORCH_CHECK(h == 0, "cusolverDnXgesvdr failed, info=", h);
+    }
+
+    // Apply rcond threshold → inv_S
+    float s0 = 0.0f;
+    CUDA_CHECK(cudaMemcpy(&s0, S_t.data_ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost));
+    float threshold;
+    if (rcond <= 0.0) {
+        threshold = std::numeric_limits<float>::epsilon()
+                    * static_cast<float>(std::max(m, n)) * s0;
+    } else {
+        threshold = static_cast<float>(rcond) * s0;
+    }
+    at::Tensor inv_S_t =
+        at::empty({static_cast<int>(k)},
+                  at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    {
+        int threads = 256;
+        int blocks = (static_cast<int>(k) + threads - 1) / threads;
+        apply_rcond_kernel<<<blocks, threads>>>(
+            S_t.data_ptr<float>(), inv_S_t.data_ptr<float>(),
+            static_cast<int>(k), threshold
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    // Back-solve (note: Vrand = V, not V^T — different from gesvd):
+    //   tmp = U^T y      U is (m x k) col-major, op=T -> (k,)
+    at::Tensor tmp_t =
+        at::empty({static_cast<int>(k)},
+                  at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    {
+        const float one = 1.0f, zero = 0.0f;
+        CUBLAS_CHECK(cublasSgemv(
+            s_cublas, CUBLAS_OP_T,
+            m, static_cast<int>(k),        // rows, cols of U
+            &one,
+            U_t.data_ptr<float>(), m,      // U: (m x k) col-major, lda=m
+            y_gpu.data_ptr<float>(), 1,
+            &zero,
+            tmp_t.data_ptr<float>(), 1
+        ));
+    }
+
+    // tmp *= inv_S  (element-wise, in-place via dgmm)
+    CUBLAS_CHECK(cublasSdgmm(
+        s_cublas, CUBLAS_SIDE_LEFT,
+        static_cast<int>(k), 1,
+        tmp_t.data_ptr<float>(), static_cast<int>(k),
+        inv_S_t.data_ptr<float>(), 1,
+        tmp_t.data_ptr<float>(), static_cast<int>(k)
+    ));
+
+    // w = V * tmp      V is (n x k) col-major, op=N -> (n x k) * (k,) -> (n,)
+    at::Tensor w_t = at::empty({n}, at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    {
+        const float one = 1.0f, zero = 0.0f;
+        CUBLAS_CHECK(cublasSgemv(
+            s_cublas, CUBLAS_OP_N,
+            n, static_cast<int>(k),        // rows, cols of V
+            &one,
+            V_t.data_ptr<float>(), n,      // V: (n x k) col-major, lda=n
             tmp_t.data_ptr<float>(), 1,
             &zero,
             w_t.data_ptr<float>(), 1

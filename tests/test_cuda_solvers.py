@@ -361,3 +361,141 @@ class TestGelsSolver:
         assert not np.any(np.isnan(w_gpu))
         residual = float(np.linalg.norm(Z_np @ w_gpu - y_np))
         assert residual < float(np.linalg.norm(y_np))
+
+
+# ---------------------------------------------------------------------------
+# cuda_solve_svdr tests
+# ---------------------------------------------------------------------------
+
+
+def _solve_cuda_svdr(
+    Z: np.ndarray, y: np.ndarray, rcond: float, k: int, p: int = 10, niters: int = 2
+) -> np.ndarray:
+    cs = _import_solver()
+    Z_t = torch.from_numpy(Z.astype(np.float32)).clone()
+    y_t = torch.from_numpy(y.astype(np.float32))
+    w = cs.cuda_solve_svdr(Z_t, y_t, rcond, k, p, niters)
+    return w.numpy()
+
+
+class TestSvdrSolver:
+    def test_low_rank_exact_recovery(self) -> None:
+        """Rank-r matrix: svdr with k=r+oversampling should recover the solution."""
+        rng = np.random.default_rng(42)
+        m, n, r = 500, 100, 15
+        A = rng.standard_normal((m, r)).astype(np.float32)
+        B = rng.standard_normal((r, n)).astype(np.float32)
+        Z = (A @ B).astype(np.float32)
+        y = rng.standard_normal(m).astype(np.float32)
+
+        rcond = 1e-3
+        # k=30 >> r=15; with p=10 we have k+p=40 <= n=100.
+        w_gpu = _solve_cuda_svdr(Z.copy(), y.copy(), rcond=rcond, k=30, p=10, niters=2)
+        w_ref = _solve_np(Z.copy(), y.copy(), rcond=rcond)
+
+        np.testing.assert_allclose(w_gpu, w_ref, rtol=5e-2, atol=1e-2)
+
+    @pytest.mark.parametrize(("m", "n", "k"), [(500, 80, 60), (300, 50, 35)])
+    def test_residual_competitive(self, m: int, n: int, k: int) -> None:
+        """svdr residual should be reasonably close to full SVD for large enough k."""
+        rng = np.random.default_rng(7)
+        Z = rng.standard_normal((m, n)).astype(np.float32)
+        y = rng.standard_normal(m).astype(np.float32)
+
+        # p=10; k+p must be <= n
+        p = 10
+        assert k + p <= n
+        w_gpu = _solve_cuda_svdr(Z.copy(), y.copy(), rcond=0.0, k=k, p=p, niters=2)
+        w_ref = _solve_np(Z.copy(), y.copy(), rcond=-1)
+
+        residual_gpu = np.linalg.norm(Z @ w_gpu - y)
+        residual_ref = np.linalg.norm(Z @ w_ref - y)
+        # svdr residual should be within 5% of optimal for k close to n
+        assert residual_gpu < residual_ref * 1.05 + 0.1
+
+    def test_col_major_input(self) -> None:
+        """z_col_major=True path gives same result as row-major."""
+        cs = _import_solver()
+        rng = np.random.default_rng(31)
+        m, n = 300, 60
+        Z_np = rng.standard_normal((m, n)).astype(np.float32)
+        y_np = rng.standard_normal(m).astype(np.float32)
+
+        k, p = 40, 10
+
+        w_row = cs.cuda_solve_svdr(
+            torch.from_numpy(Z_np.copy()), torch.from_numpy(y_np.copy()), 0.0, k, p, 2, False
+        ).numpy()
+
+        Z_col = torch.from_numpy(Z_np.T.copy())
+        w_col = cs.cuda_solve_svdr(Z_col, torch.from_numpy(y_np.copy()), 0.0, k, p, 2, True).numpy()
+
+        np.testing.assert_allclose(w_row, w_col, rtol=1e-5, atol=1e-5)
+
+    def test_rcond_truncation(self) -> None:
+        """Strict rcond should zero out small singular values."""
+        rng = np.random.default_rng(13)
+        m, n = 400, 80
+        U, _, Vt = np.linalg.svd(
+            rng.standard_normal((m, n)).astype(np.float32), full_matrices=False
+        )
+        S = np.linspace(1.0, 1e-4, n).astype(np.float32)
+        Z = (U * S) @ Vt
+        y = rng.standard_normal(m).astype(np.float32)
+
+        k, p, rcond = 60, 10, 0.1
+        w_gpu = _solve_cuda_svdr(Z.copy(), y.copy(), rcond=rcond, k=k, p=p, niters=2)
+        # With rcond=0.1, many singular values are zeroed; solution norm should be small.
+        assert not np.any(np.isnan(w_gpu))
+        assert float(np.linalg.norm(w_gpu)) < 1e4
+
+    def test_invalid_k_too_large(self) -> None:
+        """k > n should raise."""
+        cs = _import_solver()
+        rng = np.random.default_rng(0)
+        m, n = 200, 50
+        Z_t = torch.from_numpy(rng.standard_normal((m, n)).astype(np.float32))
+        y_t = torch.from_numpy(rng.standard_normal(m).astype(np.float32))
+        with pytest.raises(Exception):
+            cs.cuda_solve_svdr(Z_t, y_t, 0.0, n + 1, 0, 0)
+
+    def test_invalid_k_plus_p(self) -> None:
+        """k+p > n should raise."""
+        cs = _import_solver()
+        rng = np.random.default_rng(0)
+        m, n = 200, 50
+        Z_t = torch.from_numpy(rng.standard_normal((m, n)).astype(np.float32))
+        y_t = torch.from_numpy(rng.standard_normal(m).astype(np.float32))
+        with pytest.raises(Exception):
+            cs.cuda_solve_svdr(Z_t, y_t, 0.0, 45, 10, 0)  # 45+10=55 > 50
+
+    def test_output_shape(self) -> None:
+        """Output shape must be (n,)."""
+        rng = np.random.default_rng(55)
+        m, n, k = 300, 60, 40
+        w = _solve_cuda_svdr(
+            rng.standard_normal((m, n)).astype(np.float32),
+            rng.standard_normal(m).astype(np.float32),
+            rcond=0.0,
+            k=k,
+            p=10,
+            niters=2,
+        )
+        assert w.shape == (n,)
+        assert not np.any(np.isnan(w))
+
+    @pytest.mark.slow
+    def test_large_energy_only_size(self) -> None:
+        """nm=2000, D=1024, k=256 — verifies no crash and finite result."""
+        cs = _import_solver()
+        rng = np.random.default_rng(101)
+        m, n, k, p = 2000, 1024, 256, 10
+        Z_np = (rng.standard_normal((m, n)) / np.sqrt(n)).astype(np.float32)
+        y_np = rng.standard_normal(m).astype(np.float32)
+
+        Z_t = torch.from_numpy(Z_np.copy())
+        y_t = torch.from_numpy(y_np.copy())
+        w = cs.cuda_solve_svdr(Z_t, y_t, 0.0, k, p, 2).numpy()
+
+        assert w.shape == (n,)
+        assert not np.any(np.isnan(w))

@@ -343,6 +343,9 @@ def _build_model(
     cuda: bool = False,
     rcond: float = -1.0,
     gels_variant: str = "SS",
+    svdr_rank: int = 256,
+    svdr_p: int = 10,
+    svdr_niters: int = 2,
     n_pca: int | None = None,
     pca_center: bool = False,
     pca_whiten: bool = False,
@@ -401,9 +404,14 @@ def _build_model(
                 seed=seed,
                 elements=elements,
                 repr_params=repr_params or None,
-                solver=solver if solver in ("cholesky", "svd", "qr", "gels") else "cholesky",
+                solver=solver
+                if solver in ("cholesky", "svd", "qr", "gels", "svdr")
+                else "cholesky",
                 rcond=rcond,
                 gels_variant=gels_variant,
+                svdr_rank=svdr_rank,
+                svdr_p=svdr_p,
+                svdr_niters=svdr_niters,
                 n_pca=n_pca,
                 pca_center=pca_center,
                 pca_whiten=pca_whiten,
@@ -458,6 +466,10 @@ def _print_header(args: argparse.Namespace) -> None:
         print(f"  preprocessing  : {args.preprocessing}")
         if args.solver == "gels":
             print(f"  gels_variant   : {args.gels_variant}")
+        if args.solver == "svdr":
+            print(f"  svdr_rank      : {args.svdr_rank}")
+            print(f"  svdr_p         : {args.svdr_p}")
+            print(f"  svdr_niters    : {args.svdr_niters}")
         if args.solver == "eigh":
             print(f"  spectral_rtol  : {args.spectral_rtol}")
             print(f"  spectral_atol  : {args.spectral_atol}")
@@ -546,11 +558,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--solver",
         default=_DEFAULT_CUDA_LOCAL_SOLVER,
-         choices=["eigh", "cholesky", "cg", "svd", "qr", "gels"],
+        choices=["eigh", "cholesky", "cg", "svd", "qr", "gels", "svdr"],
         help=(
             "Solver to use. For CUDA local KRR (--cuda --representation fchl19 --regressor krr): "
             "eigh, cholesky, or cg. "
-            "For CUDA local RFF (--cuda --regressor rff): cholesky, svd, qr, or gels."
+            "For CUDA local RFF (--cuda --regressor rff): cholesky, svd, qr, gels, or svdr."
         ),
     )
     p.add_argument(
@@ -568,6 +580,24 @@ def _build_parser() -> argparse.ArgumentParser:
             "SS=single/single (default), SH=single/half, SB=single/bfloat16, "
             "SX=single/tensorfloat32. All produce float32 output."
         ),
+    )
+    p.add_argument(
+        "--svdr-rank",
+        type=int,
+        default=256,
+        help="Target rank k for --solver svdr (cusolverDnXgesvdr). k+p must be <= d_rff.",
+    )
+    p.add_argument(
+        "--svdr-p",
+        type=int,
+        default=10,
+        help="Oversampling parameter p for --solver svdr. Default 10.",
+    )
+    p.add_argument(
+        "--svdr-niters",
+        type=int,
+        default=2,
+        help="Power iterations for --solver svdr. More iterations = better accuracy. Default 2.",
     )
     p.add_argument(
         "--preprocessing",
@@ -789,6 +819,12 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 parser.error("--cg-atol must be >= 0.")
             if args.cg_max_iter is not None and args.cg_max_iter <= 0:
                 parser.error("--cg-max-iter must be > 0 when provided.")
+            if args.svdr_rank <= 0:
+                parser.error("--svdr-rank must be > 0.")
+            if args.svdr_p < 0:
+                parser.error("--svdr-p must be >= 0.")
+            if args.svdr_niters < 0:
+                parser.error("--svdr-niters must be >= 0.")
     else:
         if args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only supported with --cuda --representation fchl19.")
@@ -898,6 +934,9 @@ def run(args: argparse.Namespace) -> None:
         cuda=args.cuda,
         rcond=args.rcond,
         gels_variant=args.gels_variant,
+        svdr_rank=args.svdr_rank,
+        svdr_p=args.svdr_p,
+        svdr_niters=args.svdr_niters,
         n_pca=args.n_pca,
         pca_center=args.pca_center,
         pca_whiten=args.pca_whiten,
