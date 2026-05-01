@@ -35,6 +35,14 @@ try:
 except ImportError:
     pass
 
+_CUDA_SOLVERS_AVAILABLE = False
+try:
+    from kernelforge import cuda_solvers as _solvers_ext
+
+    _CUDA_SOLVERS_AVAILABLE = True
+except ImportError:
+    pass
+
 
 def _require_cuda() -> None:
     if not _TORCH_AVAILABLE:
@@ -43,6 +51,16 @@ def _require_cuda() -> None:
     if not (_CUDA_RFF_AVAILABLE and _CUDA_KERNELS_AVAILABLE):
         msg = (
             "cuda_rff_features and cuda_global_kernels are required for CudaLocalRFFModel. "
+            "Re-build kernelforge with CUDA, CUDAToolkit, and PyTorch."
+        )
+        raise ImportError(msg)
+
+
+def _require_cuda_solvers() -> None:
+    _require_cuda()
+    if not _CUDA_SOLVERS_AVAILABLE:
+        msg = (
+            "cuda_solvers is required for solver='svd'/'qr'. "
             "Re-build kernelforge with CUDA, CUDAToolkit, and PyTorch."
         )
         raise ImportError(msg)
@@ -115,6 +133,8 @@ class CudaLocalRFFModel(BaseModel):
         elements: list[int] | None = None,
         repr_params: dict[str, Any] | None = None,
         chunk_size: int = 256,
+        solver: str = "cholesky",
+        rcond: float = -1.0,
     ) -> None:
         self.sigma = sigma
         self.l2 = l2
@@ -123,6 +143,8 @@ class CudaLocalRFFModel(BaseModel):
         self.elements: list[int] = sorted(elements) if elements is not None else _DEFAULT_ELEMENTS
         self.repr_params: dict[str, Any] = repr_params if repr_params is not None else {}
         self.chunk_size = chunk_size
+        self.solver = solver
+        self.rcond = rcond
         self.is_fitted_ = False
 
     def _fit(
@@ -148,6 +170,14 @@ class CudaLocalRFFModel(BaseModel):
         if mode not in ("energy_only", "energy_and_force"):
             msg = "CudaLocalRFFModel currently supports energy_only and energy_and_force training."
             raise NotImplementedError(msg)
+        if self.solver not in ("cholesky", "svd", "qr", "gels"):
+            msg = (
+                f"CudaLocalRFFModel: unknown solver '{self.solver}'. "
+                "Use 'cholesky', 'svd', 'qr', or 'gels'."
+            )
+            raise ValueError(msg)
+        if self.solver in ("svd", "qr", "gels"):
+            _require_cuda_solvers()
         if energies is None:
             msg = f"energies must be provided for {mode} mode"
             raise ValueError(msg)
@@ -195,7 +225,72 @@ class CudaLocalRFFModel(BaseModel):
 
         self._f_train: NDArray[np.float64] = np.array([], dtype=np.float64)
         self._f_pred_train: NDArray[np.float64] = np.array([], dtype=np.float64)
-        if mode == "energy_and_force":
+        if self.solver in ("svd", "qr", "gels"):
+            if mode == "energy_and_force":
+                if forces is None or dX_cuda is None:
+                    msg = "forces or dX_cuda missing in energy_and_force fit — internal error"
+                    raise RuntimeError(msg)
+                dX5_cuda = dX_cuda.reshape(nmol, max_atoms, rep_size, max_atoms, 3).contiguous()
+                F_flat64 = _compact_forces(forces, N_np)
+                F_cuda = _to_cuda_f32(F_flat64.astype(np.float32))
+                Z_cuda = _rff_ext.rff_features_elemental_col_major(  # type: ignore[union-attr]
+                    X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda
+                )
+                t0 = _t("Step 3a rff_features_elemental (Z col-major)", t0)
+                G_cuda = _rff_ext.rff_gradient_elemental_col_major(  # type: ignore[union-attr]
+                    X_cuda,
+                    dX5_cuda,
+                    Q_idx_cuda,
+                    N_cuda,
+                    W_cuda,
+                    b_cuda,
+                    int(self.chunk_size),
+                )
+                t0 = _t("Step 3b rff_gradient_elemental (G col-major)", t0)
+                ZG_cuda = torch.cat([Z_cuda, G_cuda], dim=1)
+                EF_cuda = torch.cat([Y_cuda, F_cuda], dim=0)
+                del Z_cuda, G_cuda
+                t0 = _t("Step 3c cat [Z;G] col-major and [E;F]", t0)
+                if self.solver == "svd":
+                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
+                        ZG_cuda, EF_cuda, float(self.rcond), True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq)", t0)
+                elif self.solver == "gels":
+                    weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
+                        ZG_cuda, EF_cuda, True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_gels (IRS lstsq)", t0)
+                else:
+                    weights_cuda = _solvers_ext.cuda_solve_qr(  # type: ignore[union-attr]
+                        ZG_cuda, EF_cuda, True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_qr (QR lstsq)", t0)
+                del ZG_cuda, EF_cuda
+            else:
+                F_cuda = None
+                dX5_cuda = None
+                Z_cuda = _rff_ext.rff_features_elemental_col_major(  # type: ignore[union-attr]
+                    X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda
+                )
+                t0 = _t("Step 3  rff_features_elemental (materialize Z col-major)", t0)
+                if self.solver == "svd":
+                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
+                        Z_cuda, Y_cuda, float(self.rcond), True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq)", t0)
+                elif self.solver == "gels":
+                    weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
+                        Z_cuda, Y_cuda, True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_gels (IRS lstsq)", t0)
+                else:
+                    weights_cuda = _solvers_ext.cuda_solve_qr(  # type: ignore[union-attr]
+                        Z_cuda, Y_cuda, True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_qr (QR lstsq)", t0)
+                del Z_cuda
+        elif mode == "energy_and_force":
             if forces is None or dX_cuda is None:
                 msg = "forces or dX_cuda missing in energy_and_force fit — internal error"
                 raise RuntimeError(msg)
@@ -216,31 +311,42 @@ class CudaLocalRFFModel(BaseModel):
                 int(self.chunk_size),
             )
             t0 = _t("Step 3  rff_full_gramian_elemental_rfp", t0)
+            rhs = ZtY.unsqueeze(-1)
+            t0 = _t("Step 4a build RHS view", t0)
+            info = _kern_ext.rfp_potrf(ZtZ_rfp, int(self.d_rff), float(self.l2))  # type: ignore[union-attr]
+            if info != 0:
+                msg = (
+                    f"rfp_potrf (CudaLocalRFFModel {mode}): Cholesky factorization failed "
+                    f"(info={info}). Try increasing l2."
+                )
+                raise RuntimeError(msg)
+            _kern_ext.rfp_potrs(ZtZ_rfp, rhs)  # type: ignore[union-attr]
+            t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
+            weights_cuda = rhs.squeeze(-1).contiguous()
         else:
             F_cuda = None
+            dX5_cuda = None
             ZtZ_rfp, ZtY = _rff_ext.rff_gramian_elemental_rfp(  # type: ignore[union-attr]
                 X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda, Y_cuda, int(self.chunk_size)
             )
             t0 = _t("Step 3  rff_gramian_elemental_rfp", t0)
-
-        rhs = ZtY.unsqueeze(-1)
-        t0 = _t("Step 4a build RHS view", t0)
-        info = _kern_ext.rfp_potrf(ZtZ_rfp, int(self.d_rff), float(self.l2))  # type: ignore[union-attr]
-        if info != 0:
-            msg = (
-                f"rfp_potrf (CudaLocalRFFModel {mode}): Cholesky factorization failed "
-                f"(info={info}). Try increasing l2."
-            )
-            raise RuntimeError(msg)
-        _kern_ext.rfp_potrs(ZtZ_rfp, rhs)  # type: ignore[union-attr]
-        t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
-
-        weights_cuda = rhs.squeeze(-1).contiguous()
+            rhs = ZtY.unsqueeze(-1)
+            t0 = _t("Step 4a build RHS view", t0)
+            info = _kern_ext.rfp_potrf(ZtZ_rfp, int(self.d_rff), float(self.l2))  # type: ignore[union-attr]
+            if info != 0:
+                msg = (
+                    f"rfp_potrf (CudaLocalRFFModel {mode}): Cholesky factorization failed "
+                    f"(info={info}). Try increasing l2."
+                )
+                raise RuntimeError(msg)
+            _kern_ext.rfp_potrs(ZtZ_rfp, rhs)  # type: ignore[union-attr]
+            t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
+            weights_cuda = rhs.squeeze(-1).contiguous()
         y_pred_cuda = _rff_ext.rff_predict_energy_elemental(  # type: ignore[union-attr]
             X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
         )
         t0 = _t("Step 5a train energy prediction (GPU)", t0)
-        if mode == "energy_and_force":
+        if mode == "energy_and_force" and dX5_cuda is not None:
             f_pred_cuda = _rff_ext.rff_predict_force_elemental(  # type: ignore[union-attr]
                 X_cuda,
                 dX5_cuda,
@@ -267,7 +373,7 @@ class CudaLocalRFFModel(BaseModel):
         self._y_pred_train = y_pred_cuda.cpu().numpy().astype(np.float64)
         t0 = _t("Step 6  D2H train outputs + store state", t0)
 
-        del X_cuda, dX_cuda, Q_idx_cuda, N_cuda, Y_cuda, F_cuda, ZtZ_rfp, ZtY, rhs
+        del X_cuda, dX_cuda, Q_idx_cuda, N_cuda, Y_cuda, F_cuda
 
     def _training_labels_and_predictions(
         self,
@@ -354,6 +460,8 @@ class CudaLocalRFFModel(BaseModel):
             "elements": np.array(self.elements, dtype=np.int32),
             "repr_params": json.dumps(self.repr_params),
             "chunk_size": self.chunk_size,
+            "solver": self.solver,
+            "rcond": self.rcond,
             "baseline_elements": self.baseline_elements_,
             "element_energies": self.element_energies_,
             "weights": self._weights_cuda.cpu().numpy(),
@@ -379,6 +487,8 @@ class CudaLocalRFFModel(BaseModel):
         self.elements = data["elements"].astype(np.int32).tolist()
         self.repr_params = json.loads(str(data["repr_params"]))
         self.chunk_size = int(data["chunk_size"]) if "chunk_size" in data else 256
+        self.solver = str(data["solver"]) if "solver" in data else "cholesky"
+        self.rcond = float(data["rcond"]) if "rcond" in data else -1.0
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = cast(TrainingMode, str(data["training_mode"]))

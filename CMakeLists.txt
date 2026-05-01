@@ -424,6 +424,31 @@ if(CMAKE_CUDA_COMPILER)
 
       list(APPEND _KF_ALL_MODULES cuda_fchl19_repr)
 
+      # ---- cuda_solvers ----
+      pybind11_add_module(cuda_solvers MODULE
+        src/cuda_solvers.cu
+        src/cuda_solvers_bindings.cpp)
+
+      target_include_directories(cuda_solvers BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
+
+      target_link_libraries(cuda_solvers PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}"
+        CUDA::cublas
+        CUDA::cusolver)
+
+      set_property(TARGET cuda_solvers PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_solvers PROPERTY POSITION_INDEPENDENT_CODE ON)
+      set_property(TARGET cuda_solvers PROPERTY CUDA_ARCHITECTURES "${_KF_CUDA_ARCHITECTURES}")
+
+      target_compile_options(cuda_solvers PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_solvers)
+
     else()
       message(STATUS
         "CUDA found but Torch not found — skipping cuda_global_kernels and cuda_local_kernels")

@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("kernelforge.cuda_rff_features", reason="cuda_rff_features not built")
 pytest.importorskip("kernelforge.cuda_global_kernels", reason="cuda_global_kernels not built")
 pytest.importorskip("kernelforge.cuda_fchl19_repr", reason="cuda_fchl19_repr not built")
+pytest.importorskip("kernelforge.cuda_solvers", reason="cuda_solvers not built")
 pytest.importorskip("torch", reason="PyTorch not installed")
 
 _nvidia_smi = shutil.which("nvidia-smi")
@@ -90,11 +91,46 @@ def test_energy_and_force_shapes() -> None:
     )
     model.fit(tr, ztr, energies=energies[:15], forces=forces[:15])
 
+
     assert model.training_mode_ == "energy_and_force"
     E_pred, F_pred = model.predict(te, zte)
     assert E_pred.shape == (5,)
     assert F_pred.shape == (5 * 9 * 3,)
 
+
+def test_qr_energy_only_shapes() -> None:
+    """QR solver: output shapes are correct for energy_only."""
+    coords, z_list, energies, _ = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-1, d_rff=16, seed=11, elements=_ELEMENTS,
+        chunk_size=5, solver="qr",
+    )
+    model.fit(tr, ztr, energies=energies[:20])
+
+    assert model.training_mode_ == "energy_only"
+    E_pred, _ = model.predict(te, zte)
+    assert E_pred.shape == (5,)
+
+
+def test_qr_energy_and_force_shapes() -> None:
+    """QR solver: output shapes are correct for energy_and_force."""
+    coords, z_list, energies, forces = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-1, d_rff=16, seed=11, elements=_ELEMENTS,
+        chunk_size=5, solver="qr",
+    )
+    model.fit(tr, ztr, energies=energies[:20], forces=forces[:20])
+
+    assert model.training_mode_ == "energy_and_force"
+    E_pred, F_pred = model.predict(te, zte)
+    assert E_pred.shape == (5,)
+    assert F_pred.shape == (5 * 9 * 3,)
 
 def test_energy_and_force_matches_cpu_small() -> None:
     coords, z_list, energies, forces = _load_ethanol(14)
@@ -110,3 +146,89 @@ def test_energy_and_force_matches_cpu_small() -> None:
     E_gpu, F_gpu = gpu.predict(te, zte)
     np.testing.assert_allclose(E_gpu, E_cpu, rtol=8e-2, atol=8e-2)
     np.testing.assert_allclose(F_gpu, F_cpu, rtol=8e-2, atol=8e-2)
+
+
+# ---------------------------------------------------------------------------
+# SVD solver tests
+# ---------------------------------------------------------------------------
+
+
+def test_svd_energy_only_shapes() -> None:
+    """SVD solver: output shapes are correct for energy_only."""
+    coords, z_list, energies, _ = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0,
+        l2=1e-2,
+        d_rff=16,
+        seed=42,
+        elements=_ELEMENTS,
+        chunk_size=8,
+        solver="svd",
+        rcond=-1.0,
+    )
+    model.fit(tr, ztr, energies=energies[:20])
+
+    assert model.training_mode_ == "energy_only"
+    E_pred, F_pred = model.predict(te, zte)
+    assert E_pred.shape == (5,)
+    assert F_pred.shape == (5 * 9 * 3,)
+
+
+def test_svd_matches_cholesky_energy_only() -> None:
+    """SVD and Cholesky solvers give similar predictions for energy_only."""
+    coords, z_list, energies, _ = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    chol = CudaLocalRFFModel(
+        sigma=20.0,
+        l2=1e-2,
+        d_rff=16,
+        seed=7,
+        elements=_ELEMENTS,
+        chunk_size=4,
+        solver="cholesky",
+    )
+    svd = CudaLocalRFFModel(
+        sigma=20.0,
+        l2=1e-2,
+        d_rff=16,
+        seed=7,
+        elements=_ELEMENTS,
+        chunk_size=4,
+        solver="svd",
+        rcond=-1.0,
+    )
+    chol.fit(tr, ztr, energies=energies[:20])
+    svd.fit(tr, ztr, energies=energies[:20])
+
+    E_chol, _ = chol.predict(te, zte)
+    E_svd, _ = svd.predict(te, zte)
+    np.testing.assert_allclose(E_svd, E_chol, rtol=5e-2, atol=5e-2)
+
+
+def test_svd_energy_and_force_shapes() -> None:
+    """SVD solver: output shapes are correct for energy_and_force."""
+    coords, z_list, energies, forces = _load_ethanol(25)
+    tr, te = coords[:20], coords[20:]
+    ztr, zte = z_list[:20], z_list[20:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0,
+        l2=1e-1,
+        d_rff=16,
+        seed=11,
+        elements=_ELEMENTS,
+        chunk_size=5,
+        solver="svd",
+        rcond=-1.0,
+    )
+    model.fit(tr, ztr, energies=energies[:20], forces=forces[:20])
+
+    assert model.training_mode_ == "energy_and_force"
+    E_pred, F_pred = model.predict(te, zte)
+    assert E_pred.shape == (5,)
+    assert F_pred.shape == (5 * 9 * 3,)

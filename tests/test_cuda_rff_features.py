@@ -315,3 +315,96 @@ def test_rff_predict_force_elemental_vs_cpu() -> None:
         2,
     )
     np.testing.assert_allclose(got.cpu().numpy().astype(np.float64), ref, rtol=2e-4, atol=2e-4)
+
+
+def test_rff_features_elemental_col_major_matches_row_major() -> None:
+    """Col-major output must be the transpose of row-major output (same values)."""
+    rng = np.random.default_rng(99)
+    nmol, max_atoms, rep_size, nel, D = 8, 5, 7, 3, 16
+    N = np.array([5, 2, 4, 3, 5, 1, 4, 2], dtype=np.int32)
+    X = rng.normal(size=(nmol, max_atoms, rep_size)).astype(np.float64)
+    Q = rng.integers(0, nel, size=(nmol, max_atoms), dtype=np.int32)
+    for i, n_i in enumerate(N):
+        X[i, n_i:] = 0.0
+        Q[i, n_i:] = -1
+    W = rng.normal(size=(nel, rep_size, D)).astype(np.float64)
+    b = rng.uniform(0, 2 * np.pi, size=(nel, D)).astype(np.float64)
+
+    X_c, Q_c, N_c, W_c, b_c = (
+        _to_cuda(X), _to_cuda_i32(Q), _to_cuda_i32(N), _to_cuda(W), _to_cuda(b)
+    )
+    Z_row = cuda_rff_features.rff_features_elemental(X_c, Q_c, N_c, W_c, b_c)
+    Z_col = cuda_rff_features.rff_features_elemental_col_major(X_c, Q_c, N_c, W_c, b_c)
+
+    assert Z_row.shape == (nmol, D), f"row-major shape wrong: {Z_row.shape}"
+    assert Z_col.shape == (D, nmol), f"col-major shape wrong: {Z_col.shape}"
+    np.testing.assert_array_equal(
+        Z_row.cpu().numpy(), Z_col.cpu().numpy().T,
+        err_msg="col-major output does not match transpose of row-major output"
+    )
+
+
+def test_rff_gradient_elemental_col_major_matches_row_major() -> None:
+    """Col-major gradient output must be the transpose of row-major output (same values)."""
+    rng = np.random.default_rng(100)
+    nmol, max_atoms, rep_size, nel, D = 5, 4, 6, 3, 12
+    N = np.array([4, 2, 3, 4, 1], dtype=np.int32)
+    X = rng.normal(size=(nmol, max_atoms, rep_size)).astype(np.float64)
+    Q = rng.integers(0, nel, size=(nmol, max_atoms), dtype=np.int32)
+    for i, n_i in enumerate(N):
+        X[i, n_i:] = 0.0
+        Q[i, n_i:] = -1
+    dX = rng.normal(size=(nmol, max_atoms, rep_size, max_atoms, 3)).astype(np.float64)
+    W = rng.normal(size=(nel, rep_size, D)).astype(np.float64)
+    b = rng.uniform(0, 2 * np.pi, size=(nel, D)).astype(np.float64)
+
+    X_c  = _to_cuda(X)
+    dX_c = _to_cuda(dX)
+    Q_c, N_c, W_c, b_c = _to_cuda_i32(Q), _to_cuda_i32(N), _to_cuda(W), _to_cuda(b)
+
+    G_row = cuda_rff_features.rff_gradient_elemental(X_c, dX_c, Q_c, N_c, W_c, b_c, 2)
+    G_col = cuda_rff_features.rff_gradient_elemental_col_major(X_c, dX_c, Q_c, N_c, W_c, b_c, 2)
+
+    total_naq = int(3 * N.sum())
+    assert G_row.shape == (total_naq, D), f"row-major shape wrong: {G_row.shape}"
+    assert G_col.shape == (D, total_naq), f"col-major shape wrong: {G_col.shape}"
+    np.testing.assert_allclose(
+        G_row.cpu().numpy(), G_col.cpu().numpy().T,
+        rtol=1e-5, atol=1e-5,
+        err_msg="col-major gradient output does not match transpose of row-major output"
+    )
+
+
+@pytest.mark.slow
+def test_rff_gradient_elemental_multi_tile_matches_cpu() -> None:
+    """D > D_TILE_DEFAULT (1024) exercises multiple D-tiles in the gradient path.
+
+    Uses the CPU reference to verify the tiled CUDA result is numerically
+    equivalent (FP32 atomicAdd ordering may differ, so we use allclose).
+    """
+    rng = np.random.default_rng(42)
+    nmol, max_atoms, rep_size, nel = 6, 4, 8, 2
+    D = 2048  # two full tiles of 1024
+    N = np.array([4, 2, 3, 4, 1, 3], dtype=np.int32)
+    X = rng.normal(size=(nmol, max_atoms, rep_size)).astype(np.float64)
+    dX = rng.normal(size=(nmol, max_atoms, rep_size, max_atoms, 3)).astype(np.float64)
+    Q = rng.integers(0, nel, size=(nmol, max_atoms), dtype=np.int32)
+    for i, n_i in enumerate(N):
+        X[i, n_i:] = 0.0
+        dX[i, n_i:] = 0.0
+        dX[i, :, :, n_i:] = 0.0
+        Q[i, n_i:] = -1
+    W = rng.normal(size=(nel, rep_size, D)).astype(np.float64)
+    b = rng.uniform(0, 2 * np.pi, size=(nel, D)).astype(np.float64)
+
+    ref = rff_gradient_elemental(X, dX, _q_list_from_padded(Q, N), W, b).T  # → (total_naq, D) float64
+
+    got = cuda_rff_features.rff_gradient_elemental(
+        _to_cuda(X), _to_cuda(dX), _to_cuda_i32(Q), _to_cuda_i32(N),
+        _to_cuda(W), _to_cuda(b), 3,
+    )
+    np.testing.assert_allclose(
+        got.cpu().numpy().astype(np.float64), ref,
+        rtol=2e-4, atol=2e-4,
+        err_msg="multi-tile gradient does not match CPU reference",
+    )

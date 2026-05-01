@@ -65,7 +65,41 @@ def rff_features_elemental(
     W: torch.Tensor,
     b: torch.Tensor,
 ) -> torch.Tensor:
-    """Compute local elemental RFF features on GPU."""
+    """Compute local elemental RFF features on GPU. Returns (nmol, D) row-major."""
+    ...
+
+def rff_features_elemental_col_major(
+    X: torch.Tensor,
+    Q: torch.Tensor,
+    N: torch.Tensor,
+    W: torch.Tensor,
+    b: torch.Tensor,
+) -> torch.Tensor:
+    """Compute local elemental RFF features on GPU. Returns (D, nmol) col-major."""
+    ...
+
+def rff_gradient_elemental(
+    X: torch.Tensor,
+    dX: torch.Tensor,
+    Q: torch.Tensor,
+    N: torch.Tensor,
+    W: torch.Tensor,
+    b: torch.Tensor,
+    chunk_size: int = 64,
+) -> torch.Tensor:
+    """Compute local elemental RFF gradient feature matrix G (total_naq, D) on GPU."""
+    ...
+
+def rff_gradient_elemental_col_major(
+    X: torch.Tensor,
+    dX: torch.Tensor,
+    Q: torch.Tensor,
+    N: torch.Tensor,
+    W: torch.Tensor,
+    b: torch.Tensor,
+    chunk_size: int = 64,
+) -> torch.Tensor:
+    """Compute local elemental RFF gradient feature matrix G (D, total_naq) col-major on GPU."""
     ...
 
 def rff_gramian_elemental_rfp(

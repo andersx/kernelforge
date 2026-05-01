@@ -341,6 +341,7 @@ def _build_model(
     z_te: list[NDArray[np.int32]],
     repr_params: dict[str, Any] | None = None,
     cuda: bool = False,
+    rcond: float = -1.0,
 ) -> (
     LocalKRRModel
     | LocalRFFModel
@@ -396,6 +397,8 @@ def _build_model(
                 seed=seed,
                 elements=elements,
                 repr_params=repr_params or None,
+                solver=solver if solver in ("cholesky", "svd", "qr", "gels") else "cholesky",
+                rcond=rcond,
             )
         return CudaLocalKRRModel(
             sigma=sigma,
@@ -529,8 +532,18 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--solver",
         default=_DEFAULT_CUDA_LOCAL_SOLVER,
-        choices=["eigh", "cholesky", "cg"],
-        help="CUDA local KRR solver (--cuda --representation fchl19 only).",
+         choices=["eigh", "cholesky", "cg", "svd", "qr", "gels"],
+        help=(
+            "Solver to use. For CUDA local KRR (--cuda --representation fchl19 --regressor krr): "
+            "eigh, cholesky, or cg. "
+            "For CUDA local RFF (--cuda --regressor rff): cholesky, svd, qr, or gels."
+        ),
+    )
+    p.add_argument(
+        "--rcond",
+        type=float,
+        default=-1.0,
+        help="rcond threshold for SVD truncation (--solver svd only). -1 uses eps heuristic.",
     )
     p.add_argument(
         "--preprocessing",
@@ -840,6 +853,7 @@ def run(args: argparse.Namespace) -> None:
         z_te=z_te,
         repr_params=repr_params,
         cuda=args.cuda,
+        rcond=args.rcond,
     )
     print(f"\n[2] Model: {type(model).__name__}")
 

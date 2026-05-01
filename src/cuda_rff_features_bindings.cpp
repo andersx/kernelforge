@@ -74,7 +74,44 @@ PYBIND11_MODULE(cuda_rff_features, m) {
         py::arg("N"),
         py::arg("W"),
         py::arg("b"),
-        "Compute local elemental RFF features on GPU."
+        "Compute local elemental RFF features on GPU. Returns (nmol, D) row-major."
+    );
+
+    m.def(
+        "rff_features_elemental_col_major",
+        &kf::rff_cuda::rff_features_elemental_col_major_cuda,
+        py::arg("X"),
+        py::arg("Q"),
+        py::arg("N"),
+        py::arg("W"),
+        py::arg("b"),
+        "Compute local elemental RFF features on GPU. Returns (D, nmol) col-major."
+    );
+
+    m.def(
+        "rff_gradient_elemental",
+        &kf::rff_cuda::rff_gradient_elemental_cuda,
+        py::arg("X"),
+        py::arg("dX"),
+        py::arg("Q"),
+        py::arg("N"),
+        py::arg("W"),
+        py::arg("b"),
+        py::arg("chunk_size") = 64,
+        "Compute local elemental RFF gradient feature matrix G (total_naq, D) on GPU."
+    );
+
+    m.def(
+        "rff_gradient_elemental_col_major",
+        &kf::rff_cuda::rff_gradient_elemental_col_major_cuda,
+        py::arg("X"),
+        py::arg("dX"),
+        py::arg("Q"),
+        py::arg("N"),
+        py::arg("W"),
+        py::arg("b"),
+        py::arg("chunk_size") = 64,
+        "Compute local elemental RFF gradient feature matrix G (D, total_naq) col-major on GPU."
     );
 
     m.def(
