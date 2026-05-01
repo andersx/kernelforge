@@ -136,6 +136,7 @@ __global__ static void fchl19_forward_kernel(
     const int m   = bid / max_atoms;
     const int i   = bid % max_atoms;
     const int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    const int nthreads = blockDim.x * blockDim.y;
 
     if (m >= nm) return;
 
@@ -144,7 +145,7 @@ __global__ static void fchl19_forward_kernel(
     // Inactive atom slot: zero the output and return.
     if (i >= natoms) {
         float *dst = out + ((long long)m * max_atoms + i) * rep_size;
-        for (int r = tid; r < rep_size; r += BLOCK_SZ)
+        for (int r = tid; r < rep_size; r += nthreads)
             dst[r] = 0.0f;
         return;
     }
@@ -168,11 +169,11 @@ __global__ static void fchl19_forward_kernel(
     const float *mol_coords = coords + (long long)m * max_atoms * 3;
     const int   *mol_Q      = Q      + m * max_atoms;
 
-    for (int a = tid; a < natoms * 3; a += BLOCK_SZ)
+    for (int a = tid; a < natoms * 3; a += nthreads)
         sh_coords[a] = mol_coords[a];
-    for (int a = tid; a < natoms; a += BLOCK_SZ)
+    for (int a = tid; a < natoms; a += nthreads)
         sh_Z[a] = mol_Q[a];
-    for (int r = tid; r < rep_size; r += BLOCK_SZ)
+    for (int r = tid; r < rep_size; r += nthreads)
         sh_rep[r] = 0.0f;
 
     __syncthreads();
@@ -183,7 +184,7 @@ __global__ static void fchl19_forward_kernel(
     const float inv_rcut    = (rcut > 0.0f) ? (1.0f / rcut) : 0.0f;
     const float pi_inv_rcut = PI_F * inv_rcut;
 
-    for (int j = tid; j < natoms; j += BLOCK_SZ) {
+    for (int j = tid; j < natoms; j += nthreads) {
         if (j == i) continue;
         const float rij = dist3_dev(sh_coords, i, j);
         if (rij >= rcut) continue;
@@ -305,7 +306,7 @@ __global__ static void fchl19_forward_kernel(
     // Write shared accumulator to global output
     // -----------------------------------------------------------------------
     float *dst = out + ((long long)m * max_atoms + i) * rep_size;
-    for (int r = tid; r < rep_size; r += BLOCK_SZ)
+    for (int r = tid; r < rep_size; r += nthreads)
         dst[r] = sh_rep[r];
 }
 __global__ static void fchl19_grad_kernel(
@@ -329,6 +330,7 @@ __global__ static void fchl19_grad_kernel(
     const int m = bid / max_atoms;
     const int i = bid % max_atoms;
     const int tid = threadIdx.y * blockDim.x + threadIdx.x;
+    const int nthreads = blockDim.x * blockDim.y;
 
     if (m >= nm) return;
     const int natoms = N[m];
@@ -347,9 +349,9 @@ __global__ static void fchl19_grad_kernel(
     const float *mol_coords = coords + (long long)m * max_atoms * 3;
     const int   *mol_Q      = Q + m * max_atoms;
 
-    for (int a = tid; a < natoms * 3; a += BLOCK_SZ) sh_coords[a] = mol_coords[a];
-    for (int a = tid; a < natoms; a += BLOCK_SZ) sh_Z[a] = mol_Q[a];
-    for (int r = tid; r < rep_size; r += BLOCK_SZ) sh_rep[r] = 0.0f;
+    for (int a = tid; a < natoms * 3; a += nthreads) sh_coords[a] = mol_coords[a];
+    for (int a = tid; a < natoms; a += nthreads) sh_Z[a] = mol_Q[a];
+    for (int r = tid; r < rep_size; r += nthreads) sh_rep[r] = 0.0f;
 
     __syncthreads();
 
@@ -361,7 +363,7 @@ __global__ static void fchl19_grad_kernel(
     // -----------------------------------------------------------------------
     // Two-body contributions — each thread handles a subset of neighbors
     // -----------------------------------------------------------------------
-    for (int j = tid; j < natoms; j += BLOCK_SZ) {
+    for (int j = tid; j < natoms; j += nthreads) {
         if (j == i) continue;
         const float rij = dist3_dev(sh_coords, i, j);
         if (rij > rcut) continue;
@@ -600,7 +602,7 @@ __global__ static void fchl19_grad_kernel(
     __syncthreads();
 
     float *dst = rep + rep_base;
-    for (int r = tid; r < rep_size; r += BLOCK_SZ) dst[r] = sh_rep[r];
+    for (int r = tid; r < rep_size; r += nthreads) dst[r] = sh_rep[r];
 }
 
 
@@ -626,7 +628,8 @@ torch::Tensor generate_fchl_acsf_cuda(
     float acut,
     float two_body_decay,
     float three_body_decay,
-    float three_body_weight_norm
+    float three_body_weight_norm,
+    bool deterministic
 ) {
     TORCH_CHECK(coords.is_cuda() && coords.scalar_type() == torch::kFloat32,
                 "coords must be float32 CUDA");
@@ -735,7 +738,7 @@ torch::Tensor generate_fchl_acsf_cuda(
     // Launch kernel
     // -----------------------------------------------------------------------
     const int grid = nm * max_atoms;
-    const dim3 block(BLOCK_X, BLOCK_Y);
+    const dim3 block = deterministic ? dim3(1, 1) : dim3(BLOCK_X, BLOCK_Y);
 
     fchl19_forward_kernel<<<grid, block, smem_bytes>>>(
         coords.data_ptr<float>(),
@@ -775,7 +778,8 @@ std::tuple<torch::Tensor, torch::Tensor> generate_fchl_acsf_and_gradients_cuda(
     float acut,
     float two_body_decay,
     float three_body_decay,
-    float three_body_weight_norm
+    float three_body_weight_norm,
+    bool deterministic
 ) {
     TORCH_CHECK(coords.is_cuda() && coords.scalar_type() == torch::kFloat32,
                 "coords must be float32 CUDA");
@@ -846,7 +850,7 @@ std::tuple<torch::Tensor, torch::Tensor> generate_fchl_acsf_and_gradients_cuda(
     );
 
     const int grid = nm * max_atoms;
-    const dim3 block(BLOCK_X, BLOCK_Y);
+    const dim3 block = deterministic ? dim3(1, 1) : dim3(BLOCK_X, BLOCK_Y);
     fchl19_grad_kernel<<<grid, block, smem_bytes>>>(
         coords.data_ptr<float>(),
         Q.data_ptr<int>(),

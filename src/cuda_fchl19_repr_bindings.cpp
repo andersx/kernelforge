@@ -42,7 +42,8 @@ static torch::Tensor generate_fchl_acsf_py(
     double acut,
     double two_body_decay,
     double three_body_decay,
-    double three_body_weight
+    double three_body_weight,
+    bool deterministic
 ) {
     // Same normalisation applied by the CPU fchl19_repr bindings
     const float w3_norm = (float)(std::sqrt(eta3 / M_PI) * three_body_weight);
@@ -62,7 +63,8 @@ static torch::Tensor generate_fchl_acsf_py(
         (float)acut,
         (float)two_body_decay,
         (float)three_body_decay,
-        w3_norm
+        w3_norm,
+        deterministic
     );
 }
 
@@ -81,7 +83,8 @@ static py::tuple generate_fchl_acsf_and_gradients_py(
     double acut,
     double two_body_decay,
     double three_body_decay,
-    double three_body_weight
+    double three_body_weight,
+    bool deterministic
 ) {
     const float w3_norm = (float)(std::sqrt(eta3 / M_PI) * three_body_weight);
 
@@ -100,7 +103,8 @@ static py::tuple generate_fchl_acsf_and_gradients_py(
         (float)acut,
         (float)two_body_decay,
         (float)three_body_decay,
-        w3_norm
+        w3_norm,
+        deterministic
     );
     return py::make_tuple(rep, grad);
 }
@@ -140,6 +144,7 @@ three_body_weight normalisation is identical to the CPU ``fchl19_repr`` module.
         py::arg("two_body_decay") = 1.8,
         py::arg("three_body_decay") = 0.57,
         py::arg("three_body_weight") = 13.4,
+        py::arg("deterministic") = false,
         R"doc(
 Generate FCHL19 ACSF representations on the GPU (FP32).
 
@@ -202,6 +207,7 @@ rep : torch.Tensor, shape (nm, max_atoms, rep_size), float32, CUDA
         py::arg("two_body_decay") = 1.8,
         py::arg("three_body_decay") = 0.57,
         py::arg("three_body_weight") = 13.4,
+        py::arg("deterministic") = false,
         R"doc(
 Generate FCHL19 ACSF representations and coordinate Jacobians on the GPU (FP32).
 

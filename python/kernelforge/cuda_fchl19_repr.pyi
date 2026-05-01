@@ -18,6 +18,7 @@ def generate_fchl_acsf(
     two_body_decay: float = 1.8,
     three_body_decay: float = 0.57,
     three_body_weight: float = 13.4,
+    deterministic: bool = False,
 ) -> torch.Tensor:
     """Generate FCHL19 ACSF representations on the GPU (FP32).
 
@@ -66,6 +67,7 @@ def generate_fchl_acsf_and_gradients(
     two_body_decay: float = 1.8,
     three_body_decay: float = 0.57,
     three_body_weight: float = 13.4,
+    deterministic: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Generate FCHL19 ACSF representations and Jacobians on the GPU (FP32).
 
