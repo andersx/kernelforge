@@ -6,7 +6,8 @@
 
 import numpy as np
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="PyTorch not installed")
 
 # Skip all tests if CUDA is not available
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
