@@ -7,6 +7,7 @@ try:
 except PackageNotFoundError:
     __version__ = "unknown"
 
+from .ase_calculator import KernelForgeCalculator as KernelForgeCalculator
 from .kitchen_sinks import (
     rff_features as rff_features,
 )
@@ -61,6 +62,7 @@ from .kitchen_sinks import (
 from .kitchen_sinks import (
     rff_gramian_symm_rfp as rff_gramian_symm_rfp,
 )
+from .md import run_md as run_md
 from .models import CudaGlobalRFFModel as CudaGlobalRFFModel
 from .models import CudaLocalRFFModel as CudaLocalRFFModel
 from .models import FCHL18KRRModel as FCHL18KRRModel
