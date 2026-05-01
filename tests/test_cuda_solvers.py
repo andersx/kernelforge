@@ -166,10 +166,10 @@ class TestTorchTensorInput:
 class TestLargeSize:
     @pytest.mark.slow
     def test_azo_energy_size(self) -> None:
-        """nm=1000, D=4096 energy Z."""
+        """m=4096, n=1024 overdetermined smoke test (SVD)."""
         cs = _import_solver()
         rng = np.random.default_rng(101)
-        m, n = 1000, 4096
+        m, n = 4096, 1024
         Z_np = (rng.standard_normal((m, n)) / np.sqrt(n)).astype(np.float32)
         y_np = rng.standard_normal(m).astype(np.float32)
 
@@ -249,10 +249,10 @@ class TestQRSolver:
 
     @pytest.mark.slow
     def test_azo_energy_size(self) -> None:
-        """nm=1000, D=4096 energy-only size."""
+        """m=4096, n=1024 overdetermined smoke test (QR)."""
         cs = _import_solver()
         rng = np.random.default_rng(101)
-        m, n = 1000, 4096
+        m, n = 4096, 1024
         Z_np = (rng.standard_normal((m, n)) / np.sqrt(n)).astype(np.float32)
         y_np = rng.standard_normal(m).astype(np.float32)
 
@@ -346,10 +346,10 @@ class TestGelsSolver:
 
     @pytest.mark.slow
     def test_azo_energy_size(self) -> None:
-        """nm=1000, D=4096 energy-only size."""
+        """m=4096, n=1024 overdetermined smoke test (gels)."""
         cs = _import_solver()
         rng = np.random.default_rng(101)
-        m, n = 1000, 4096
+        m, n = 4096, 1024
         Z_np = (rng.standard_normal((m, n)) / np.sqrt(n)).astype(np.float32)
         y_np = rng.standard_normal(m).astype(np.float32)
 
