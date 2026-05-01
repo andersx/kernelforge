@@ -44,27 +44,6 @@ except ImportError:
     pass
 
 
-def _torch_svd_solve(ZG: Any, EF: Any, rcond: float) -> Any:  # noqa: ANN401
-    """Least-squares solve via torch.linalg.svd (uses cusolverDnXgesvd 64-bit API on CUDA 12.x).
-
-    ZG: (d_rff, m) col-major CUDA float32 — transposed to (m, d_rff) before SVD.
-    EF: (m,) CUDA float32 target vector.
-    Returns: (d_rff,) CUDA float32 weight vector.
-    """
-    import torch
-
-    A = ZG.T.contiguous()  # (m, d_rff)
-    b = EF  # (m,)
-    _U, S, Vh = torch.linalg.svd(A, full_matrices=False)  # U:(m,k), S:(k,), Vh:(k,d_rff)
-    if rcond > 0.0:
-        thresh = rcond * S[0]
-    else:
-        thresh = float(torch.finfo(S.dtype).eps) * float(max(A.shape)) * S[0].item()
-    S_inv = torch.where(S > thresh, 1.0 / S, torch.zeros_like(S))
-    UTb = _U.T @ b  # (k,)
-    return Vh.T @ (S_inv * UTb)  # (d_rff,)
-
-
 def _require_cuda() -> None:
     if not _TORCH_AVAILABLE:
         msg = "PyTorch is required for CudaLocalRFFModel."
@@ -81,7 +60,7 @@ def _require_cuda_solvers() -> None:
     _require_cuda()
     if not _CUDA_SOLVERS_AVAILABLE:
         msg = (
-            "cuda_solvers is required for solver='qr'/'gels'. "
+            "cuda_solvers is required for solver='svd'/'qr'/'gels'. "
             "Re-build kernelforge with CUDA, CUDAToolkit, and PyTorch."
         )
         raise ImportError(msg)
@@ -379,7 +358,7 @@ class CudaLocalRFFModel(BaseModel):
                 "Use 'SS', 'SH', 'SB', or 'SX'."
             )
             raise ValueError(msg)
-        if self.solver in ("qr", "gels"):
+        if self.solver in ("svd", "qr", "gels"):
             _require_cuda_solvers()
         if energies is None:
             msg = f"energies must be provided for {mode} mode"
@@ -464,8 +443,10 @@ class CudaLocalRFFModel(BaseModel):
                 del Z_cuda, G_cuda
                 t0 = _t("Step 3c cat [Z;G] col-major and [E;F]", t0)
                 if self.solver == "svd":
-                    weights_cuda = _torch_svd_solve(ZG_cuda, EF_cuda, float(self.rcond))
-                    t0 = _t("Step 4  _torch_svd_solve (SVD lstsq, 64-bit)", t0)
+                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
+                        ZG_cuda, EF_cuda, float(self.rcond), True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq, FP32)", t0)
                 elif self.solver == "gels":
                     weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
                         ZG_cuda, EF_cuda, True, self.gels_variant
@@ -485,8 +466,10 @@ class CudaLocalRFFModel(BaseModel):
                 )
                 t0 = _t("Step 3  rff_features_elemental (materialize Z col-major)", t0)
                 if self.solver == "svd":
-                    weights_cuda = _torch_svd_solve(Z_cuda, Y_cuda, float(self.rcond))
-                    t0 = _t("Step 4  _torch_svd_solve (SVD lstsq, 64-bit)", t0)
+                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
+                        Z_cuda, Y_cuda, float(self.rcond), True
+                    ).cuda()
+                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq, FP32)", t0)
                 elif self.solver == "gels":
                     weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
                         Z_cuda, Y_cuda, True, self.gels_variant

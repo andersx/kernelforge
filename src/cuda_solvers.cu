@@ -1,6 +1,8 @@
 // cuda_solvers.cu — GPU least-squares solvers via cuSOLVER/cuBLAS (FP32).
 //
-// cuda_solve_svd:  min-norm least-squares via truncated SVD.
+// cuda_solve_svd:  min-norm least-squares via truncated SVD (cusolverDnXgesvd, FP32).
+//   Uses the generic/expert API (CUDA 11.1+) which has size_t workspace — no int overflow
+//   for large matrices (e.g. m=28000, n=16384 where cusolverDnSgesvd lwork overflows INT_MAX).
 // cuda_solve_qr:   least-squares via QR (cusolverDnSgeqrf + Sormqr + Strsv).
 // cuda_solve_gels: least-squares via IRS (cusolverDnSSgels, FP32 working precision).
 //                  NOTE: the `iter` argument to cusolverDnSSgels is a HOST pointer;
@@ -14,7 +16,7 @@
 //   Z is (m x n) row-major in C/Python.
 //   1. Transpose Z to get Zt (n x m) row-major == (m x n) col-major → this is what cuSOLVER sees.
 //      cuSOLVER requires m >= n; for overdetermined systems m > n is guaranteed.
-//   2. cusolverDnSgesvd on Zt (m x n col-major):
+//   2. cusolverDnXgesvd on Zt (m x n col-major), all types CUDA_R_32F:
 //        jobu='S'  → U  (m x k) col-major, k = min(m,n) = n
 //        jobvt='S' → Vt (k x n) col-major
 //      Gives: Z = U S Vt  (in col-major / Fortran sense)
@@ -115,7 +117,11 @@ at::Tensor cuda_solve_svd(at::Tensor Z, at::Tensor y, double rcond, bool z_col_m
     at::Tensor Z_gpu = Z.to(at::kCUDA).contiguous();
     at::Tensor y_gpu = y.to(at::kCUDA).contiguous();
 
-    const int k = n;  // k = min(m,n) = n for overdetermined
+    // int64_t dimensions for cusolverDnXgesvd (avoids int overflow for large matrices).
+    const int64_t m64 = static_cast<int64_t>(m);
+    const int64_t n64 = static_cast<int64_t>(n);
+    const int64_t k64 = n64;  // k = min(m,n) = n for overdetermined
+    const int k = n;
 
     // If Z is already col-major (D, m) we can use it directly.
     // Otherwise transpose Z (row-major m x n) -> Zt col-major (m x n) via cublasSgeam.
@@ -146,29 +152,50 @@ at::Tensor cuda_solve_svd(at::Tensor Z, at::Tensor y, double rcond, bool z_col_m
     at::Tensor d_info_t =
         at::zeros({1}, at::TensorOptions().dtype(at::kInt).device(at::kCUDA));
 
-    int lwork = 0;
-    CUSOLVER_CHECK(cusolverDnSgesvd_bufferSize(s_cusolver, m, n, &lwork));
-    at::Tensor ws =
-        at::empty({lwork + 1}, at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    // cusolverDnXgesvd: generic API with size_t workspace — no int overflow for large m/n.
+    // All data and compute types are CUDA_R_32F: computation stays in FP32.
+    cusolverDnParams_t params;
+    CUSOLVER_CHECK(cusolverDnCreateParams(&params));
 
-    CUSOLVER_CHECK(cusolverDnSgesvd(
-        s_cusolver,
+    size_t dev_bytes = 0, host_bytes = 0;
+    CUSOLVER_CHECK(cusolverDnXgesvd_bufferSize(
+        s_cusolver, params,
         'S', 'S',
-        m, n,
-        Zt.data_ptr<float>(), m,          // lda=m
-        S_t.data_ptr<float>(),
-        U_t.data_ptr<float>(), m,          // ldu=m
-        Vt_t.data_ptr<float>(), k,         // ldvt=k
-        ws.data_ptr<float>(), lwork,
-        nullptr,                           // rwork (null for real)
+        m64, n64,
+        CUDA_R_32F, Zt.data_ptr<float>(), m64,
+        CUDA_R_32F, S_t.data_ptr<float>(),
+        CUDA_R_32F, U_t.data_ptr<float>(), m64,
+        CUDA_R_32F, Vt_t.data_ptr<float>(), k64,
+        CUDA_R_32F,
+        &dev_bytes, &host_bytes
+    ));
+
+    at::Tensor ws =
+        at::empty({static_cast<int64_t>(dev_bytes) + 1},
+                  at::TensorOptions().dtype(at::kByte).device(at::kCUDA));
+    std::vector<char> h_ws(host_bytes + 1);
+
+    CUSOLVER_CHECK(cusolverDnXgesvd(
+        s_cusolver, params,
+        'S', 'S',
+        m64, n64,
+        CUDA_R_32F, Zt.data_ptr<float>(), m64,
+        CUDA_R_32F, S_t.data_ptr<float>(),
+        CUDA_R_32F, U_t.data_ptr<float>(), m64,
+        CUDA_R_32F, Vt_t.data_ptr<float>(), k64,
+        CUDA_R_32F,
+        static_cast<void*>(ws.data_ptr<uint8_t>()), dev_bytes,
+        static_cast<void*>(h_ws.data()), host_bytes,
         d_info_t.data_ptr<int>()
     ));
+    CUSOLVER_CHECK(cusolverDnDestroyParams(params));
+
     {
         int h = 0;
         CUDA_CHECK(
             cudaMemcpy(&h, d_info_t.data_ptr<int>(), sizeof(int), cudaMemcpyDeviceToHost)
         );
-        TORCH_CHECK(h == 0, "cusolverDnSgesvd failed, info=", h);
+        TORCH_CHECK(h == 0, "cusolverDnXgesvd failed, info=", h);
     }
 
     // Apply rcond threshold → inv_S
