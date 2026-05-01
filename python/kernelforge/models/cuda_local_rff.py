@@ -233,7 +233,7 @@ class CudaLocalRFFModel(BaseModel):
 
             # SVD: x_elem = U @ diag(S) @ Vh
             # U: (n_valid, k), S: (k,), Vh: (k, rep_size), k = min(n_valid, rep_size)
-            _U, S, Vh = torch.linalg.svd(x_elem, full_matrices=False)
+            _U, S, Vh = torch.linalg.svd(x_elem, full_matrices=False, driver="gesvd")
             # P columns are the top n_pca principal directions
             P = Vh[:n_pca, :].T.contiguous()  # (rep_size, n_pca)
 
