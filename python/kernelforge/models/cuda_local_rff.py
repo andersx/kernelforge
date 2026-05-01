@@ -175,14 +175,16 @@ class CudaLocalRFFModel(BaseModel):
 
     def _fit_pca(
         self,
-        X_cuda: Any,  # (nmol, max_atoms, rep_size) float32 CUDA
+        X_cuda: Any,  # noqa: ANN401  # torch.Tensor (nmol, max_atoms, rep_size) float32 CUDA
         Q_idx_np: NDArray[np.int32],
         N_np: NDArray[np.int32],
     ) -> None:
         """Fit per-element PCA from training descriptors and store projection matrices."""
         import torch
 
-        assert self.n_pca is not None
+        if self.n_pca is None:
+            msg = "_fit_pca called but n_pca is None"
+            raise RuntimeError(msg)
         rep_size = int(X_cuda.shape[2])
         n_pca = self.n_pca
         nelements = len(self.elements)
@@ -231,8 +233,6 @@ class CudaLocalRFFModel(BaseModel):
             else:
                 mean = torch.zeros(rep_size, dtype=torch.float32, device=X_cuda.device)
 
-            # SVD: x_elem = U @ diag(S) @ Vh
-            # U: (n_valid, k), S: (k,), Vh: (k, rep_size), k = min(n_valid, rep_size)
             _U, S, Vh = torch.linalg.svd(x_elem, full_matrices=False, driver="gesvd")
             # P columns are the top n_pca principal directions
             P = Vh[:n_pca, :].T.contiguous()  # (rep_size, n_pca)
@@ -253,21 +253,22 @@ class CudaLocalRFFModel(BaseModel):
             pca_mean_list.append(mean)
             pca_scale_list.append(scale)
 
-        # (nelements, rep_size, n_pca), (nelements, rep_size), (nelements, n_pca)
         self._pca_matrix_cuda = torch.stack(pca_matrix_list, dim=0)
         self._pca_mean_cuda = torch.stack(pca_mean_list, dim=0)
         self._pca_scale_cuda = torch.stack(pca_scale_list, dim=0)
 
     def _apply_pca_X(
         self,
-        X_cuda: Any,  # (nmol, max_atoms, rep_size)
+        X_cuda: Any,  # noqa: ANN401  # torch.Tensor (nmol, max_atoms, rep_size)
         Q_idx_np: NDArray[np.int32],
         N_np: NDArray[np.int32],
-    ) -> Any:  # (nmol, max_atoms, n_pca)
+    ) -> Any:  # noqa: ANN401  # torch.Tensor (nmol, max_atoms, n_pca)
         """Apply per-element PCA projection to descriptor tensor."""
         import torch
 
-        assert self.n_pca is not None
+        if self.n_pca is None:
+            msg = "_apply_pca_X called but n_pca is None"
+            raise RuntimeError(msg)
         nmol = int(X_cuda.shape[0])
         max_atoms = int(X_cuda.shape[1])
         n_pca = self.n_pca
@@ -293,14 +294,16 @@ class CudaLocalRFFModel(BaseModel):
 
     def _apply_pca_dX(
         self,
-        dX_cuda: Any,  # (nmol, max_atoms, rep_size, ncoords)
+        dX_cuda: Any,  # noqa: ANN401  # torch.Tensor (nmol, max_atoms, rep_size, ncoords)
         Q_idx_np: NDArray[np.int32],
         N_np: NDArray[np.int32],
-    ) -> Any:  # (nmol, max_atoms, n_pca, ncoords)
+    ) -> Any:  # noqa: ANN401  # torch.Tensor (nmol, max_atoms, n_pca, ncoords)
         """Apply per-element PCA projection to descriptor gradient tensor."""
         import torch
 
-        assert self.n_pca is not None
+        if self.n_pca is None:
+            msg = "_apply_pca_dX called but n_pca is None"
+            raise RuntimeError(msg)
         nmol = int(dX_cuda.shape[0])
         max_atoms = int(dX_cuda.shape[1])
         ncoords = int(dX_cuda.shape[3])
@@ -317,9 +320,7 @@ class CudaLocalRFFModel(BaseModel):
                 continue
             mol_idx_t = torch.from_numpy(mol_idx).long().to(dX_cuda.device)
             atom_idx_t = torch.from_numpy(atom_idx).long().to(dX_cuda.device)
-            # dx_elem: (n_valid, rep_size, ncoords)
             dx_elem = dX_cuda[mol_idx_t, atom_idx_t, :, :]
-            # Project: (n_valid, ncoords, rep_size) @ (rep_size, n_pca) -> (n_valid, ncoords, n_pca)
             P = self._pca_matrix_cuda[ei]  # (rep_size, n_pca)
             dx_proj = dx_elem.permute(0, 2, 1) @ P  # (n_valid, ncoords, n_pca)
             dx_proj = dx_proj.permute(0, 2, 1).contiguous()  # (n_valid, n_pca, ncoords)
