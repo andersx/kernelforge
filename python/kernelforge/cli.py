@@ -649,6 +649,64 @@ def benchmark_local_kernel_gaussian_symm_rfp_qm7b() -> tuple[float, str]:
     return elapsed, f"local::kernel_gaussian_symm_rfp (QM7b, N={n})"
 
 
+def benchmark_cuda_local_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_symm_rfp (Ethanol, N=3000) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cuda_lk
+
+    n = 3000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n].astype("float32")
+    Q = data["Q"][:n].astype("int32")
+    N = data["N"][:n].astype("int32")
+    sigma = 20.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cuda_lk.kernel_gaussian_symm_rfp(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cuda_lk.kernel_gaussian_symm_rfp(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_local::kernel_gaussian_symm_rfp (Ethanol, N={n})"
+
+
+def benchmark_cuda_local_kernel_gaussian_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_symm_rfp (QM7b, N=3000) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cuda_lk
+
+    n = 3000
+    data = prepare_qm7b_fchl19(n)
+    X = data["X"][:n].astype("float32")
+    Q = data["Q"][:n].astype("int32")
+    N = data["N"][:n].astype("int32")
+    sigma = 2.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cuda_lk.kernel_gaussian_symm_rfp(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cuda_lk.kernel_gaussian_symm_rfp(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_local::kernel_gaussian_symm_rfp (QM7b, N={n})"
+
+
 def benchmark_local_kernel_gaussian_qm7b() -> tuple[float, str]:
     """Benchmark local kernel_gaussian asymmetric on QM7b (N=1000, ~2s)."""
     n = 1000
@@ -668,6 +726,429 @@ def benchmark_local_kernel_gaussian_qm7b() -> tuple[float, str]:
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"local::kernel_gaussian (QM7b, N={n})"
+
+
+# ---------------------------------------------------------------------------
+# CUDA global kernel benchmarks — require GPU + cuda_global_kernels build
+# ---------------------------------------------------------------------------
+
+
+def benchmark_cuda_global_kernel_gaussian_symm_rfp() -> tuple[float, str]:
+    """Benchmark cuda_global::kernel_gaussian_symm_rfp (Ethanol invdist, N=5000) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_global_kernels as _cg
+
+    data = load_ethanol_raw_data()
+    n = 5000
+    R = data["R"][:n]
+    X = np.array([invdist_repr.inverse_distance_upper(r) for r in R]).astype(np.float32)
+    sigma = 2.5
+
+    X_cuda = torch.from_numpy(X).cuda()
+    # warm-up
+    _ = _cg.kernel_gaussian_symm_rfp(X_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cg.kernel_gaussian_symm_rfp(X_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    rep_size = X.shape[1]
+    return elapsed, f"cuda_global::kernel_gaussian_symm_rfp (N={n}, rep_size={rep_size}, Ethanol)"
+
+
+def benchmark_cuda_global_kernel_gaussian_full_symm() -> tuple[float, str]:
+    """Benchmark cuda_global::kernel_gaussian_full_symm (Ethanol invdist+Jacobian, N=1000)."""
+    import torch
+
+    from kernelforge import cuda_global_kernels as _cg
+
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    n_atoms = len(data["z"])
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    X = np.array(X_list).astype(np.float32)
+    dX = np.array(dX_list).astype(np.float32)
+    sigma = 2.5
+
+    X_cuda = torch.from_numpy(X).cuda()
+    dX_cuda = torch.from_numpy(dX).cuda()
+    # warm-up
+    _ = _cg.kernel_gaussian_full_symm(X_cuda, dX_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cg.kernel_gaussian_full_symm(X_cuda, dX_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    rep_size = X.shape[1]
+    D = dX.shape[1]
+    return (
+        elapsed,
+        f"cuda_global::kernel_gaussian_full_symm (N={n}, rep={rep_size}, n_atoms={n_atoms}, D={D})",
+    )
+
+
+def benchmark_cuda_global_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
+    """Benchmark cuda_global::kernel_gaussian_full_symm_rfp (Ethanol invdist+Jacobian, N=1000)."""
+    import torch
+
+    from kernelforge import cuda_global_kernels as _cg
+
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+    n_atoms = len(data["z"])
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    X = np.array(X_list).astype(np.float32)
+    dX = np.array(dX_list).astype(np.float32)
+    sigma = 2.5
+
+    X_cuda = torch.from_numpy(X).cuda()
+    dX_cuda = torch.from_numpy(dX).cuda()
+    # warm-up
+    _ = _cg.kernel_gaussian_full_symm_rfp(X_cuda, dX_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cg.kernel_gaussian_full_symm_rfp(X_cuda, dX_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    rep_size = X.shape[1]
+    D = dX.shape[1]
+    return (
+        elapsed,
+        f"cuda_global::kernel_gaussian_full_symm_rfp "
+        f"(N={n}, rep={rep_size}, n_atoms={n_atoms}, D={D})",
+    )
+
+
+def benchmark_cuda_global_kernel_gaussian_full_matvec() -> tuple[float, str]:
+    """Benchmark cuda_global::kernel_gaussian_full_matvec inference (Ethanol, N=1000)."""
+    import torch
+
+    from kernelforge import cuda_global_kernels as _cg
+
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    X = np.array(X_list).astype(np.float32)
+    dX = np.array(dX_list).astype(np.float32)
+    sigma = 2.5
+
+    N, M = X.shape
+    D = dX.shape[1]
+
+    X_cuda = torch.from_numpy(X).cuda()
+    dX_cuda = torch.from_numpy(dX).cuda()
+    rng = np.random.default_rng(42)
+    alpha_E = torch.from_numpy(rng.standard_normal(N).astype(np.float32)).cuda()
+    alpha_desc_F = torch.from_numpy(rng.standard_normal((N, M)).astype(np.float32)).cuda()
+
+    # warm-up
+    _ = _cg.kernel_gaussian_full_matvec(X_cuda, dX_cuda, X_cuda, alpha_E, alpha_desc_F, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cg.kernel_gaussian_full_matvec(X_cuda, dX_cuda, X_cuda, alpha_E, alpha_desc_F, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_global::kernel_gaussian_full_matvec (N={n}, rep={M}, D={D}, Ethanol)"
+
+
+# ---------------------------------------------------------------------------
+# CUDA local kernel benchmarks — require GPU + cuda_local_kernels build
+# ---------------------------------------------------------------------------
+
+
+def benchmark_cuda_local_kernel_gaussian() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_rect asymmetric (Ethanol, N=2000) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 2000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n].astype(np.float32)
+    Q = data["Q"][:n].astype(np.int32)
+    N = data["N"][:n].astype(np.int32)
+    sigma = 20.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cl.kernel_gaussian_rect(X_cuda, Q_cuda, N_cuda, X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.kernel_gaussian_rect(X_cuda, Q_cuda, N_cuda, X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_local::kernel_gaussian_rect (Ethanol, N={n})"
+
+
+def benchmark_cuda_local_kernel_gaussian_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_rect asymmetric (QM7b, N=700) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 700
+    data = prepare_qm7b_fchl19(n)
+    X = data["X"][:n].astype(np.float32)
+    Q = data["Q"][:n].astype(np.int32)
+    N = data["N"][:n].astype(np.int32)
+    sigma = 2.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cl.kernel_gaussian_rect(X_cuda, Q_cuda, N_cuda, X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.kernel_gaussian_rect(X_cuda, Q_cuda, N_cuda, X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_local::kernel_gaussian_rect (QM7b, N={n})"
+
+
+def benchmark_cuda_local_kernel_gaussian_symm() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_symm (Ethanol, N=2000) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 2000
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n].astype(np.float32)
+    Q = data["Q"][:n].astype(np.int32)
+    N = data["N"][:n].astype(np.int32)
+    sigma = 20.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cl.kernel_gaussian_symm(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.kernel_gaussian_symm(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_local::kernel_gaussian_symm (Ethanol, N={n})"
+
+
+def benchmark_cuda_local_kernel_gaussian_symm_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_symm (QM7b, N=700) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 700
+    data = prepare_qm7b_fchl19(n)
+    X = data["X"][:n].astype(np.float32)
+    Q = data["Q"][:n].astype(np.int32)
+    N = data["N"][:n].astype(np.int32)
+    sigma = 2.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cl.kernel_gaussian_symm(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.kernel_gaussian_symm(X_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_local::kernel_gaussian_symm (QM7b, N={n})"
+
+
+def benchmark_cuda_local_kernel_gaussian_full_symm() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_full_symm (Ethanol, N=500) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 500
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n].astype(np.float32)
+    dX = data["dX"][:n].astype(np.float32)
+    Q = data["Q"][:n].astype(np.int32)
+    N = data["N"][:n].astype(np.int32)
+    sigma = 20.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    dX_cuda = torch.from_numpy(dX).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cl.kernel_gaussian_full_symm(X_cuda, dX_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.kernel_gaussian_full_symm(X_cuda, dX_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    n_atoms = int(N[0])
+    rep = X.shape[2]
+    return (
+        elapsed,
+        f"cuda_local::kernel_gaussian_full_symm (Ethanol, N={n}, n_atoms={n_atoms}, rep={rep})",
+    )
+
+
+def benchmark_cuda_local_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_full_symm_rfp (Ethanol, N=500) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 500
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n].astype(np.float32)
+    dX = data["dX"][:n].astype(np.float32)
+    Q = data["Q"][:n].astype(np.int32)
+    N = data["N"][:n].astype(np.int32)
+    sigma = 20.0
+
+    X_cuda = torch.from_numpy(X).cuda()
+    dX_cuda = torch.from_numpy(dX).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N).cuda()
+
+    # warm-up
+    _ = _cl.kernel_gaussian_full_symm_rfp(X_cuda, dX_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.kernel_gaussian_full_symm_rfp(X_cuda, dX_cuda, Q_cuda, N_cuda, sigma)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    n_atoms = int(N[0])
+    rep = X.shape[2]
+    return (
+        elapsed,
+        f"cuda_local::kernel_gaussian_full_symm_rfp (Ethanol, N={n}, n_atoms={n_atoms}, rep={rep})",
+    )
+
+
+def benchmark_cuda_local_compute_alpha_desc() -> tuple[float, str]:
+    """Benchmark cuda_local::compute_alpha_desc (Ethanol, N=1000) — requires GPU."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    dX = data["dX"][:n].astype(np.float32)
+    N_arr = data["N"][:n].astype(np.int32)
+
+    _nm, _max_atoms, rep, _ = dX.shape
+    naq = int(np.sum(N_arr)) * 3
+
+    dX_cuda = torch.from_numpy(dX).cuda()
+    N_cuda = torch.from_numpy(N_arr).cuda()
+    rng = np.random.default_rng(42)
+    alpha_F = torch.from_numpy(rng.standard_normal(naq).astype(np.float32)).cuda()
+
+    # warm-up
+    _ = _cl.compute_alpha_desc(dX_cuda, N_cuda, alpha_F)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.compute_alpha_desc(dX_cuda, N_cuda, alpha_F)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"cuda_local::compute_alpha_desc (Ethanol, N={n}, n_atoms={int(N_arr[0])}, rep={rep})",
+    )
+
+
+def benchmark_cuda_local_kernel_gaussian_full_matvec() -> tuple[float, str]:
+    """Benchmark cuda_local::kernel_gaussian_full_matvec inference (Ethanol, N=500)."""
+    import torch
+
+    from kernelforge import cuda_local_kernels as _cl
+
+    n = 500
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n].astype(np.float32)
+    dX = data["dX"][:n].astype(np.float32)
+    Q = data["Q"][:n].astype(np.int32)
+    N_arr = data["N"][:n].astype(np.int32)
+    sigma = 20.0
+
+    nm, max_atoms, rep = X.shape
+    rng = np.random.default_rng(42)
+    alpha_E = torch.from_numpy(rng.standard_normal(nm).astype(np.float32)).cuda()
+    alpha_desc_F = torch.from_numpy(
+        rng.standard_normal((nm, max_atoms, rep)).astype(np.float32)
+    ).cuda()
+
+    X_cuda = torch.from_numpy(X).cuda()
+    dX_cuda = torch.from_numpy(dX).cuda()
+    Q_cuda = torch.from_numpy(Q).cuda()
+    N_cuda = torch.from_numpy(N_arr).cuda()
+
+    # warm-up
+    _ = _cl.kernel_gaussian_full_matvec(
+        X_cuda, dX_cuda, Q_cuda, N_cuda, X_cuda, Q_cuda, N_cuda, alpha_E, alpha_desc_F, sigma
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cl.kernel_gaussian_full_matvec(
+        X_cuda, dX_cuda, Q_cuda, N_cuda, X_cuda, Q_cuda, N_cuda, alpha_E, alpha_desc_F, sigma
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    n_atoms = int(N_arr[0])
+    return (
+        elapsed,
+        f"cuda_local::kernel_gaussian_full_matvec (Ethanol, N={n}, n_atoms={n_atoms}, rep={rep})",
+    )
 
 
 def benchmark_local_kernel_gaussian_jacobian() -> tuple[float, str]:
@@ -1300,6 +1781,235 @@ def benchmark_fchl18_kernel_gaussian_qm7b() -> tuple[float, str]:
     return elapsed, f"fchl18::kernel_gaussian (QM7b, N={n}x{n})"
 
 
+# ---------------------------------------------------------------------------
+# cuda_fchl19_repr benchmarks
+# ---------------------------------------------------------------------------
+
+_QM7B_ELEMENTS = [1, 6, 7, 8, 16, 17]
+
+
+def benchmark_cuda_fchl19_repr_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl19_repr::generate_fchl_acsf (QM7b, all 7211 molecules) — GPU."""
+    import torch
+
+    from kernelforge import cuda_fchl19_repr as _cuda_repr
+
+    data = load_qm7b_raw_data()
+    R = data["R"]
+    z_list = [z.astype(np.int32) for z in data["z"]]
+    nm = len(R)
+    elements = _QM7B_ELEMENTS
+    idx_map = {z: i for i, z in enumerate(elements)}
+
+    max_atoms = int(max(len(z) for z in z_list))
+    coords_np = np.zeros((nm, max_atoms, 3), dtype=np.float32)
+    Q_np = np.zeros((nm, max_atoms), dtype=np.int32)
+    N_np = np.array([len(z) for z in z_list], dtype=np.int32)
+    for m, (coords, z) in enumerate(zip(R, z_list, strict=False)):
+        na = len(z)
+        coords_np[m, :na, :] = np.asarray(coords, dtype=np.float32)
+        Q_np[m, :na] = [idx_map[int(zi)] for zi in z]
+
+    device = torch.device("cuda:0")
+    coords_gpu = torch.from_numpy(coords_np).to(device)
+    Q_gpu = torch.from_numpy(Q_np).to(device)
+    N_gpu = torch.from_numpy(N_np).to(device)
+
+    # warm-up
+    _ = _cuda_repr.generate_fchl_acsf(coords_gpu, Q_gpu, N_gpu, nelements=len(elements))
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cuda_repr.generate_fchl_acsf(coords_gpu, Q_gpu, N_gpu, nelements=len(elements))
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl19::generate_fchl_acsf (QM7b, N={nm}, batched)"
+
+
+def benchmark_cuda_fchl19_repr_qm7b_n200() -> tuple[float, str]:
+    """Benchmark cuda_fchl19_repr::generate_fchl_acsf (QM7b, 200 molecules) — GPU."""
+    import torch
+
+    from kernelforge import cuda_fchl19_repr as _cuda_repr
+
+    n = 200
+    data = load_qm7b_raw_data()
+    R = data["R"][:n]
+    z_list = [z.astype(np.int32) for z in data["z"][:n]]
+    elements = _QM7B_ELEMENTS
+    idx_map = {z: i for i, z in enumerate(elements)}
+
+    max_atoms = int(max(len(z) for z in z_list))
+    coords_np = np.zeros((n, max_atoms, 3), dtype=np.float32)
+    Q_np = np.zeros((n, max_atoms), dtype=np.int32)
+    N_np = np.array([len(z) for z in z_list], dtype=np.int32)
+    for m, (coords, z) in enumerate(zip(R, z_list, strict=False)):
+        na = len(z)
+        coords_np[m, :na, :] = np.asarray(coords, dtype=np.float32)
+        Q_np[m, :na] = [idx_map[int(zi)] for zi in z]
+
+    device = torch.device("cuda:0")
+    coords_gpu = torch.from_numpy(coords_np).to(device)
+    Q_gpu = torch.from_numpy(Q_np).to(device)
+    N_gpu = torch.from_numpy(N_np).to(device)
+
+    # warm-up
+    _ = _cuda_repr.generate_fchl_acsf(coords_gpu, Q_gpu, N_gpu, nelements=len(elements))
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cuda_repr.generate_fchl_acsf(coords_gpu, Q_gpu, N_gpu, nelements=len(elements))
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl19::generate_fchl_acsf (QM7b, N={n}, batched)"
+
+
+def _cuda_fchl19_batch(
+    coords_list: list[NDArray[np.float64]], z_list: list[NDArray[np.int32]], elements: list[int]
+) -> tuple[Any, Any, Any, Any]:
+    """Create padded CUDA tensors for batched FCHL19 representation benchmarks."""
+    import torch
+
+    idx_map = {z: i for i, z in enumerate(elements)}
+    nm = len(coords_list)
+    max_atoms = int(max(len(z) for z in z_list))
+
+    coords_np = np.zeros((nm, max_atoms, 3), dtype=np.float32)
+    Q_np = np.zeros((nm, max_atoms), dtype=np.int32)
+    N_np = np.array([len(z) for z in z_list], dtype=np.int32)
+
+    for m, (coords, z) in enumerate(zip(coords_list, z_list, strict=False)):
+        na = len(z)
+        coords_np[m, :na, :] = np.asarray(coords, dtype=np.float32)
+        Q_np[m, :na] = [idx_map[int(zi)] for zi in z]
+
+    device = torch.device("cuda:0")
+    return (
+        torch.from_numpy(coords_np).to(device),
+        torch.from_numpy(Q_np).to(device),
+        torch.from_numpy(N_np).to(device),
+        device,
+    )
+
+
+def benchmark_cuda_fchl19_grad_ethanol_n1000() -> tuple[float, str]:
+    """Benchmark cuda_fchl19_repr::generate_fchl_acsf_and_gradients on 1000 ethanol geometries."""
+    import torch
+
+    from kernelforge import cuda_fchl19_repr as _cuda_repr
+
+    n = 1000
+    data = load_ethanol_raw_data()
+    coords_list = [np.asarray(r, dtype=np.float64) for r in data["R"][:n]]
+    z = np.asarray(data["z"], dtype=np.int32)
+    z_list = [z for _ in range(n)]
+    elements = [1, 6, 8]
+
+    coords_gpu, Q_gpu, N_gpu, _ = _cuda_fchl19_batch(coords_list, z_list, elements)
+
+    _ = _cuda_repr.generate_fchl_acsf_and_gradients(
+        coords_gpu, Q_gpu, N_gpu, nelements=len(elements)
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cuda_repr.generate_fchl_acsf_and_gradients(
+        coords_gpu, Q_gpu, N_gpu, nelements=len(elements)
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl19::generate_fchl_acsf_and_gradients (ethanol, N={n}, batched)"
+
+
+def _azobenzene_geometry() -> tuple[NDArray[np.float64], NDArray[np.int32]]:
+    """Approximate planar trans-azobenzene geometry for synthetic gradient benchmarking."""
+    ring_radius = 1.39
+    ch_radius = 2.47
+    left_center = np.array([-2.62, 0.0, 0.0], dtype=np.float64)
+    right_center = np.array([2.62, 0.0, 0.0], dtype=np.float64)
+
+    coords: list[list[float]] = [[-0.60, 0.0, 0.0], [0.60, 0.0, 0.0]]
+    z: list[int] = [7, 7]
+
+    left_angles = [0.0, 60.0, 120.0, 180.0, 240.0, 300.0]
+    for angle_deg in left_angles:
+        angle = np.deg2rad(angle_deg)
+        coords.append(
+            [
+                float(left_center[0] + ring_radius * np.cos(angle)),
+                float(left_center[1] + ring_radius * np.sin(angle)),
+                0.0,
+            ]
+        )
+        z.append(6)
+    for angle_deg in left_angles[1:]:
+        angle = np.deg2rad(angle_deg)
+        coords.append(
+            [
+                float(left_center[0] + ch_radius * np.cos(angle)),
+                float(left_center[1] + ch_radius * np.sin(angle)),
+                0.0,
+            ]
+        )
+        z.append(1)
+
+    right_angles = [180.0, 120.0, 60.0, 0.0, 300.0, 240.0]
+    for angle_deg in right_angles:
+        angle = np.deg2rad(angle_deg)
+        coords.append(
+            [
+                float(right_center[0] + ring_radius * np.cos(angle)),
+                float(right_center[1] + ring_radius * np.sin(angle)),
+                0.0,
+            ]
+        )
+        z.append(6)
+    for angle_deg in right_angles[1:]:
+        angle = np.deg2rad(angle_deg)
+        coords.append(
+            [
+                float(right_center[0] + ch_radius * np.cos(angle)),
+                float(right_center[1] + ch_radius * np.sin(angle)),
+                0.0,
+            ]
+        )
+        z.append(1)
+
+    return np.asarray(coords, dtype=np.float64), np.asarray(z, dtype=np.int32)
+
+
+def benchmark_cuda_fchl19_grad_azobenzene_n1000() -> tuple[float, str]:
+    """Benchmark cuda_fchl19_repr::generate_fchl_acsf_and_gradients on 1000 azobenzenes."""
+    import torch
+
+    from kernelforge import cuda_fchl19_repr as _cuda_repr
+
+    n = 1000
+    coords, z = _azobenzene_geometry()
+    coords_list = [coords for _ in range(n)]
+    z_list = [z for _ in range(n)]
+    elements = [1, 6, 7]
+
+    coords_gpu, Q_gpu, N_gpu, _ = _cuda_fchl19_batch(coords_list, z_list, elements)
+
+    _ = _cuda_repr.generate_fchl_acsf_and_gradients(
+        coords_gpu, Q_gpu, N_gpu, nelements=len(elements)
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cuda_repr.generate_fchl_acsf_and_gradients(
+        coords_gpu, Q_gpu, N_gpu, nelements=len(elements)
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl19::generate_fchl_acsf_and_gradients (azobenzene, N={n}, batched)"
+
+
 BENCHMARKS = {
     "ethanol_fchl19_repr": benchmark_ethanol_fchl19_representations,
     "ethanol_fchl19_grad": benchmark_ethanol_fchl19_gradients,
@@ -1321,6 +2031,22 @@ BENCHMARKS = {
     "local_kernel_gaussian": benchmark_local_kernel_gaussian,
     "local_kernel_gaussian_symm_qm7b": benchmark_local_kernel_gaussian_symm_qm7b,
     "local_kernel_gaussian_symm_rfp_qm7b": benchmark_local_kernel_gaussian_symm_rfp_qm7b,
+    "cuda_local_kernel_gaussian_symm_rfp": benchmark_cuda_local_kernel_gaussian_symm_rfp,
+    "cuda_local_kernel_gaussian_symm_rfp_qm7b": benchmark_cuda_local_kernel_gaussian_symm_rfp_qm7b,
+    "cuda_local_kernel_gaussian_rect": benchmark_cuda_local_kernel_gaussian,
+    "cuda_local_kernel_gaussian_rect_qm7b": benchmark_cuda_local_kernel_gaussian_qm7b,
+    "cuda_local_kernel_gaussian_symm": benchmark_cuda_local_kernel_gaussian_symm,
+    "cuda_local_kernel_gaussian_symm_qm7b": benchmark_cuda_local_kernel_gaussian_symm_qm7b,
+    "cuda_local_kernel_gaussian_full_symm": benchmark_cuda_local_kernel_gaussian_full_symm,
+    "cuda_local_kernel_gaussian_full_symm_rfp": benchmark_cuda_local_kernel_gaussian_full_symm_rfp,
+    "cuda_local_compute_alpha_desc": benchmark_cuda_local_compute_alpha_desc,
+    "cuda_local_kernel_gaussian_full_matvec": benchmark_cuda_local_kernel_gaussian_full_matvec,
+    "cuda_global_kernel_gaussian_symm_rfp": benchmark_cuda_global_kernel_gaussian_symm_rfp,
+    "cuda_global_kernel_gaussian_full_symm": benchmark_cuda_global_kernel_gaussian_full_symm,
+    "cuda_global_kernel_gaussian_full_symm_rfp": (
+        benchmark_cuda_global_kernel_gaussian_full_symm_rfp
+    ),
+    "cuda_global_kernel_gaussian_full_matvec": benchmark_cuda_global_kernel_gaussian_full_matvec,
     "local_kernel_gaussian_qm7b": benchmark_local_kernel_gaussian_qm7b,
     "local_kernel_gaussian_jacobian": benchmark_local_kernel_gaussian_jacobian,
     "local_kernel_gaussian_jacobian_t": benchmark_local_kernel_gaussian_jacobian_t,
@@ -1350,6 +2076,10 @@ BENCHMARKS = {
     "rff_full_gramian_elemental_rfp": benchmark_rff_full_gramian_elemental_rfp,
     "fchl18_kernel_gaussian_symm_qm7b": benchmark_fchl18_kernel_gaussian_symm_qm7b,
     "fchl18_kernel_gaussian_qm7b": benchmark_fchl18_kernel_gaussian_qm7b,
+    "cuda_fchl19_repr_qm7b": benchmark_cuda_fchl19_repr_qm7b,
+    "cuda_fchl19_repr_qm7b_n200": benchmark_cuda_fchl19_repr_qm7b_n200,
+    "cuda_fchl19_grad_ethanol_n1000": benchmark_cuda_fchl19_grad_ethanol_n1000,
+    "cuda_fchl19_grad_azobenzene_n1000": benchmark_cuda_fchl19_grad_azobenzene_n1000,
 }
 
 # Named benchmark suites
@@ -1389,6 +2119,24 @@ SUITES = {
         "local_kernel_gaussian_full_symm",
         "local_kernel_gaussian_full_symm_rfp",
     ],
+    "cuda-global-kernels": [
+        "cuda_global_kernel_gaussian_symm_rfp",
+        "cuda_global_kernel_gaussian_full_symm",
+        "cuda_global_kernel_gaussian_full_symm_rfp",
+        "cuda_global_kernel_gaussian_full_matvec",
+    ],
+    "cuda-local-kernels": [
+        "cuda_local_kernel_gaussian_symm_rfp",
+        "cuda_local_kernel_gaussian_symm_rfp_qm7b",
+        "cuda_local_kernel_gaussian_rect",
+        "cuda_local_kernel_gaussian_rect_qm7b",
+        "cuda_local_kernel_gaussian_symm",
+        "cuda_local_kernel_gaussian_symm_qm7b",
+        "cuda_local_kernel_gaussian_full_symm",
+        "cuda_local_kernel_gaussian_full_symm_rfp",
+        "cuda_local_compute_alpha_desc",
+        "cuda_local_kernel_gaussian_full_matvec",
+    ],
     "global-rff": [
         "rff_features",
         "rff_gramian_symm",
@@ -1416,6 +2164,14 @@ SUITES = {
 SUITES["fchl18"] = [
     "fchl18_kernel_gaussian_symm_qm7b",
     "fchl18_kernel_gaussian_qm7b",
+]
+
+SUITES["cuda-representations"] = [
+    "qm7b_fchl19_repr",
+    "cuda_fchl19_repr_qm7b_n200",
+    "cuda_fchl19_repr_qm7b",
+    "cuda_fchl19_grad_ethanol_n1000",
+    "cuda_fchl19_grad_azobenzene_n1000",
 ]
 
 SUITES["all"] = []

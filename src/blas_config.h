@@ -26,7 +26,7 @@
 #elif defined(KF_USE_MKL)
     // Intel MKL (Linux/Windows)
     // ILP64 define must be set BEFORE including mkl.h
-    #ifdef KF_BLAS_ILP64
+    #if defined(KF_BLAS_ILP64) && !defined(MKL_ILP64)
         #define MKL_ILP64
     #endif
     #include <mkl.h>
@@ -34,7 +34,7 @@
 #else
     // Generic BLAS (OpenBLAS, ATLAS, reference BLAS, etc.)
     // For OpenBLAS ILP64, OPENBLAS_USE64BITINT must be defined before cblas.h
-    #ifdef KF_BLAS_ILP64
+    #if defined(KF_BLAS_ILP64) && !defined(OPENBLAS_USE64BITINT)
         #define OPENBLAS_USE64BITINT
     #endif
     #include <cblas.h>

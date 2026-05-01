@@ -3,8 +3,10 @@
 
 // C++ standard library
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
@@ -2545,6 +2547,8 @@ void kernel_gaussian_full_symm_rfp(
     const double inv_sigma4 = -1.0 / (sigma * sigma * sigma * sigma);
     const double sigma2_neg = -(sigma * sigma);
 
+    auto t0_setup = std::chrono::steady_clock::now();
+
     std::vector<std::unordered_map<int, std::vector<int>>> lab_to_idx(nm);
     for (int a = 0; a < nm; ++a) {
         const int na = std::max(0, std::min(n[a], max_atoms));
@@ -2555,6 +2559,13 @@ void kernel_gaussian_full_symm_rfp(
     }
 
     const int ncols_max = 3 * max_atoms;
+
+    auto t0_loop = std::chrono::steady_clock::now();
+    fprintf(stderr, "  [CPU kernel] kernel_gaussian_full_symm_rfp: "
+            "nm=%d max_atoms=%d rep_size=%d BIG=%d\n",
+            nm, max_atoms, rep_size, BIG);
+    fprintf(stderr, "  [CPU kernel]   setup (lab_to_idx build)  %8.2f ms\n",
+            std::chrono::duration<double, std::milli>(t0_loop - t0_setup).count());
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
@@ -2797,6 +2808,10 @@ void kernel_gaussian_full_symm_rfp(
         aligned_free_64(S_sum);
         aligned_free_64(xbv);
     }  // b
+
+    auto t1_loop = std::chrono::steady_clock::now();
+    fprintf(stderr, "  [CPU kernel]   main loop (omp parallel)   %8.2f ms\n",
+            std::chrono::duration<double, std::milli>(t1_loop - t0_loop).count());
 }
 
 // ============================================================================
