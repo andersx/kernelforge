@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -135,6 +136,11 @@ def _compute_fchl19_cuda_rff(
 
 class CudaLocalRFFModel(BaseModel):
     """GPU Random Fourier Features model for FCHL19 local descriptors."""
+
+    @classmethod
+    def load(cls, path: str | Path) -> CudaLocalRFFModel:  # type: ignore[override]
+        """Load a trained CudaLocalRFFModel from a .npz file."""
+        return cast(CudaLocalRFFModel, super().load(path))
 
     def __init__(
         self,
