@@ -39,7 +39,8 @@ torch::Tensor generate_fchl_acsf_cuda(
     float acut,
     float two_body_decay,
     float three_body_decay,
-    float three_body_weight_norm
+    float three_body_weight_norm,
+    bool deterministic = false
 );
 
 std::tuple<torch::Tensor, torch::Tensor> generate_fchl_acsf_and_gradients_cuda(
@@ -57,7 +58,8 @@ std::tuple<torch::Tensor, torch::Tensor> generate_fchl_acsf_and_gradients_cuda(
     float acut,
     float two_body_decay,
     float three_body_decay,
-    float three_body_weight_norm
+    float three_body_weight_norm,
+    bool deterministic = false
 );
 
 }  // namespace fchl19

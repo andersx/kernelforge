@@ -116,6 +116,7 @@ def _compute_fchl19_cuda(
     elements: list[int],
     with_gradients: bool,
     repr_params: dict[str, Any],
+    deterministic: bool = False,
 ) -> tuple[Any, Any, Any, NDArray[np.int32], NDArray[np.int32]]:
     """Compute FCHL19 representations on GPU for CudaLocalKRRModel.
 
@@ -148,12 +149,22 @@ def _compute_fchl19_cuda(
 
     if with_gradients:
         X_cuda, dX5_cuda = _cuda_fchl19.generate_fchl_acsf_and_gradients(
-            coords_cuda, Q_idx_cuda, N_cuda, nelements=len(elements), **repr_params
+            coords_cuda,
+            Q_idx_cuda,
+            N_cuda,
+            nelements=len(elements),
+            deterministic=deterministic,
+            **repr_params,
         )
         dX_cuda = dX5_cuda.reshape(nm, max_atoms, X_cuda.shape[2], max_atoms * 3).contiguous()
     else:
         X_cuda = _cuda_fchl19.generate_fchl_acsf(
-            coords_cuda, Q_idx_cuda, N_cuda, nelements=len(elements), **repr_params
+            coords_cuda,
+            Q_idx_cuda,
+            N_cuda,
+            nelements=len(elements),
+            deterministic=deterministic,
+            **repr_params,
         )
         dX_cuda = None
 
@@ -712,6 +723,7 @@ class CudaLocalKRRModel(BaseModel):
             self.elements,
             with_gradients=need_gradients,
             repr_params=self.repr_params,
+            deterministic=True,
         )
         t0 = _tp(f"compute_fchl19 (GPU, {'grad' if need_gradients else 'no grad'})", t0)
 

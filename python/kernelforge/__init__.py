@@ -61,6 +61,8 @@ from .kitchen_sinks import (
 from .kitchen_sinks import (
     rff_gramian_symm_rfp as rff_gramian_symm_rfp,
 )
+from .models import CudaGlobalRFFModel as CudaGlobalRFFModel
+from .models import CudaLocalRFFModel as CudaLocalRFFModel
 from .models import FCHL18KRRModel as FCHL18KRRModel
 from .models import GlobalKRRModel as GlobalKRRModel
 from .models import GlobalRFFModel as GlobalRFFModel

@@ -46,7 +46,9 @@ from numpy.typing import NDArray
 from kernelforge.cli import load_qm7b_raw_data
 from kernelforge.models import (
     CudaGlobalKRRModel,
+    CudaGlobalRFFModel,
     CudaLocalKRRModel,
+    CudaLocalRFFModel,
     FCHL18KRRModel,
     GlobalKRRModel,
     GlobalRFFModel,
@@ -339,6 +341,14 @@ def _build_model(
     z_te: list[NDArray[np.int32]],
     repr_params: dict[str, Any] | None = None,
     cuda: bool = False,
+    rcond: float = -1.0,
+    gels_variant: str = "SS",
+    svdr_rank: int = 256,
+    svdr_p: int = 10,
+    svdr_niters: int = 2,
+    n_pca: int | None = None,
+    pca_center: bool = False,
+    pca_whiten: bool = False,
 ) -> (
     LocalKRRModel
     | LocalRFFModel
@@ -346,7 +356,9 @@ def _build_model(
     | GlobalKRRModel
     | GlobalRFFModel
     | CudaGlobalKRRModel
+    | CudaGlobalRFFModel
     | CudaLocalKRRModel
+    | CudaLocalRFFModel
 ):
     """Construct and return the appropriate model instance."""
     repr_params = repr_params or {}
@@ -354,6 +366,13 @@ def _build_model(
     # Inverse-distance global descriptor (no element list or atom-padding needed)
     if representation == "invdist":
         if cuda:
+            if regressor == "rff":
+                return CudaGlobalRFFModel(
+                    sigma=sigma,
+                    l2=l2,
+                    d_rff=d_rff,
+                    seed=seed,
+                )
             return CudaGlobalKRRModel(sigma=sigma, l2=l2)
         if regressor == "krr":
             return GlobalKRRModel(sigma=sigma, l2=l2)
@@ -377,6 +396,26 @@ def _build_model(
 
     # FCHL19 — GPU (CudaLocalKRRModel), KRR, or RFF
     if cuda:
+        if regressor == "rff":
+            return CudaLocalRFFModel(
+                sigma=sigma,
+                l2=l2,
+                d_rff=d_rff,
+                seed=seed,
+                elements=elements,
+                repr_params=repr_params or None,
+                solver=solver
+                if solver in ("cholesky", "svd", "qr", "gels", "svdr")
+                else "cholesky",
+                rcond=rcond,
+                gels_variant=gels_variant,
+                svdr_rank=svdr_rank,
+                svdr_p=svdr_p,
+                svdr_niters=svdr_niters,
+                n_pca=n_pca,
+                pca_center=pca_center,
+                pca_whiten=pca_whiten,
+            )
         return CudaLocalKRRModel(
             sigma=sigma,
             l2=l2,
@@ -425,6 +464,12 @@ def _print_header(args: argparse.Namespace) -> None:
     if args.cuda and args.representation == "fchl19":
         print(f"  solver         : {args.solver}")
         print(f"  preprocessing  : {args.preprocessing}")
+        if args.solver == "gels":
+            print(f"  gels_variant   : {args.gels_variant}")
+        if args.solver == "svdr":
+            print(f"  svdr_rank      : {args.svdr_rank}")
+            print(f"  svdr_p         : {args.svdr_p}")
+            print(f"  svdr_niters    : {args.svdr_niters}")
         if args.solver == "eigh":
             print(f"  spectral_rtol  : {args.spectral_rtol}")
             print(f"  spectral_atol  : {args.spectral_atol}")
@@ -435,6 +480,10 @@ def _print_header(args: argparse.Namespace) -> None:
             print(f"  cg_max_iter    : {args.cg_max_iter}")
     if args.regressor == "rff":
         print(f"  d_rff          : {args.d_rff}")
+        if args.cuda and args.n_pca is not None:
+            print(f"  n_pca          : {args.n_pca}")
+            print(f"  pca_center     : {args.pca_center}")
+            print(f"  pca_whiten     : {args.pca_whiten}")
     if args.dataset.startswith("rmd17_"):
         print(f"  split          : {args.split}")
     parsed_rp = _parse_repr_params(args.repr_param)
@@ -509,8 +558,46 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--solver",
         default=_DEFAULT_CUDA_LOCAL_SOLVER,
-        choices=["eigh", "cholesky", "cg"],
-        help="CUDA local KRR solver (--cuda --representation fchl19 only).",
+        choices=["eigh", "cholesky", "cg", "svd", "qr", "gels", "svdr"],
+        help=(
+            "Solver to use. For CUDA local KRR (--cuda --representation fchl19 --regressor krr): "
+            "eigh, cholesky, or cg. "
+            "For CUDA local RFF (--cuda --regressor rff): cholesky, svd, qr, gels, or svdr."
+        ),
+    )
+    p.add_argument(
+        "--rcond",
+        type=float,
+        default=-1.0,
+        help="rcond threshold for SVD truncation (--solver svd only). -1 uses eps heuristic.",
+    )
+    p.add_argument(
+        "--gels-variant",
+        default="SS",
+        choices=["SS", "SH", "SB", "SX"],
+        help=(
+            "Internal precision for --solver gels (cusolverDn<variant>gels IRS). "
+            "SS=single/single (default), SH=single/half, SB=single/bfloat16, "
+            "SX=single/tensorfloat32. All produce float32 output."
+        ),
+    )
+    p.add_argument(
+        "--svdr-rank",
+        type=int,
+        default=256,
+        help="Target rank k for --solver svdr (cusolverDnXgesvdr). k+p must be <= d_rff.",
+    )
+    p.add_argument(
+        "--svdr-p",
+        type=int,
+        default=10,
+        help="Oversampling parameter p for --solver svdr. Default 10.",
+    )
+    p.add_argument(
+        "--svdr-niters",
+        type=int,
+        default=2,
+        help="Power iterations for --solver svdr. More iterations = better accuracy. Default 2.",
     )
     p.add_argument(
         "--preprocessing",
@@ -557,6 +644,25 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--d-rff", type=int, default=1024, help="RFF feature dimension (RFF only).")
     p.add_argument("--seed", type=int, default=42, help="RNG seed (RFF weights + QM7b split).")
     p.add_argument(
+        "--n-pca",
+        type=int,
+        default=None,
+        metavar="INT",
+        help="Per-element PCA compression: number of components (None = no PCA, CUDA RFF only).",
+    )
+    p.add_argument(
+        "--pca-center",
+        action="store_true",
+        default=False,
+        help="Subtract per-element mean before PCA projection (CUDA RFF only).",
+    )
+    p.add_argument(
+        "--pca-whiten",
+        action="store_true",
+        default=False,
+        help="Divide PCA components by their standard deviation (CUDA RFF only).",
+    )
+    p.add_argument(
         "--elements",
         type=int,
         nargs="+",
@@ -583,9 +689,10 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "Use GPU-accelerated model (cuBLAS + cuSOLVER via PyTorch). "
-            "With --representation invdist uses CudaGlobalKRRModel; "
+            "With --representation invdist uses CudaGlobalKRRModel for KRR or "
+            "CudaGlobalRFFModel for energy-only RFF; "
             "with --representation fchl19 uses CudaLocalKRRModel. "
-            "Requires --mode energy_and_force and a CUDA-enabled build of kernelforge."
+            "Requires a CUDA-enabled build of kernelforge."
         ),
     )
     p.add_argument(
@@ -620,6 +727,15 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                     "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
                     "and PyTorch:\n    make install-linux-mkl-ilp64"
                 )
+            if args.regressor == "rff":
+                try:
+                    from kernelforge import cuda_rff_features as _
+                except ImportError:
+                    parser.error(
+                        "--cuda --regressor rff with --representation invdist requires "
+                        "cuda_rff_features (not built). Re-build kernelforge with a CUDA "
+                        "compiler, CUDAToolkit, and PyTorch:\n    make install-linux-mkl-ilp64"
+                    )
         elif args.representation == "fchl19":
             try:
                 from kernelforge import cuda_local_kernels as _
@@ -629,6 +745,15 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                     "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
                     "and PyTorch:\n    make install-linux-mkl-ilp64"
                 )
+            if args.regressor == "rff":
+                try:
+                    from kernelforge import cuda_rff_features as _
+                except ImportError:
+                    parser.error(
+                        "--cuda --regressor rff with --representation fchl19 requires "
+                        "cuda_rff_features (not built). Re-build kernelforge with a CUDA "
+                        "compiler, CUDAToolkit, and PyTorch:\n    make install-linux-mkl-ilp64"
+                    )
             try:
                 from kernelforge import cuda_fchl19_repr as _  # noqa: F401
             except ImportError:
@@ -646,8 +771,14 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
             parser.error(
                 f"--cuda supports energy_only and energy_and_force modes (got --mode {args.mode})."
             )
-        if args.regressor != "krr":
-            parser.error(f"--cuda requires --regressor krr (got --regressor {args.regressor}).")
+        if args.regressor == "rff" and (
+            args.representation not in ("invdist", "fchl19")
+            or args.mode not in ("energy_only", "energy_and_force")
+        ):
+            parser.error(
+                "--cuda --regressor rff is currently supported only with "
+                "--representation invdist/fchl19 and --mode energy_only or energy_and_force."
+            )
         if args.representation != "fchl19" and args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only configurable for --cuda --representation fchl19.")
         if (
@@ -688,6 +819,12 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 parser.error("--cg-atol must be >= 0.")
             if args.cg_max_iter is not None and args.cg_max_iter <= 0:
                 parser.error("--cg-max-iter must be > 0 when provided.")
+            if args.svdr_rank <= 0:
+                parser.error("--svdr-rank must be > 0.")
+            if args.svdr_p < 0:
+                parser.error("--svdr-p must be >= 0.")
+            if args.svdr_niters < 0:
+                parser.error("--svdr-niters must be >= 0.")
     else:
         if args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only supported with --cuda --representation fchl19.")
@@ -795,6 +932,14 @@ def run(args: argparse.Namespace) -> None:
         z_te=z_te,
         repr_params=repr_params,
         cuda=args.cuda,
+        rcond=args.rcond,
+        gels_variant=args.gels_variant,
+        svdr_rank=args.svdr_rank,
+        svdr_p=args.svdr_p,
+        svdr_niters=args.svdr_niters,
+        n_pca=args.n_pca,
+        pca_center=args.pca_center,
+        pca_whiten=args.pca_whiten,
     )
     print(f"\n[2] Model: {type(model).__name__}")
 

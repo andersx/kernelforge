@@ -27,12 +27,17 @@ CudaGlobalKRRModel
     (via torch.linalg).  Inference uses the GPU J^T·alpha contracted matvec.
     Supports energy_and_force mode only.
     Requires CUDA + PyTorch at build time; raises ImportError if absent.
+CudaGlobalRFFModel
+    GPU-accelerated global RFF using inverse-distance descriptors. Currently
+    supports energy-only training and prediction.
 CudaLocalKRRModel
     GPU-accelerated KRR using FCHL19 local descriptors and CUDA kernels.
     Training uses GPU float32 local kernel assembly + GPU float64 Cholesky
     solve (via torch.linalg).  Inference uses the GPU J^T·alpha contracted
     matvec.  Supports energy_and_force mode only.
     Requires CUDA + PyTorch at build time; raises ImportError if absent.
+CudaLocalRFFModel
+    GPU-accelerated local RFF using FCHL19 descriptors and CUDA kernels.
 ModelScore
     Dataclass returned by model.score() containing MAE, Pearson r, slope,
     and intercept for energy and/or force predictions.
@@ -40,7 +45,9 @@ ModelScore
 
 from .base import ModelScore as ModelScore
 from .cuda_global_krr import CudaGlobalKRRModel as CudaGlobalKRRModel
+from .cuda_global_rff import CudaGlobalRFFModel as CudaGlobalRFFModel
 from .cuda_local_krr import CudaLocalKRRModel as CudaLocalKRRModel
+from .cuda_local_rff import CudaLocalRFFModel as CudaLocalRFFModel
 from .fchl18_krr import FCHL18KRRModel as FCHL18KRRModel
 from .global_krr import GlobalKRRModel as GlobalKRRModel
 from .global_rff import GlobalRFFModel as GlobalRFFModel

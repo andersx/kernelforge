@@ -362,6 +362,14 @@ def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
         "save": None,
         "repr_param": None,
         "cuda": False,
+        "rcond": -1.0,
+        "gels_variant": "SS",
+        "svdr_rank": 256,
+        "svdr_p": 10,
+        "svdr_niters": 2,
+        "n_pca": None,
+        "pca_center": False,
+        "pca_whiten": False,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
