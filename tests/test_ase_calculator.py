@@ -321,3 +321,89 @@ def test_kernelmd_cli(tiny_model, tmp_path):
     assert result.returncode == 0, f"kernelmd failed:\n{result.stderr}"
     assert traj_path.exists(), "Trajectory file was not created"
     assert log_path.exists(), "Log file was not created"
+
+
+def test_run_md_zero_linear_momentum(tiny_model):
+    """Stationary() must remove centre-of-mass linear momentum after MB init."""
+    import numpy as np
+    from ase import Atoms
+
+    from kernelforge.md import run_md
+
+    model, coords0, z0 = tiny_model
+    atoms = Atoms(numbers=z0, positions=coords0)
+
+    # Run 0 steps just to trigger the MB + Stationary + ZeroRotation init path
+    frames = run_md(
+        model,
+        atoms,
+        n_steps=0,
+        dt=0.5,
+        temperature=300.0,
+        trajectory_file=None,
+        traj_interval=1,
+        logfile=None,
+        units="kcal/mol",
+        seed=7,
+    )
+    assert len(frames) >= 1
+    # Total linear momentum must be zero after Stationary()
+    momenta = frames[0].get_momenta()  # (n_atoms, 3)
+    p_total = np.abs(momenta.sum(axis=0))
+    assert np.all(p_total < 1e-10), f"COM momentum not zero: {p_total}"
+
+
+def test_run_md_langevin_returns_frames(tiny_model):
+    """run_md with ensemble='nvt-langevin' must return the correct frame count."""
+    from ase import Atoms
+
+    from kernelforge.md import run_md
+
+    model, coords0, z0 = tiny_model
+    atoms = Atoms(numbers=z0, positions=coords0)
+
+    n_steps = 20
+    interval = 5
+    with tempfile.TemporaryDirectory() as tmp:
+        frames = run_md(
+            model,
+            atoms,
+            n_steps=n_steps,
+            dt=0.5,
+            temperature=300.0,
+            trajectory_file=None,
+            traj_interval=interval,
+            logfile=Path(tmp) / "langevin.log",
+            log_interval=interval,
+            units="kcal/mol",
+            seed=3,
+            ensemble="nvt-langevin",
+            friction=0.01,
+        )
+
+    expected = n_steps // interval + 1
+    assert len(frames) == expected, f"Expected {expected} frames, got {len(frames)}"
+
+
+def test_run_md_invalid_ensemble(tiny_model):
+    """Passing an unknown ensemble name must raise ValueError."""
+    from ase import Atoms
+
+    from kernelforge.md import run_md
+
+    model, coords0, z0 = tiny_model
+    atoms = Atoms(numbers=z0, positions=coords0)
+
+    with pytest.raises(ValueError, match="ensemble"):
+        run_md(
+            model,
+            atoms,
+            n_steps=5,
+            dt=0.5,
+            temperature=300.0,
+            trajectory_file=None,
+            traj_interval=1,
+            logfile=None,
+            units="kcal/mol",
+            ensemble="nvt-nose-hoover",  # type: ignore  # intentional bad value for test
+        )

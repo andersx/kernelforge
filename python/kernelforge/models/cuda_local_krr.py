@@ -693,6 +693,37 @@ class CudaLocalKRRModel(BaseModel):
             self._y_pred_train = y_pred_train
             del alpha_f32_gpu
 
+            # Precompute training-side matvec constants for fast MD inference
+            self._precompute_matvec_cache()
+            t0 = _t("Step 7  precompute_train (GPU cache)", t0)
+
+    # ------------------------------------------------------------------
+    # Training-side matvec cache (energy_and_force only)
+    # ------------------------------------------------------------------
+
+    def _precompute_matvec_cache(self) -> None:
+        """Precompute fixed training-side constants for kernel_gaussian_full_matvec_cached.
+
+        Stores three GPU tensors that depend only on X_train, alpha_E, and
+        alpha_desc_F.  They are valid for the lifetime of the fitted model and
+        can be reused across every MD step, avoiding ~3 cudaMalloc/cudaFree
+        round-trips and ~3 kernel launches per inference call.
+        """
+        if self.training_mode_ != "energy_and_force":
+            return
+        import torch  # noqa: F401 — ensure torch is available
+
+        norms_t, S_adF, combined_t = _ext.precompute_train(  # type: ignore[union-attr]
+            self._X_train_cuda,
+            self._Q_train_cuda,
+            self._N_train_cuda,
+            self._alpha_E_cuda,
+            self._alpha_desc_F_cuda,
+        )
+        self._norms_t_cuda = norms_t
+        self._S_adF_cuda = S_adF
+        self._combined_t_cuda = combined_t
+
     # ------------------------------------------------------------------
     # predict
     # ------------------------------------------------------------------
@@ -749,7 +780,7 @@ class CudaLocalKRRModel(BaseModel):
             F_pred = np.zeros(int(np.sum(N_te) * 3), dtype=np.float64)
             return E_pred, F_pred
         else:
-            E_cuda, F_cuda = _ext.kernel_gaussian_full_matvec(  # type: ignore[union-attr]
+            E_cuda, F_cuda = _ext.kernel_gaussian_full_matvec_cached(  # type: ignore[union-attr]
                 X_te_cuda,
                 dX_te_cuda,
                 Q_te_cuda,
@@ -759,9 +790,12 @@ class CudaLocalKRRModel(BaseModel):
                 self._N_train_cuda,
                 self._alpha_E_cuda,
                 self._alpha_desc_F_cuda,
+                self._norms_t_cuda,
+                self._S_adF_cuda,
+                self._combined_t_cuda,
                 float(self.sigma),
             )
-            t0 = _tp("kernel_gaussian_full_matvec (GPU)", t0)
+            t0 = _tp("kernel_gaussian_full_matvec_cached (GPU)", t0)
 
             E_pred = E_cuda.cpu().numpy().astype(np.float64)
             F_flat: NDArray[np.float64] = F_cuda.cpu().numpy().astype(np.float64)
@@ -881,3 +915,6 @@ class CudaLocalKRRModel(BaseModel):
         self._N_train_cuda = _to_cuda_i32(self._N_train_np)
         self._alpha_E_cuda = _to_cuda_f32(self._alpha_E_np)
         self._alpha_desc_F_cuda = _to_cuda_f32(self._alpha_desc_F_np)
+
+        # Rebuild precomputed matvec cache (energy_and_force models only)
+        self._precompute_matvec_cache()

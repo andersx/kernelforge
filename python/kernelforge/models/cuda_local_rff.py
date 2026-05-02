@@ -123,14 +123,22 @@ def _compute_fchl19_cuda_rff(
 
     if with_gradients:
         X_cuda, dX5_cuda = _cuda_fchl19.generate_fchl_acsf_and_gradients(
-            coords_cuda, Q_idx_cuda, N_cuda, nelements=len(elements),
-            deterministic=deterministic, **repr_params
+            coords_cuda,
+            Q_idx_cuda,
+            N_cuda,
+            nelements=len(elements),
+            deterministic=deterministic,
+            **repr_params,
         )
         dX_cuda = dX5_cuda.reshape(nm, max_atoms, X_cuda.shape[2], max_atoms * 3).contiguous()
     else:
         X_cuda = _cuda_fchl19.generate_fchl_acsf(
-            coords_cuda, Q_idx_cuda, N_cuda, nelements=len(elements),
-            deterministic=deterministic, **repr_params
+            coords_cuda,
+            Q_idx_cuda,
+            N_cuda,
+            nelements=len(elements),
+            deterministic=deterministic,
+            **repr_params,
         )
         dX_cuda = None
 

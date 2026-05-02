@@ -160,6 +160,68 @@ void kernel_gaussian_symm_rfp_local_cu(
 );
 
 // ---------------------------------------------------------------------------
+// kernel_gaussian_precompute_train_local_cu
+//
+// Precomputes training-side constants that are fixed across all calls to
+// kernel_gaussian_full_matvec_cached_local_cu during an MD simulation.
+// Call once after fitting; store the outputs and pass them into the cached
+// matvec at every inference step.
+//
+// Caller must allocate output buffers:
+//   d_norms_t    : (nm_t * max_atoms_t,)          squared norms ||X_t[t]||²
+//   d_S_adF      : (nm_t * max_atoms_t,)          X_t[t] · alpha_desc[t]
+//   d_combined_t : (nm_t * max_atoms_t, rep_size) alpha_desc + alpha_E[mol]*X_t
+// ---------------------------------------------------------------------------
+void kernel_gaussian_precompute_train_local_cu(
+    const float *d_X_t,
+    const float *d_alpha_desc,
+    const float *d_alpha_E,
+    const int   *d_N_t,
+    float       *d_norms_t,
+    float       *d_S_adF,
+    float       *d_combined_t,
+    int nm_t, int max_atoms_t, int rep_size
+);
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_full_matvec_cached_local_cu
+//
+// Variant of kernel_gaussian_full_matvec_local_cu for repeated inference
+// (MD simulation) where training-side constants are precomputed once.
+//
+// Compared to the uncached version:
+//   - d_norms_t, d_S_adF, d_combined_t are caller-supplied (precomputed)
+//   - No cudaMalloc/cudaFree for those three buffers per call
+//   - No kernel launches to compute those three buffers per call
+//   - Timing fprintf removed (use benchmarks/bench_krr_matvec.py)
+//
+// Parameters:
+//   d_norms_t    : (nm_t * max_atoms_t,)           precomputed squared norms
+//   d_S_adF      : (nm_t * max_atoms_t,)           precomputed dot products
+//   d_combined_t : (nm_t * max_atoms_t, rep_size)  precomputed combined matrix
+// ---------------------------------------------------------------------------
+void kernel_gaussian_full_matvec_cached_local_cu(
+    const float *d_X_q,
+    const float *d_dX_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    const float *d_alpha_E,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_combined_t,
+    float       *d_E_pred,
+    float       *d_F_pred,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size, int naq_q
+);
+
+// ---------------------------------------------------------------------------
 // kernel_gaussian_rect_local_cu — rectangular energy-only K_EE (nm_q × nm_t)
 // ---------------------------------------------------------------------------
 void kernel_gaussian_rect_local_cu(

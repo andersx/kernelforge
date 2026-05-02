@@ -401,6 +401,140 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec_local(
 
 
 // ---------------------------------------------------------------------------
+// precompute_train
+// ---------------------------------------------------------------------------
+
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> precompute_train_local(
+    torch::Tensor X_t,         // (nm_t, max_atoms_t, rep)
+    torch::Tensor Q_t,         // (nm_t, max_atoms_t)  — unused here but kept for API symmetry
+    torch::Tensor N_t,         // (nm_t,)
+    torch::Tensor alpha_E,     // (nm_t,)
+    torch::Tensor alpha_desc)  // (nm_t, max_atoms_t, rep)
+{
+    check_cuda_float32(X_t,        "X_t");
+    check_cuda_int32(N_t,          "N_t");
+    check_cuda_float32(alpha_E,    "alpha_E");
+    check_cuda_float32(alpha_desc, "alpha_desc");
+
+    TORCH_CHECK(X_t.dim()        == 3, "X_t must be 3-D (nm_t, max_atoms_t, rep)");
+    TORCH_CHECK(N_t.dim()        == 1, "N_t must be 1-D (nm_t,)");
+    TORCH_CHECK(alpha_E.dim()    == 1, "alpha_E must be 1-D (nm_t,)");
+    TORCH_CHECK(alpha_desc.dim() == 3, "alpha_desc must be 3-D (nm_t, max_atoms_t, rep)");
+
+    int nm_t        = (int)X_t.size(0);
+    int max_atoms_t = (int)X_t.size(1);
+    int rep_size    = (int)X_t.size(2);
+    int N_t_flat    = nm_t * max_atoms_t;
+
+    auto opts = X_t.options();
+    auto norms_t    = torch::empty({N_t_flat},                    opts);
+    auto S_adF      = torch::empty({N_t_flat},                    opts);
+    auto combined_t = torch::empty({N_t_flat, rep_size},          opts);
+
+    kf::fchl19::kernel_gaussian_precompute_train_local_cu(
+        X_t.data_ptr<float>(),
+        alpha_desc.data_ptr<float>(),
+        alpha_E.data_ptr<float>(),
+        N_t.data_ptr<int>(),
+        norms_t.data_ptr<float>(),
+        S_adF.data_ptr<float>(),
+        combined_t.data_ptr<float>(),
+        nm_t, max_atoms_t, rep_size);
+
+    return {norms_t, S_adF, combined_t};
+}
+
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_full_matvec_cached
+// ---------------------------------------------------------------------------
+
+std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec_cached_local(
+    torch::Tensor X_q,          // (nm_q, max_atoms_q, rep)
+    torch::Tensor dX_q,         // (nm_q, max_atoms_q, rep, 3*max_atoms_q)
+    torch::Tensor Q_q,          // (nm_q, max_atoms_q)
+    torch::Tensor N_q,          // (nm_q,)
+    torch::Tensor X_t,          // (nm_t, max_atoms_t, rep)
+    torch::Tensor Q_t,          // (nm_t, max_atoms_t)
+    torch::Tensor N_t,          // (nm_t,)
+    torch::Tensor alpha_E,      // (nm_t,)
+    torch::Tensor alpha_desc,   // (nm_t, max_atoms_t, rep)
+    torch::Tensor norms_t,      // (nm_t * max_atoms_t,)   precomputed
+    torch::Tensor S_adF,        // (nm_t * max_atoms_t,)   precomputed
+    torch::Tensor combined_t,   // (nm_t * max_atoms_t, rep) precomputed
+    double sigma)
+{
+    check_cuda_float32(X_q,         "X_q");
+    check_cuda_float32(dX_q,        "dX_q");
+    check_cuda_int32(Q_q,           "Q_q");
+    check_cuda_int32(N_q,           "N_q");
+    check_cuda_float32(X_t,         "X_t");
+    check_cuda_int32(Q_t,           "Q_t");
+    check_cuda_int32(N_t,           "N_t");
+    check_cuda_float32(alpha_E,     "alpha_E");
+    check_cuda_float32(alpha_desc,  "alpha_desc");
+    check_cuda_float32(norms_t,     "norms_t");
+    check_cuda_float32(S_adF,       "S_adF");
+    check_cuda_float32(combined_t,  "combined_t");
+
+    TORCH_CHECK(X_q.dim()        == 3, "X_q must be 3-D");
+    TORCH_CHECK(dX_q.dim()       == 4, "dX_q must be 4-D");
+    TORCH_CHECK(Q_q.dim()        == 2, "Q_q must be 2-D");
+    TORCH_CHECK(N_q.dim()        == 1, "N_q must be 1-D");
+    TORCH_CHECK(X_t.dim()        == 3, "X_t must be 3-D");
+    TORCH_CHECK(Q_t.dim()        == 2, "Q_t must be 2-D");
+    TORCH_CHECK(N_t.dim()        == 1, "N_t must be 1-D");
+    TORCH_CHECK(alpha_E.dim()    == 1, "alpha_E must be 1-D");
+    TORCH_CHECK(alpha_desc.dim() == 3, "alpha_desc must be 3-D");
+    TORCH_CHECK(norms_t.dim()    == 1, "norms_t must be 1-D");
+    TORCH_CHECK(S_adF.dim()      == 1, "S_adF must be 1-D");
+    TORCH_CHECK(combined_t.dim() == 2, "combined_t must be 2-D");
+    TORCH_CHECK(sigma > 0.0, "sigma must be positive");
+
+    int nm_q        = (int)X_q.size(0);
+    int max_atoms_q = (int)X_q.size(1);
+    int rep_size    = (int)X_q.size(2);
+    int nm_t        = (int)X_t.size(0);
+    int max_atoms_t = (int)X_t.size(1);
+
+    TORCH_CHECK(X_t.size(2) == rep_size, "rep_size must match between X_q and X_t");
+
+    // Compute naq_q = 3 * sum(N_q)
+    auto N_q_cpu = N_q.cpu();
+    const int *Nq_ptr = N_q_cpu.data_ptr<int>();
+    int naq_q = 0;
+    for (int m = 0; m < nm_q; m++) {
+        int n = Nq_ptr[m];
+        if (n > 0) naq_q += 3 * n;
+    }
+
+    auto opts   = X_q.options();
+    auto E_pred = torch::zeros({nm_q},  opts);
+    auto F_pred = torch::zeros({naq_q}, opts);
+
+    kf::fchl19::kernel_gaussian_full_matvec_cached_local_cu(
+        X_q.data_ptr<float>(),
+        dX_q.data_ptr<float>(),
+        Q_q.data_ptr<int>(),
+        N_q.data_ptr<int>(),
+        X_t.data_ptr<float>(),
+        Q_t.data_ptr<int>(),
+        N_t.data_ptr<int>(),
+        alpha_E.data_ptr<float>(),
+        alpha_desc.data_ptr<float>(),
+        norms_t.data_ptr<float>(),
+        S_adF.data_ptr<float>(),
+        combined_t.data_ptr<float>(),
+        E_pred.data_ptr<float>(),
+        F_pred.data_ptr<float>(),
+        (float)sigma,
+        nm_q, nm_t, max_atoms_q, max_atoms_t, rep_size, naq_q);
+
+    return {E_pred, F_pred};
+}
+
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
@@ -584,6 +718,83 @@ Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
 N_t : torch.Tensor, shape (nm_t,), int32, CUDA
 alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
 alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+sigma : float
+
+Returns
+-------
+E_pred : torch.Tensor, shape (nm_q,), float32, CUDA
+F_pred : torch.Tensor, shape (naq_q,), float32, CUDA  (flat Cartesian forces)
+)doc");
+
+    m.def("precompute_train",
+          &precompute_train_local,
+          py::arg("X_t"),
+          py::arg("Q_t"),
+          py::arg("N_t"),
+          py::arg("alpha_E"),
+          py::arg("alpha_desc"),
+          R"doc(
+Precompute training-side constants for repeated inference (e.g. MD simulation).
+
+These three tensors are fixed as long as X_t, alpha_E, and alpha_desc do not
+change.  Pass the returned tensors to ``kernel_gaussian_full_matvec_cached``
+at every inference step to avoid recomputing them.
+
+Parameters
+----------
+X_t : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
+N_t : torch.Tensor, shape (nm_t,), int32, CUDA
+alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
+alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+
+Returns
+-------
+norms_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+    Precomputed squared norms ||X_t[t]||^2.
+S_adF : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+    Precomputed dot products X_t[t] · alpha_desc[t].
+combined_t : torch.Tensor, shape (nm_t * max_atoms_t, rep), float32, CUDA
+    Precomputed combined matrix alpha_desc + alpha_E[mol(t)] * X_t.
+)doc");
+
+    m.def("kernel_gaussian_full_matvec_cached",
+          &kernel_gaussian_full_matvec_cached_local,
+          py::arg("X_q"),
+          py::arg("dX_q"),
+          py::arg("Q_q"),
+          py::arg("N_q"),
+          py::arg("X_t"),
+          py::arg("Q_t"),
+          py::arg("N_t"),
+          py::arg("alpha_E"),
+          py::arg("alpha_desc"),
+          py::arg("norms_t"),
+          py::arg("S_adF"),
+          py::arg("combined_t"),
+          py::arg("sigma"),
+          R"doc(
+Cached variant of kernel_gaussian_full_matvec for repeated inference.
+
+Compared to ``kernel_gaussian_full_matvec``, this version accepts three
+precomputed training-side tensors (from ``precompute_train``) and avoids
+recomputing them on every call.  Significantly faster for MD simulations where
+the training set is fixed across all steps.
+
+Parameters
+----------
+X_q : torch.Tensor, shape (nm_q, max_atoms_q, rep), float32, CUDA
+dX_q : torch.Tensor, shape (nm_q, max_atoms_q, rep, 3*max_atoms_q), float32, CUDA
+Q_q : torch.Tensor, shape (nm_q, max_atoms_q), int32, CUDA
+N_q : torch.Tensor, shape (nm_q,), int32, CUDA
+X_t : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
+N_t : torch.Tensor, shape (nm_t,), int32, CUDA
+alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
+alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+norms_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+S_adF : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+combined_t : torch.Tensor, shape (nm_t * max_atoms_t, rep), float32, CUDA
 sigma : float
 
 Returns

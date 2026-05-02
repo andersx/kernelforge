@@ -2223,6 +2223,231 @@ void kernel_gaussian_full_matvec_local_cu(
     cudaFree(d_wE_arr);
 }
 
+// ===========================================================================
+// kernel_gaussian_precompute_train_local_cu
+// ===========================================================================
+//
+// Precomputes the three training-side constants that are fixed across all
+// calls to kernel_gaussian_full_matvec_cached_local_cu.  Call once after
+// fitting; pass the results into the cached matvec at every MD step.
+//
+//   d_norms_t    (N_t,)         ||X_t[t]||²
+//   d_S_adF      (N_t,)         X_t[t] · alpha_desc[t]
+//   d_combined_t (N_t, rep)     alpha_desc[t] + alpha_E[mol(t)] * X_t[t]
+//
+// All three output buffers must be pre-allocated by the caller.
+// ---------------------------------------------------------------------------
+void kernel_gaussian_precompute_train_local_cu(
+    const float *d_X_t,
+    const float *d_alpha_desc,
+    const float *d_alpha_E,
+    const int   *d_N_t,
+    float       *d_norms_t,
+    float       *d_S_adF,
+    float       *d_combined_t,
+    int nm_t, int max_atoms_t, int rep_size)
+{
+    int N_t = nm_t * max_atoms_t;
+
+    compute_sqnorms_kernel<<<(N_t + 255) / 256, 256>>>(
+        d_X_t, d_norms_t, rep_size, N_t);
+
+    precompute_S_adF_kernel<<<(N_t + 255) / 256, 256>>>(
+        d_X_t, d_alpha_desc, d_N_t, d_S_adF,
+        N_t, max_atoms_t, rep_size, nm_t);
+
+    {
+        long long total = (long long)N_t * rep_size;
+        precompute_combined_train_kernel<<<(int)((total + 255) / 256), 256>>>(
+            d_alpha_desc, d_X_t, d_alpha_E, d_N_t, d_combined_t,
+            N_t, max_atoms_t, rep_size, nm_t);
+    }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+
+// ===========================================================================
+// kernel_gaussian_full_matvec_cached_local_cu
+// ===========================================================================
+//
+// Variant of kernel_gaussian_full_matvec_local_cu for repeated inference
+// (e.g. MD simulation) where the three training-side constants (d_norms_t,
+// d_S_adF, d_combined_t) are precomputed once and reused across calls.
+//
+// Changes vs the uncached version:
+//   * cudaMalloc/cudaFree for d_norms_t, d_S_adF, d_combined_t removed.
+//   * Three device-kernel launches to compute those terms removed.
+//   * Timing fprintf / cudaEvent instrumentation removed.
+//
+// Caller is responsible for ensuring precomputed buffers remain valid and
+// match the current d_X_t, d_alpha_desc, d_alpha_E, d_N_t.
+// ---------------------------------------------------------------------------
+void kernel_gaussian_full_matvec_cached_local_cu(
+    const float *d_X_q,
+    const float *d_dX_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    const float *d_alpha_E,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_combined_t,
+    float       *d_E_pred,
+    float       *d_F_pred,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size, int naq_q)
+{
+    ensure_cublas();
+
+    float inv_s2 = 1.0f / (sigma * sigma);
+
+    // Build query Cartesian offset array
+    int *d_offs_q;
+    CUDA_CHECK(cudaMalloc(&d_offs_q, nm_q * sizeof(int)));
+    build_offsets(d_N_q, d_offs_q, nm_q);
+
+    // Allocate per-atom accumulators (query side only; always small)
+    long long n_q_atoms = (long long)nm_q * max_atoms_q;
+    float *d_E_partial, *d_G_acc, *d_wE_arr;
+    CUDA_CHECK(cudaMalloc(&d_E_partial, n_q_atoms * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_G_acc,     n_q_atoms * rep_size * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_wE_arr,    n_q_atoms * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_G_acc, 0, n_q_atoms * rep_size * sizeof(float)));
+
+    // Phase 1: SGEMM-based accumulation of E_partial, G_acc, wE
+    {
+        int N_q = nm_q * max_atoms_q;
+        int N_t = nm_t * max_atoms_t;
+        const float neg2 = -2.0f, zero_f = 0.0f, one_f = 1.0f, neg1 = -1.0f;
+
+        // 1a. Query squared norms only (training norms are precomputed)
+        float *d_norms_q;
+        CUDA_CHECK(cudaMalloc(&d_norms_q, N_q * sizeof(float)));
+        compute_sqnorms_kernel<<<(N_q + 255) / 256, 256>>>(
+            d_X_q, d_norms_q, rep_size, N_q);
+
+        // 1b. C_qt = -2 * X_q^T @ X_t  (col-major: (N_q, N_t))
+        float *d_C_qt;
+        CUDA_CHECK(cudaMalloc(&d_C_qt, (long long)N_q * N_t * sizeof(float)));
+        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+            N_q, N_t, rep_size,
+            &neg2, d_X_q, rep_size, d_X_t, rep_size,
+            &zero_f, d_C_qt, N_q));
+
+        // 1c. Apply norms + exp + label screening
+        //     Uses precomputed d_norms_t (not freed by us).
+        {
+            dim3 blk(16, 16), grd((N_q + 15) / 16, (N_t + 15) / 16);
+            build_C_qt_kernel<<<grd, blk>>>(
+                d_C_qt, d_norms_q, d_norms_t,
+                d_Q_q, d_Q_t, d_N_q, d_N_t,
+                inv_s2, N_q, N_t, max_atoms_q, max_atoms_t);
+        }
+        CUDA_CHECK(cudaDeviceSynchronize());
+        cudaFree(d_norms_q);
+
+        // 2. inner_F(Nq, Nt) = X_q @ alpha_desc^T
+        float *d_inner_F;
+        CUDA_CHECK(cudaMalloc(&d_inner_F, (long long)N_q * N_t * sizeof(float)));
+        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+            N_q, N_t, rep_size,
+            &one_f, d_X_q, rep_size, d_alpha_desc, rep_size,
+            &zero_f, d_inner_F, N_q));
+
+        // 3. Build expd_iF = -(C_qt/σ²) * (inner_F - S_adF broadcast)
+        //    Uses precomputed d_S_adF.
+        float *d_expd_iF;
+        CUDA_CHECK(cudaMalloc(&d_expd_iF, (long long)N_q * N_t * sizeof(float)));
+        {
+            long long total = (long long)N_q * N_t;
+            int blk = 256;
+            int grd = (int)((total + blk - 1) / blk);
+            inference_build_expd_iF_kernel<<<grd, blk>>>(
+                d_C_qt, d_inner_F, d_S_adF, d_expd_iF,
+                inv_s2, N_q, N_t);
+        }
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // 4. G_acc = C_qt @ combined_t   (uses precomputed d_combined_t)
+        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
+            rep_size, N_q, N_t,
+            &one_f, d_combined_t, rep_size, d_C_qt, N_q,
+            &zero_f, d_G_acc, rep_size));
+
+        // 5. G_acc -= expd_iF @ X_t
+        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
+            rep_size, N_q, N_t,
+            &neg1, d_X_t, rep_size, d_expd_iF, N_q,
+            &one_f, d_G_acc, rep_size));
+
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // 6. E_partial and wE, plus row_sum_expd_iF
+        float *d_row_expd_iF;
+        CUDA_CHECK(cudaMalloc(&d_row_expd_iF, N_q * sizeof(float)));
+        {
+            dim3 blk_e(32, 8);
+            dim3 grd_e((N_q + 31) / 32);
+            inference_E_and_diag_kernel<<<grd_e, blk_e>>>(
+                d_C_qt, d_inner_F, d_expd_iF, d_alpha_E, d_N_t,
+                d_E_partial, d_wE_arr, d_row_expd_iF,
+                sigma * sigma,
+                N_q, N_t, max_atoms_t, nm_t);
+        }
+
+        // 7. Diagonal correction: G_acc[q,k] += (row_expd_iF[q] - wE[q]) * X_q[q,k]
+        {
+            long long total = (long long)N_q * rep_size;
+            inference_G_diag_correction_kernel<<<(int)((total + 255) / 256), 256>>>(
+                d_G_acc, d_X_q, d_row_expd_iF, d_wE_arr,
+                N_q, rep_size);
+        }
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        cudaFree(d_C_qt);
+        cudaFree(d_inner_F);
+        cudaFree(d_expd_iF);
+        cudaFree(d_row_expd_iF);
+    }
+
+    // Phase 2: reduce E_partial → E_pred (sum over query atoms per molecule)
+    {
+        int reduce_block = ((max_atoms_q + 31) / 32) * 32;
+        if (reduce_block < 32)  reduce_block = 32;
+        if (reduce_block > 256) reduce_block = 256;
+        size_t smem_r = (size_t)reduce_block * sizeof(float);
+        local_energy_reduce_kernel<<<nm_q, reduce_block, smem_r>>>(
+            d_E_partial, d_N_q, d_E_pred, nm_q, max_atoms_q);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    // Phase 3: back-project G_acc → F_pred via dX_q^T @ G_acc per query molecule
+    {
+        int ncols_max = 3 * max_atoms_q;
+        int bp_block  = ((ncols_max + 31) / 32) * 32;
+        if (bp_block < 32)  bp_block = 32;
+        if (bp_block > 512) bp_block = 512;
+        CUDA_CHECK(cudaMemset(d_F_pred, 0, (long long)naq_q * sizeof(float)));
+        local_force_backproject_kernel<<<nm_q, bp_block>>>(
+            d_dX_q, d_G_acc, d_N_q, d_offs_q,
+            d_F_pred, nm_q, max_atoms_q, rep_size);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+
+    // Cleanup (query-side only; training-side precomputed buffers are caller-owned)
+    cudaFree(d_offs_q);
+    cudaFree(d_E_partial);
+    cudaFree(d_G_acc);
+    cudaFree(d_wE_arr);
+}
+
+
 // ---------------------------------------------------------------------------
 // kernel_gaussian_symm_local_cu — energy-only K_EE (nm × nm)
 //

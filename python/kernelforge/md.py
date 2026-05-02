@@ -1,15 +1,18 @@
-"""NVE molecular dynamics runner using ASE VelocityVerlet.
+"""Molecular dynamics runner using ASE (NVE VelocityVerlet or NVT Langevin).
 
 Usage
 -----
 >>> from kernelforge.md import run_md
 >>> frames = run_md(model, atoms, n_steps=1000, dt=0.5, temperature=300.0)
+>>> # NVT Langevin:
+>>> frames = run_md(model, atoms, n_steps=1000, dt=0.5, temperature=300.0,
+...                ensemble="nvt-langevin", friction=0.01)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -31,8 +34,10 @@ def run_md(
     log_interval: int = 10,
     units: str = "kcal/mol",
     seed: int = 42,
+    ensemble: Literal["nve", "nvt-langevin"] = "nve",
+    friction: float = 0.01,
 ) -> list[Any]:
-    """Run NVE molecular dynamics using ASE VelocityVerlet.
+    """Run molecular dynamics using ASE (NVE VelocityVerlet or NVT Langevin).
 
     Parameters
     ----------
@@ -49,7 +54,8 @@ def run_md(
     temperature:
         Temperature in Kelvin used to draw initial velocities from a
         Maxwell-Boltzmann distribution.  Pass ``None`` (or 0) to keep any
-        existing momenta on *atoms* unchanged.
+        existing momenta on *atoms* unchanged.  Also used as the target
+        temperature for ``'nvt-langevin'``.
     n_equil:
         Number of silent equilibration steps to run *before* production.
         No frames are saved and no log entries are written during this phase.
@@ -69,6 +75,12 @@ def run_md(
         or ``'eV'``.
     seed:
         Random seed for Maxwell-Boltzmann velocity initialisation.
+    ensemble:
+        ``'nve'`` (default) — microcanonical NVE using ASE ``VelocityVerlet``.
+        ``'nvt-langevin'`` — canonical NVT using ASE ``Langevin``.
+    friction:
+        Langevin friction coefficient in fs⁻¹ (default 0.01).  Only used when
+        ``ensemble='nvt-langevin'``.
 
     Returns
     -------
@@ -77,7 +89,11 @@ def run_md(
     """
     try:
         import ase.units as _units
-        from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+        from ase.md.velocitydistribution import (
+            MaxwellBoltzmannDistribution,
+            Stationary,
+            ZeroRotation,
+        )
         from ase.md.verlet import VelocityVerlet
     except ImportError as exc:
         msg = (
@@ -85,6 +101,10 @@ def run_md(
             "Install it with:  pip install 'kernelforge[ase]'  or  pip install ase"
         )
         raise ImportError(msg) from exc
+
+    if ensemble not in ("nve", "nvt-langevin"):
+        msg = f"ensemble must be 'nve' or 'nvt-langevin', got '{ensemble}'"
+        raise ValueError(msg)
 
     from .ase_calculator import KernelForgeCalculator
 
@@ -96,8 +116,24 @@ def run_md(
     if temperature is not None and temperature > 0.0:
         rng = np.random.default_rng(seed)
         MaxwellBoltzmannDistribution(atoms, temperature_K=temperature, rng=rng)
+        Stationary(atoms)  # remove centre-of-mass drift
+        ZeroRotation(atoms)  # remove net angular momentum
 
-    dyn = VelocityVerlet(atoms, timestep=dt * _units.fs)
+    if ensemble == "nvt-langevin":
+        from ase.md.langevin import Langevin
+
+        if temperature is None or temperature <= 0.0:
+            msg = "temperature must be > 0 for ensemble='nvt-langevin'"
+            raise ValueError(msg)
+        dyn: Any = Langevin(
+            atoms,
+            timestep=dt * _units.fs,
+            temperature_K=temperature,
+            friction=friction / _units.fs,
+            fixcm=False,
+        )
+    else:
+        dyn = VelocityVerlet(atoms, timestep=dt * _units.fs)
 
     # --- equilibration (silent, no observers) ---
     if n_equil > 0:

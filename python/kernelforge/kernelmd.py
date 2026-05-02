@@ -173,6 +173,28 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--seed", type=int, default=42, help="Random seed for velocity initialisation.")
+    p.add_argument(
+        "--ensemble",
+        default="nve",
+        choices=["nve", "nvt-langevin"],
+        help=(
+            "MD ensemble.  'nve' (default): microcanonical NVE via VelocityVerlet. "
+            "'nvt-langevin': canonical NVT via Langevin thermostat."
+        ),
+    )
+    p.add_argument(
+        "--friction",
+        type=float,
+        default=0.01,
+        help="Langevin friction coefficient in fs⁻¹ (only used with --ensemble nvt-langevin).",
+    )
+    p.add_argument(
+        "--equil",
+        type=int,
+        default=0,
+        dest="n_equil",
+        help="Number of silent equilibration steps before production.",
+    )
     return p
 
 
@@ -187,8 +209,9 @@ def main() -> None:
     temperature = args.temperature if args.temperature > 0 else None
 
     print(
-        f"[kernelmd] NVE MD: {args.steps} steps x {args.dt} fs"
+        f"[kernelmd] {args.ensemble.upper()} MD: {args.steps} steps x {args.dt} fs"
         + (f" @ {temperature} K (Maxwell-Boltzmann init)" if temperature else "")
+        + (f", friction={args.friction} fs⁻¹" if args.ensemble == "nvt-langevin" else "")
     )
     print(f"[kernelmd] Trajectory → {args.output}")
     print(f"[kernelmd] Log        → {args.logfile}")
@@ -201,12 +224,15 @@ def main() -> None:
         n_steps=args.steps,
         dt=args.dt,
         temperature=temperature,
+        n_equil=args.n_equil,
         trajectory_file=args.output,
         traj_interval=args.interval,
         logfile=args.logfile,
         log_interval=args.log_interval,
         units=args.units,
         seed=args.seed,
+        ensemble=args.ensemble,
+        friction=args.friction,
     )
 
     # Write extxyz trajectory if the user asked for .extxyz output
