@@ -184,6 +184,7 @@ def main() -> None:
     # ---- cached matvec ----
     norms_t = model._norms_t_cuda  # type: ignore[attr-defined]
     S_adF = model._S_adF_cuda  # type: ignore[attr-defined]
+    alpha_E_t = model._alpha_E_t_cuda  # type: ignore[attr-defined]
     combined_t = model._combined_t_cuda  # type: ignore[attr-defined]
 
     def run_cached() -> None:
@@ -194,7 +195,7 @@ def main() -> None:
             model._N_train_cuda,  # type: ignore[attr-defined]
             model._alpha_E_cuda,  # type: ignore[attr-defined]
             model._alpha_desc_F_cuda,  # type: ignore[attr-defined]
-            norms_t, S_adF, combined_t,
+            norms_t, S_adF, alpha_E_t, combined_t,
             float(model.sigma),  # type: ignore[attr-defined]
         )
 

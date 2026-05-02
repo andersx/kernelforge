@@ -67,6 +67,290 @@ static cublasHandle_t s_cublas = nullptr;
 
 #define KF_UNUSED_GLOBAL __attribute__((unused))
 
+__global__ static void gather_rows_kernel(
+    const float *X_in, float *X_out,
+    const int *indices, int R, int rep);
+
+__global__ static void gather_scalars_kernel(
+    const float *in, float *out,
+    const int *indices, int R);
+
+struct CachedLocalMatvecScratch {
+    int *d_offs_q = nullptr;
+    size_t offs_q_cap = 0;
+
+    float *d_E_partial = nullptr;
+    size_t E_partial_cap = 0;
+
+    float *d_G_acc = nullptr;
+    size_t G_acc_cap = 0;
+
+    float *d_wE_arr = nullptr;
+    size_t wE_arr_cap = 0;
+
+    float *d_norms_q = nullptr;
+    size_t norms_q_cap = 0;
+
+    float *d_C_qt = nullptr;
+    size_t C_qt_cap = 0;
+
+    float *d_inner_F = nullptr;
+    size_t inner_F_cap = 0;
+
+    float *d_row_expd_iF = nullptr;
+    size_t row_expd_iF_cap = 0;
+
+    int *d_query_indices = nullptr;
+    size_t query_indices_cap = 0;
+
+    int *d_query_count = nullptr;
+    size_t query_count_cap = 0;
+
+    float *d_X_q_elem = nullptr;
+    size_t X_q_elem_cap = 0;
+
+    float *d_norms_q_elem = nullptr;
+    size_t norms_q_elem_cap = 0;
+
+    float *d_C_elem = nullptr;
+    size_t C_elem_cap = 0;
+
+    float *d_inner_F_elem = nullptr;
+    size_t inner_F_elem_cap = 0;
+
+    float *d_expd_iF_elem = nullptr;
+    size_t expd_iF_elem_cap = 0;
+
+    float *d_G_acc_elem = nullptr;
+    size_t G_acc_elem_cap = 0;
+
+    float *d_row_expd_iF_elem = nullptr;
+    size_t row_expd_iF_elem_cap = 0;
+};
+
+static CachedLocalMatvecScratch s_cached_local_matvec_scratch;
+
+struct CachedLocalTrainingElementGroup {
+    int label = 0;
+    int count = 0;
+    int *d_indices = nullptr;
+    float *d_X_t = nullptr;
+    float *d_alpha_desc = nullptr;
+    float *d_norms_t = nullptr;
+    float *d_S_adF = nullptr;
+    float *d_alpha_E_t = nullptr;
+    float *d_combined_t = nullptr;
+};
+
+struct CachedLocalTrainingElementCache {
+    const int *d_Q_t = nullptr;
+    const int *d_N_t = nullptr;
+    const float *d_X_t = nullptr;
+    const float *d_alpha_desc = nullptr;
+    const float *d_norms_t = nullptr;
+    const float *d_S_adF = nullptr;
+    const float *d_alpha_E_t = nullptr;
+    const float *d_combined_t = nullptr;
+    int nm_t = 0;
+    int max_atoms_t = 0;
+    int rep_size = 0;
+    std::vector<CachedLocalTrainingElementGroup> groups;
+};
+
+static CachedLocalTrainingElementCache s_cached_local_training_element_cache;
+
+template <typename T>
+static void ensure_device_capacity(T **ptr, size_t *cap, size_t count)
+{
+    if (*cap >= count) return;
+    if (*ptr) cudaFree(*ptr);
+    CUDA_CHECK(cudaMalloc(ptr, count * sizeof(T)));
+    *cap = count;
+}
+
+static void ensure_cached_local_matvec_scratch(int nm_q, int max_atoms_q, int rep_size, int nm_t,
+                                               int max_atoms_t)
+{
+    size_t N_q = (size_t)nm_q * (size_t)max_atoms_q;
+    size_t N_t = (size_t)nm_t * (size_t)max_atoms_t;
+    size_t q_rep = N_q * (size_t)rep_size;
+    size_t q_t = N_q * N_t;
+
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_offs_q,
+                           &s_cached_local_matvec_scratch.offs_q_cap,
+                           (size_t)nm_q);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_E_partial,
+                           &s_cached_local_matvec_scratch.E_partial_cap,
+                           N_q);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_G_acc,
+                           &s_cached_local_matvec_scratch.G_acc_cap,
+                           q_rep);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_wE_arr,
+                           &s_cached_local_matvec_scratch.wE_arr_cap,
+                           N_q);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_norms_q,
+                           &s_cached_local_matvec_scratch.norms_q_cap,
+                           N_q);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_C_qt,
+                           &s_cached_local_matvec_scratch.C_qt_cap,
+                           q_t);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_inner_F,
+                           &s_cached_local_matvec_scratch.inner_F_cap,
+                           q_t);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_row_expd_iF,
+                           &s_cached_local_matvec_scratch.row_expd_iF_cap,
+                           N_q);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_query_indices,
+                           &s_cached_local_matvec_scratch.query_indices_cap,
+                           N_q);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_query_count,
+                           &s_cached_local_matvec_scratch.query_count_cap,
+                           (size_t)1);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_X_q_elem,
+                           &s_cached_local_matvec_scratch.X_q_elem_cap,
+                           q_rep);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_norms_q_elem,
+                           &s_cached_local_matvec_scratch.norms_q_elem_cap,
+                           N_q);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_C_elem,
+                           &s_cached_local_matvec_scratch.C_elem_cap,
+                           q_t);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_inner_F_elem,
+                           &s_cached_local_matvec_scratch.inner_F_elem_cap,
+                           q_t);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_expd_iF_elem,
+                           &s_cached_local_matvec_scratch.expd_iF_elem_cap,
+                           q_t);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_G_acc_elem,
+                           &s_cached_local_matvec_scratch.G_acc_elem_cap,
+                           q_rep);
+    ensure_device_capacity(&s_cached_local_matvec_scratch.d_row_expd_iF_elem,
+                           &s_cached_local_matvec_scratch.row_expd_iF_elem_cap,
+                           N_q);
+}
+
+static void free_cached_local_training_element_cache()
+{
+    for (CachedLocalTrainingElementGroup &group : s_cached_local_training_element_cache.groups) {
+        cudaFree(group.d_indices);
+        cudaFree(group.d_X_t);
+        cudaFree(group.d_alpha_desc);
+        cudaFree(group.d_norms_t);
+        cudaFree(group.d_S_adF);
+        cudaFree(group.d_alpha_E_t);
+        cudaFree(group.d_combined_t);
+    }
+    s_cached_local_training_element_cache.groups.clear();
+    s_cached_local_training_element_cache = CachedLocalTrainingElementCache{};
+}
+
+static void ensure_cached_local_training_element_cache(
+    const int *d_Q_t,
+    const int *d_N_t,
+    const float *d_X_t,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_alpha_E_t,
+    const float *d_combined_t,
+    int nm_t, int max_atoms_t, int rep_size)
+{
+    CachedLocalTrainingElementCache &cache = s_cached_local_training_element_cache;
+    bool matches =
+        cache.d_Q_t == d_Q_t &&
+        cache.d_N_t == d_N_t &&
+        cache.d_X_t == d_X_t &&
+        cache.d_alpha_desc == d_alpha_desc &&
+        cache.d_norms_t == d_norms_t &&
+        cache.d_S_adF == d_S_adF &&
+        cache.d_alpha_E_t == d_alpha_E_t &&
+        cache.d_combined_t == d_combined_t &&
+        cache.nm_t == nm_t &&
+        cache.max_atoms_t == max_atoms_t &&
+        cache.rep_size == rep_size;
+    if (matches) return;
+
+    free_cached_local_training_element_cache();
+
+    int N_t = nm_t * max_atoms_t;
+    int *h_Q = (int*)malloc((size_t)N_t * sizeof(int));
+    int *h_N = (int*)malloc((size_t)nm_t * sizeof(int));
+    CUDA_CHECK(cudaMemcpy(h_Q, d_Q_t, (size_t)N_t * sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_N, d_N_t, (size_t)nm_t * sizeof(int), cudaMemcpyDeviceToHost));
+
+    std::vector<int> labels;
+    for (int m = 0; m < nm_t; m++) {
+        for (int i = 0; i < h_N[m]; i++) {
+            int q = h_Q[m * max_atoms_t + i];
+            bool found = false;
+            for (int label : labels) {
+                if (label == q) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) labels.push_back(q);
+        }
+    }
+
+    for (int label : labels) {
+        std::vector<int> atom_indices;
+        for (int m = 0; m < nm_t; m++) {
+            for (int i = 0; i < h_N[m]; i++) {
+                if (h_Q[m * max_atoms_t + i] == label)
+                    atom_indices.push_back(m * max_atoms_t + i);
+            }
+        }
+        int R_t = (int)atom_indices.size();
+        if (R_t == 0) continue;
+
+        CachedLocalTrainingElementGroup group;
+        group.label = label;
+        group.count = R_t;
+        CUDA_CHECK(cudaMalloc(&group.d_indices, (size_t)R_t * sizeof(int)));
+        CUDA_CHECK(cudaMemcpy(group.d_indices, atom_indices.data(), (size_t)R_t * sizeof(int),
+                              cudaMemcpyHostToDevice));
+
+        CUDA_CHECK(cudaMalloc(&group.d_X_t, (size_t)R_t * rep_size * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&group.d_alpha_desc, (size_t)R_t * rep_size * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&group.d_norms_t, (size_t)R_t * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&group.d_S_adF, (size_t)R_t * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&group.d_alpha_E_t, (size_t)R_t * sizeof(float)));
+        CUDA_CHECK(cudaMalloc(&group.d_combined_t, (size_t)R_t * rep_size * sizeof(float)));
+
+        gather_rows_kernel<<<(int)(((long long)R_t * rep_size + 255) / 256), 256>>>(
+            d_X_t, group.d_X_t, group.d_indices, R_t, rep_size);
+        gather_rows_kernel<<<(int)(((long long)R_t * rep_size + 255) / 256), 256>>>(
+            d_alpha_desc, group.d_alpha_desc, group.d_indices, R_t, rep_size);
+        gather_rows_kernel<<<(int)(((long long)R_t * rep_size + 255) / 256), 256>>>(
+            d_combined_t, group.d_combined_t, group.d_indices, R_t, rep_size);
+        gather_scalars_kernel<<<(R_t + 255) / 256, 256>>>(
+            d_norms_t, group.d_norms_t, group.d_indices, R_t);
+        gather_scalars_kernel<<<(R_t + 255) / 256, 256>>>(
+            d_S_adF, group.d_S_adF, group.d_indices, R_t);
+        gather_scalars_kernel<<<(R_t + 255) / 256, 256>>>(
+            d_alpha_E_t, group.d_alpha_E_t, group.d_indices, R_t);
+        CUDA_CHECK(cudaGetLastError());
+        CUDA_CHECK(cudaDeviceSynchronize());
+        cache.groups.push_back(group);
+    }
+
+    free(h_Q);
+    free(h_N);
+
+    cache.d_Q_t = d_Q_t;
+    cache.d_N_t = d_N_t;
+    cache.d_X_t = d_X_t;
+    cache.d_alpha_desc = d_alpha_desc;
+    cache.d_norms_t = d_norms_t;
+    cache.d_S_adF = d_S_adF;
+    cache.d_alpha_E_t = d_alpha_E_t;
+    cache.d_combined_t = d_combined_t;
+    cache.nm_t = nm_t;
+    cache.max_atoms_t = max_atoms_t;
+    cache.rep_size = rep_size;
+}
+
 static void ensure_cublas()
 {
     if (!s_cublas) {
@@ -959,6 +1243,74 @@ __global__ static void apply_norms_exp_kernel(
     G[idx] = expf(-0.5f * inv_s2 * dist2) * inv_s2;
 }
 
+__global__ static void gather_active_query_indices_kernel(
+    const int *d_Q_q,
+    const int *d_N_q,
+    int *d_indices,
+    int *d_count,
+    int label,
+    int nm_q,
+    int max_atoms_q)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int N_q = nm_q * max_atoms_q;
+    if (idx >= N_q) return;
+
+    int mol = idx / max_atoms_q;
+    int atom = idx % max_atoms_q;
+    if (atom >= d_N_q[mol]) return;
+    if (d_Q_q[idx] != label) return;
+
+    int out = atomicAdd(d_count, 1);
+    d_indices[out] = idx;
+}
+
+__global__ static void scatter_rect_tile_kernel(
+    const float *src,
+    float *dst,
+    const int *row_indices,
+    const int *col_indices,
+    int row_count,
+    int col_count,
+    int ld_src,
+    int ld_dst)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i >= row_count || j >= col_count) return;
+
+    int row = row_indices[i];
+    int col = col_indices[j];
+    dst[row + (long long)col * ld_dst] = src[i + (long long)j * ld_src];
+}
+
+__global__ static void scatter_g_acc_tile_kernel(
+    const float *src,
+    float *dst,
+    const int *row_indices,
+    int row_count,
+    int rep_size)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= row_count * rep_size) return;
+
+    int i = idx / rep_size;
+    int k = idx % rep_size;
+    int row = row_indices[i];
+    dst[(long long)row * rep_size + k] += src[idx];
+}
+
+__global__ static void scatter_row_sums_kernel(
+    const float *src,
+    float *dst,
+    const int *row_indices,
+    int row_count)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= row_count) return;
+    dst[row_indices[i]] += src[i];
+}
+
 
 // ---------------------------------------------------------------------------
 // scatter_C_to_KEE_kernel: atomically add C_elem values to K_EE.
@@ -1090,12 +1442,14 @@ __global__ static void inference_build_expd_iF_kernel(
     float       *d_inner_F,   // (N_q, N_t) col-major — on entry: X_q @ adF^T, on exit: corrected
     const float *d_S_adF,     // (N_t,) self-dots x_t · adF[t]
     float       *d_expd_iF,   // (N_q, N_t) col-major output — expd * inner_F
+    float       *d_row_expd_iF, // (N_q,) output accumulator
     float inv_s2,
     int N_q, int N_t)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N_q * N_t) return;
 
+    int q = idx % N_q;
     int j = idx / N_q;  // train atom (col-major)
 
     // Correct inner_F: subtract S_adF[t]
@@ -1104,7 +1458,9 @@ __global__ static void inference_build_expd_iF_kernel(
     d_inner_F[idx] = iF_raw;
 
     // expd_iF = -(C_qt / σ²) * inner_F
-    d_expd_iF[idx] = -c_qt * inv_s2 * iF_raw;
+    float expd_iF = -c_qt * inv_s2 * iF_raw;
+    d_expd_iF[idx] = expd_iF;
+    atomicAdd(&d_row_expd_iF[q], expd_iF);
 }
 
 
@@ -1119,81 +1475,58 @@ __global__ static void inference_build_expd_iF_kernel(
 // One thread per query atom.
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// inference_E_and_diag_kernel: tiled 2-D version for coalesced memory access.
+// inference_E_and_diag_kernel: tile over both query atoms and training atoms.
 //
-// Block = (TILE_Q=32, TILE_T=8) = 256 threads.
-//   tq = threadIdx.x  (0..31): which query atom within the tile
-//   tt = threadIdx.y  (0..7):  which subset of train atoms this thread handles
+// The previous version launched only ceil(N_q / 32) blocks, which collapses to
+// a single block for the common single-query inference case (e.g. aspirin with
+// N_q ~= 21). This tiled version launches a 2-D grid:
+//   blockIdx.x -> query-atom tile
+//   blockIdx.y -> training-atom tile
 //
-// Each of the 32 tq-lanes processes one query atom q = blockIdx.x*32 + tq.
-// The 8 tt-lanes split the N_t train atoms into strided slices, accumulate
-// partial sums in registers, then reduce across tt via warp-shuffle.
-//
-// All reads of d_C_qt / d_inner_F / d_expd_iF are coalesced: for a fixed tt
-// all 32 tq threads read 32 consecutive floats (stride-1 along q dimension).
+// Each block reduces one (query-tile, training-tile) slice into registers and
+// shared memory, then atomically accumulates the partial sums into d_E_partial
+// and d_wE. row_sum_expd_iF is accumulated earlier in
+// inference_build_expd_iF_kernel.
 // ---------------------------------------------------------------------------
 #define TILE_Q 32
-#define TILE_T 8
+#define TILE_T 256
 __global__ static void inference_E_and_diag_kernel(
     const float *d_C_qt,       // (N_q, N_t) col-major
     const float *d_inner_F,    // (N_q, N_t) col-major (corrected)
-    const float *d_expd_iF,    // (N_q, N_t) col-major
-    const float *d_alpha_E,    // (nm_t,)
-    const int   *d_N_t,        // (nm_t,) for alpha_E expansion
+    const float *d_alpha_E_t,  // (N_t,) atom-expanded alpha_E
     float       *d_E_partial,  // (N_q,) output
     float       *d_wE,         // (N_q,) output
     float       *d_row_expd_iF,// (N_q,) output — row sum of expd_iF
     float sigma2,
-    int N_q, int N_t, int max_atoms_t, int nm_t)
+    int N_q, int N_t)
 {
+    (void)d_row_expd_iF;
+
     int tq = threadIdx.x;  // 0..TILE_Q-1
-    int tt = threadIdx.y;  // 0..TILE_T-1
     int q  = blockIdx.x * TILE_Q + tq;
     bool valid_q = (q < N_q);
 
+    int t0 = blockIdx.y * TILE_T;
+    int t1 = t0 + TILE_T;
+    if (t1 > N_t) t1 = N_t;
+
     float E_loc     = 0.0f;
     float wE_loc    = 0.0f;
-    float riF_loc   = 0.0f;
-
     if (valid_q) {
-        for (int t = tt; t < N_t; t += TILE_T) {
+        for (int t = t0; t < t1; t++) {
             long long idx = q + (long long)t * N_q;
             float c = d_C_qt[idx];
             if (c != 0.0f) {
-                int mol_t = t / max_atoms_t;
-                float aE  = d_alpha_E[mol_t];
+                float aE  = d_alpha_E_t[t];
                 E_loc   += c * (sigma2 * aE + d_inner_F[idx]);
                 wE_loc  += c * aE;
-                riF_loc += d_expd_iF[idx];
             }
         }
     }
 
-    // Reduce partial sums across the TILE_T tt-lanes using warp shuffle.
-    // All 32*8=256 threads form a single warp group but occupy 8 warps.
-    // Threads with same tq but different tt are in different warps, so we
-    // use __shfl_down_sync within the 32-thread sub-warp of each tt-lane,
-    // but must use shared memory to aggregate across tt.
-    __shared__ float sh_E[TILE_T][TILE_Q];
-    __shared__ float sh_wE[TILE_T][TILE_Q];
-    __shared__ float sh_riF[TILE_T][TILE_Q];
-
-    sh_E[tt][tq]   = E_loc;
-    sh_wE[tt][tq]  = wE_loc;
-    sh_riF[tt][tq] = riF_loc;
-    __syncthreads();
-
-    // Only the tt=0 threads write the final result
-    if (tt == 0 && valid_q) {
-        float sum_E = 0.0f, sum_wE = 0.0f, sum_riF = 0.0f;
-        for (int s = 0; s < TILE_T; s++) {
-            sum_E   += sh_E[s][tq];
-            sum_wE  += sh_wE[s][tq];
-            sum_riF += sh_riF[s][tq];
-        }
-        d_E_partial[q]    = sum_E;
-        d_wE[q]           = sum_wE;
-        d_row_expd_iF[q]  = sum_riF;
+    if (valid_q) {
+        atomicAdd(&d_E_partial[q], E_loc);
+        atomicAdd(&d_wE[q], wE_loc);
     }
 }
 #undef TILE_Q
@@ -1232,7 +1565,7 @@ __global__ static void inference_G_diag_correction_kernel(
 __global__ static void precompute_combined_train_kernel(
     const float *d_alpha_desc,  // (N_t, rep) row-major (flat view of (nm_t, max_atoms_t, rep))
     const float *d_X_t,         // (N_t, rep) row-major
-    const float *d_alpha_E,     // (nm_t,)
+    const float *d_alpha_E_t,   // (N_t,) atom-expanded alpha_E
     const int   *d_N_t,         // (nm_t,)
     float       *d_combined,    // (N_t, rep) row-major output
     int N_t, int max_atoms_t, int rep_size, int nm_t)
@@ -1249,7 +1582,29 @@ __global__ static void precompute_combined_train_kernel(
         return;
     }
 
-    d_combined[idx] = d_alpha_desc[idx] + d_alpha_E[mol] * d_X_t[idx];
+    d_combined[idx] = d_alpha_desc[idx] + d_alpha_E_t[t] * d_X_t[idx];
+}
+
+
+// ---------------------------------------------------------------------------
+// precompute_alpha_E_expand_kernel: alpha_E_t[t] = alpha_E[mol(t)]
+// ---------------------------------------------------------------------------
+__global__ static void precompute_alpha_E_expand_kernel(
+    const float *d_alpha_E,
+    const int   *d_N_t,
+    float       *d_alpha_E_t,
+    int N_t, int max_atoms_t, int nm_t)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= N_t) return;
+
+    int mol = t / max_atoms_t;
+    int atom = t % max_atoms_t;
+    if (mol >= nm_t || atom >= d_N_t[mol]) {
+        d_alpha_E_t[t] = 0.0f;
+        return;
+    }
+    d_alpha_E_t[t] = d_alpha_E[mol];
 }
 
 
@@ -1413,8 +1768,8 @@ __global__ static void local_energy_reduce_kernel(
 //
 // F[offs_q[a] + c] += Σ_{i1=0}^{N_q[a]-1}  Σ_k dX_q[a,i1,k,c] * G_acc[a,i1,k]
 //
-// Grid: nm_q blocks, each handling all atoms of one query molecule.
-// Block: ncols_max threads (one per force Cartesian component).
+// Grid: (ncols_max, nm_q), with one block per (molecule, Cartesian component).
+// Block: reduction threads over the flattened (atom, descriptor) space.
 // ---------------------------------------------------------------------------
 __global__ static void local_force_backproject_kernel(
     const float *d_dX_q,    // (nm_q, max_atoms_q, rep, lda)  lda=3*max_atoms_q
@@ -1424,25 +1779,38 @@ __global__ static void local_force_backproject_kernel(
     float       *d_F_pred,  // (naq_q,)
     int nm_q, int max_atoms_q, int rep_size)
 {
-    int a = blockIdx.x;
+    int a = blockIdx.y;
     if (a >= nm_q) return;
     int na  = d_N_q[a];
     int lda = 3 * max_atoms_q;
     int ncols_a = 3 * na;
     int off_a   = d_offs_q[a];
 
-    // Each thread handles one Cartesian component c
-    int c = threadIdx.x;
+    int c = blockIdx.x;
     if (c >= ncols_a) return;
 
+    long long nterms = (long long)na * rep_size;
     float sum = 0.0f;
-    for (int i1 = 0; i1 < na; i1++) {
+    for (long long idx = threadIdx.x; idx < nterms; idx += blockDim.x) {
+        int i1 = (int)(idx / rep_size);
+        int k  = (int)(idx - (long long)i1 * rep_size);
         const float *dxa = d_dX_q + (long long)(a * max_atoms_q + i1) * rep_size * lda;
         const float *G   = d_G_acc + (long long)(a * max_atoms_q + i1) * rep_size;
-        for (int k = 0; k < rep_size; k++)
-            sum += dxa[(long long)k * lda + c] * G[k];
+        sum += dxa[(long long)k * lda + c] * G[k];
     }
-    d_F_pred[off_a + c] = sum;
+
+    __shared__ float sh[256];
+    sh[threadIdx.x] = sum;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride)
+            sh[threadIdx.x] += sh[threadIdx.x + stride];
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+        d_F_pred[off_a + c] = sh[0];
 }
 
 
@@ -2040,8 +2408,9 @@ void kernel_gaussian_full_matvec_local_cu(
     CUDA_CHECK(cudaMalloc(&d_E_partial, n_q_atoms * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_G_acc,     n_q_atoms * rep_size * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_wE_arr,    n_q_atoms * sizeof(float)));
-
+    CUDA_CHECK(cudaMemset(d_E_partial, 0, n_q_atoms * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_G_acc, 0, n_q_atoms * rep_size * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_wE_arr, 0, n_q_atoms * sizeof(float)));
 
     cudaEvent_t ev_mv0, ev_mv1, ev_mv2, ev_mv3;
     CUDA_CHECK(cudaEventCreate(&ev_mv0));
@@ -2105,8 +2474,12 @@ void kernel_gaussian_full_matvec_local_cu(
             &one_f, d_X_q, rep_size, d_alpha_desc, rep_size,
             &zero_f, d_inner_F, N_q));
 
-        // 4. Build expd_iF = -(C_qt/σ²) * (inner_F - S_adF broadcast)
-        //    Also corrects inner_F in-place.
+        // 4. Allocate row-sum buffer and build expd_iF = -(C_qt/σ²) *
+        //    (inner_F - S_adF broadcast). Also corrects inner_F in-place.
+        float *d_row_expd_iF;
+        CUDA_CHECK(cudaMalloc(&d_row_expd_iF, N_q * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_row_expd_iF, 0, N_q * sizeof(float)));
+
         float *d_expd_iF;
         CUDA_CHECK(cudaMalloc(&d_expd_iF, (long long)N_q * N_t * sizeof(float)));
         {
@@ -2114,19 +2487,26 @@ void kernel_gaussian_full_matvec_local_cu(
             int blk = 256;
             int grd = (int)((total + blk - 1) / blk);
             inference_build_expd_iF_kernel<<<grd, blk>>>(
-                d_C_qt, d_inner_F, d_S_adF, d_expd_iF,
+                d_C_qt, d_inner_F, d_S_adF, d_expd_iF, d_row_expd_iF,
                 inv_s2, N_q, N_t);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
         cudaFree(d_S_adF);
 
-        // 5. Precompute combined_t[t,k] = alpha_desc[t,k] + alpha_E[mol_t] * X_t[t,k]
+        // 5. Precompute alpha_E_t[t] = alpha_E[mol(t)] and
+        //    combined_t[t,k] = alpha_desc[t,k] + alpha_E_t[t] * X_t[t,k]
+        float *d_alpha_E_t;
+        CUDA_CHECK(cudaMalloc(&d_alpha_E_t, N_t * sizeof(float)));
+        precompute_alpha_E_expand_kernel<<<(N_t + 255) / 256, 256>>>(
+            d_alpha_E, d_N_t, d_alpha_E_t,
+            N_t, max_atoms_t, nm_t);
+
         float *d_combined_t;
         CUDA_CHECK(cudaMalloc(&d_combined_t, (long long)N_t * rep_size * sizeof(float)));
         {
             long long total = (long long)N_t * rep_size;
             precompute_combined_train_kernel<<<(int)((total + 255) / 256), 256>>>(
-                d_alpha_desc, d_X_t, d_alpha_E, d_N_t, d_combined_t,
+                d_alpha_desc, d_X_t, d_alpha_E_t, d_N_t, d_combined_t,
                 N_t, max_atoms_t, rep_size, nm_t);
         }
 
@@ -2145,17 +2525,15 @@ void kernel_gaussian_full_matvec_local_cu(
 
         CUDA_CHECK(cudaDeviceSynchronize());
 
-        // 8. E_partial and wE (per query atom), plus row_sum_expd_iF
-        float *d_row_expd_iF;
-        CUDA_CHECK(cudaMalloc(&d_row_expd_iF, N_q * sizeof(float)));
+        // 8. E_partial and wE (per query atom). row_sum_expd_iF already built.
         {
-            dim3 blk_e(32, 8);
-            dim3 grd_e((N_q + 31) / 32);
+            dim3 blk_e(32, 1);
+            dim3 grd_e((N_q + 31) / 32, (N_t + 255) / 256);
             inference_E_and_diag_kernel<<<grd_e, blk_e>>>(
-                d_C_qt, d_inner_F, d_expd_iF, d_alpha_E, d_N_t,
+                d_C_qt, d_inner_F, d_alpha_E_t,
                 d_E_partial, d_wE_arr, d_row_expd_iF,
                 sigma * sigma,
-                N_q, N_t, max_atoms_t, nm_t);
+                N_q, N_t);
         }
 
         // 9. Diagonal correction: G_acc[q,k] += (row_expd_iF[q] - wE[q]) * X_q[q,k]
@@ -2170,6 +2548,7 @@ void kernel_gaussian_full_matvec_local_cu(
         cudaFree(d_C_qt);
         cudaFree(d_inner_F);
         cudaFree(d_expd_iF);
+        cudaFree(d_alpha_E_t);
         cudaFree(d_row_expd_iF);
     }
     CUDA_CHECK(cudaEventRecord(ev_mv1));
@@ -2188,13 +2567,10 @@ void kernel_gaussian_full_matvec_local_cu(
 
     // Phase 3: back-project G_acc → F_pred via dX_q^T @ G_acc per query molecule
     {
-        // One block per query molecule; one thread per Cartesian force component
         int ncols_max = 3 * max_atoms_q;
-        int bp_block  = ((ncols_max + 31) / 32) * 32;
-        if (bp_block < 32)  bp_block = 32;
-        if (bp_block > 512) bp_block = 512;
-        CUDA_CHECK(cudaMemset(d_F_pred, 0, (long long)naq_q * sizeof(float)));
-        local_force_backproject_kernel<<<nm_q, bp_block>>>(
+        int bp_block  = 256;
+        dim3 bp_grid(ncols_max, nm_q);
+        local_force_backproject_kernel<<<bp_grid, bp_block>>>(
             d_dX_q, d_G_acc, d_N_q, d_offs_q,
             d_F_pred, nm_q, max_atoms_q, rep_size);
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -2233,7 +2609,8 @@ void kernel_gaussian_full_matvec_local_cu(
 //
 //   d_norms_t    (N_t,)         ||X_t[t]||²
 //   d_S_adF      (N_t,)         X_t[t] · alpha_desc[t]
-//   d_combined_t (N_t, rep)     alpha_desc[t] + alpha_E[mol(t)] * X_t[t]
+//   d_alpha_E_t  (N_t,)         alpha_E expanded to atom rows
+//   d_combined_t (N_t, rep)     alpha_desc[t] + alpha_E_t[t] * X_t[t]
 //
 // All three output buffers must be pre-allocated by the caller.
 // ---------------------------------------------------------------------------
@@ -2244,6 +2621,7 @@ void kernel_gaussian_precompute_train_local_cu(
     const int   *d_N_t,
     float       *d_norms_t,
     float       *d_S_adF,
+    float       *d_alpha_E_t,
     float       *d_combined_t,
     int nm_t, int max_atoms_t, int rep_size)
 {
@@ -2256,10 +2634,14 @@ void kernel_gaussian_precompute_train_local_cu(
         d_X_t, d_alpha_desc, d_N_t, d_S_adF,
         N_t, max_atoms_t, rep_size, nm_t);
 
+    precompute_alpha_E_expand_kernel<<<(N_t + 255) / 256, 256>>>(
+        d_alpha_E, d_N_t, d_alpha_E_t,
+        N_t, max_atoms_t, nm_t);
+
     {
         long long total = (long long)N_t * rep_size;
         precompute_combined_train_kernel<<<(int)((total + 255) / 256), 256>>>(
-            d_alpha_desc, d_X_t, d_alpha_E, d_N_t, d_combined_t,
+            d_alpha_desc, d_X_t, d_alpha_E_t, d_N_t, d_combined_t,
             N_t, max_atoms_t, rep_size, nm_t);
     }
 
@@ -2295,6 +2677,7 @@ void kernel_gaussian_full_matvec_cached_local_cu(
     const float *d_alpha_desc,
     const float *d_norms_t,
     const float *d_S_adF,
+    const float *d_alpha_E_t,
     const float *d_combined_t,
     float       *d_E_pred,
     float       *d_F_pred,
@@ -2306,114 +2689,146 @@ void kernel_gaussian_full_matvec_cached_local_cu(
     ensure_cublas();
 
     float inv_s2 = 1.0f / (sigma * sigma);
+    ensure_cached_local_matvec_scratch(nm_q, max_atoms_q, rep_size, nm_t, max_atoms_t);
+    ensure_cached_local_training_element_cache(
+        d_Q_t, d_N_t, d_X_t, d_alpha_desc, d_norms_t, d_S_adF, d_alpha_E_t, d_combined_t,
+        nm_t, max_atoms_t, rep_size);
 
     // Build query Cartesian offset array
-    int *d_offs_q;
-    CUDA_CHECK(cudaMalloc(&d_offs_q, nm_q * sizeof(int)));
+    int *d_offs_q = s_cached_local_matvec_scratch.d_offs_q;
     build_offsets(d_N_q, d_offs_q, nm_q);
 
-    // Allocate per-atom accumulators (query side only; always small)
+    // Reuse per-call scratch buffers to avoid allocator overhead in MD inference.
     long long n_q_atoms = (long long)nm_q * max_atoms_q;
-    float *d_E_partial, *d_G_acc, *d_wE_arr;
-    CUDA_CHECK(cudaMalloc(&d_E_partial, n_q_atoms * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_G_acc,     n_q_atoms * rep_size * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_wE_arr,    n_q_atoms * sizeof(float)));
+    float *d_E_partial = s_cached_local_matvec_scratch.d_E_partial;
+    float *d_G_acc     = s_cached_local_matvec_scratch.d_G_acc;
+    float *d_wE_arr    = s_cached_local_matvec_scratch.d_wE_arr;
+    CUDA_CHECK(cudaMemset(d_E_partial, 0, n_q_atoms * sizeof(float)));
     CUDA_CHECK(cudaMemset(d_G_acc, 0, n_q_atoms * rep_size * sizeof(float)));
+    CUDA_CHECK(cudaMemset(d_wE_arr, 0, n_q_atoms * sizeof(float)));
 
     // Phase 1: SGEMM-based accumulation of E_partial, G_acc, wE
     {
         int N_q = nm_q * max_atoms_q;
-        int N_t = nm_t * max_atoms_t;
         const float neg2 = -2.0f, zero_f = 0.0f, one_f = 1.0f, neg1 = -1.0f;
+        CachedLocalTrainingElementCache &elem_cache = s_cached_local_training_element_cache;
+        int *d_query_indices = s_cached_local_matvec_scratch.d_query_indices;
+        int *d_query_count = s_cached_local_matvec_scratch.d_query_count;
 
         // 1a. Query squared norms only (training norms are precomputed)
-        float *d_norms_q;
-        CUDA_CHECK(cudaMalloc(&d_norms_q, N_q * sizeof(float)));
+        float *d_norms_q = s_cached_local_matvec_scratch.d_norms_q;
         compute_sqnorms_kernel<<<(N_q + 255) / 256, 256>>>(
             d_X_q, d_norms_q, rep_size, N_q);
 
-        // 1b. C_qt = -2 * X_q^T @ X_t  (col-major: (N_q, N_t))
-        float *d_C_qt;
-        CUDA_CHECK(cudaMalloc(&d_C_qt, (long long)N_q * N_t * sizeof(float)));
-        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
-            N_q, N_t, rep_size,
-            &neg2, d_X_q, rep_size, d_X_t, rep_size,
-            &zero_f, d_C_qt, N_q));
+        // 1b. Element-blocked SGEMMs to avoid cross-element work.
+        float *d_C_qt = s_cached_local_matvec_scratch.d_C_qt;
+        float *d_inner_F = s_cached_local_matvec_scratch.d_inner_F;
+        float *d_row_expd_iF = s_cached_local_matvec_scratch.d_row_expd_iF;
+        CUDA_CHECK(cudaMemset(d_C_qt, 0, (long long)N_q * (long long)(nm_t * max_atoms_t) * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_inner_F, 0, (long long)N_q * (long long)(nm_t * max_atoms_t) * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_row_expd_iF, 0, N_q * sizeof(float)));
 
-        // 1c. Apply norms + exp + label screening
-        //     Uses precomputed d_norms_t (not freed by us).
-        {
-            dim3 blk(16, 16), grd((N_q + 15) / 16, (N_t + 15) / 16);
-            build_C_qt_kernel<<<grd, blk>>>(
-                d_C_qt, d_norms_q, d_norms_t,
-                d_Q_q, d_Q_t, d_N_q, d_N_t,
-                inv_s2, N_q, N_t, max_atoms_q, max_atoms_t);
+        float *d_X_q_elem = s_cached_local_matvec_scratch.d_X_q_elem;
+        float *d_norms_q_elem = s_cached_local_matvec_scratch.d_norms_q_elem;
+        float *d_C_elem = s_cached_local_matvec_scratch.d_C_elem;
+        float *d_inner_F_elem = s_cached_local_matvec_scratch.d_inner_F_elem;
+        float *d_expd_iF_elem = s_cached_local_matvec_scratch.d_expd_iF_elem;
+        float *d_G_acc_elem = s_cached_local_matvec_scratch.d_G_acc_elem;
+        float *d_row_expd_iF_elem = s_cached_local_matvec_scratch.d_row_expd_iF_elem;
+
+        for (const CachedLocalTrainingElementGroup &group : elem_cache.groups) {
+            CUDA_CHECK(cudaMemset(d_query_count, 0, sizeof(int)));
+            gather_active_query_indices_kernel<<<(N_q + 255) / 256, 256>>>(
+                d_Q_q, d_N_q, d_query_indices, d_query_count,
+                group.label, nm_q, max_atoms_q);
+
+            int query_count = 0;
+            CUDA_CHECK(cudaMemcpy(&query_count, d_query_count, sizeof(int), cudaMemcpyDeviceToHost));
+            if (query_count == 0) continue;
+
+            CUDA_CHECK(cudaMemset(d_G_acc_elem, 0, (size_t)query_count * rep_size * sizeof(float)));
+            CUDA_CHECK(cudaMemset(d_row_expd_iF_elem, 0, (size_t)query_count * sizeof(float)));
+
+            gather_rows_kernel<<<(int)(((long long)query_count * rep_size + 255) / 256), 256>>>(
+                d_X_q, d_X_q_elem, d_query_indices, query_count, rep_size);
+            gather_scalars_kernel<<<(query_count + 255) / 256, 256>>>(
+                d_norms_q, d_norms_q_elem, d_query_indices, query_count);
+
+            CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                query_count, group.count, rep_size,
+                &neg2, d_X_q_elem, rep_size, group.d_X_t, rep_size,
+                &zero_f, d_C_elem, query_count));
+
+            {
+                dim3 blk(16, 16), grd((query_count + 15) / 16, (group.count + 15) / 16);
+                apply_norms_exp_kernel<<<grd, blk>>>(
+                    d_C_elem, d_norms_q_elem, group.d_norms_t,
+                    inv_s2, query_count, group.count, 0);
+            }
+
+            CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
+                query_count, group.count, rep_size,
+                &one_f, d_X_q_elem, rep_size, group.d_alpha_desc, rep_size,
+                &zero_f, d_inner_F_elem, query_count));
+
+            {
+                long long total = (long long)query_count * group.count;
+                int blk = 256;
+                int grd = (int)((total + blk - 1) / blk);
+                inference_build_expd_iF_kernel<<<grd, blk>>>(
+                    d_C_elem, d_inner_F_elem, group.d_S_adF, d_expd_iF_elem, d_row_expd_iF_elem,
+                    inv_s2, query_count, group.count);
+            }
+
+            CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
+                rep_size, query_count, group.count,
+                &one_f, group.d_combined_t, rep_size, d_C_elem, query_count,
+                &zero_f, d_G_acc_elem, rep_size));
+
+            CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
+                rep_size, query_count, group.count,
+                &neg1, group.d_X_t, rep_size, d_expd_iF_elem, query_count,
+                &one_f, d_G_acc_elem, rep_size));
+
+            {
+                dim3 blk(16, 16), grd((query_count + 15) / 16, (group.count + 15) / 16);
+                scatter_rect_tile_kernel<<<grd, blk>>>(
+                    d_C_elem, d_C_qt, d_query_indices, group.d_indices,
+                    query_count, group.count, query_count, N_q);
+                scatter_rect_tile_kernel<<<grd, blk>>>(
+                    d_inner_F_elem, d_inner_F, d_query_indices, group.d_indices,
+                    query_count, group.count, query_count, N_q);
+            }
+
+            {
+                long long total = (long long)query_count * rep_size;
+                scatter_g_acc_tile_kernel<<<(int)((total + 255) / 256), 256>>>(
+                    d_G_acc_elem, d_G_acc, d_query_indices, query_count, rep_size);
+            }
+
+            scatter_row_sums_kernel<<<(query_count + 255) / 256, 256>>>(
+                d_row_expd_iF_elem, d_row_expd_iF, d_query_indices, query_count);
         }
-        CUDA_CHECK(cudaDeviceSynchronize());
-        cudaFree(d_norms_q);
-
-        // 2. inner_F(Nq, Nt) = X_q @ alpha_desc^T
-        float *d_inner_F;
-        CUDA_CHECK(cudaMalloc(&d_inner_F, (long long)N_q * N_t * sizeof(float)));
-        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
-            N_q, N_t, rep_size,
-            &one_f, d_X_q, rep_size, d_alpha_desc, rep_size,
-            &zero_f, d_inner_F, N_q));
-
-        // 3. Build expd_iF = -(C_qt/σ²) * (inner_F - S_adF broadcast)
-        //    Uses precomputed d_S_adF.
-        float *d_expd_iF;
-        CUDA_CHECK(cudaMalloc(&d_expd_iF, (long long)N_q * N_t * sizeof(float)));
-        {
-            long long total = (long long)N_q * N_t;
-            int blk = 256;
-            int grd = (int)((total + blk - 1) / blk);
-            inference_build_expd_iF_kernel<<<grd, blk>>>(
-                d_C_qt, d_inner_F, d_S_adF, d_expd_iF,
-                inv_s2, N_q, N_t);
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
 
         // 4. G_acc = C_qt @ combined_t   (uses precomputed d_combined_t)
-        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
-            rep_size, N_q, N_t,
-            &one_f, d_combined_t, rep_size, d_C_qt, N_q,
-            &zero_f, d_G_acc, rep_size));
-
-        // 5. G_acc -= expd_iF @ X_t
-        CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_N, CUBLAS_OP_T,
-            rep_size, N_q, N_t,
-            &neg1, d_X_t, rep_size, d_expd_iF, N_q,
-            &one_f, d_G_acc, rep_size));
-
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        // 6. E_partial and wE, plus row_sum_expd_iF
-        float *d_row_expd_iF;
-        CUDA_CHECK(cudaMalloc(&d_row_expd_iF, N_q * sizeof(float)));
+        // 5. E_partial and wE. row_sum_expd_iF already built.
         {
-            dim3 blk_e(32, 8);
-            dim3 grd_e((N_q + 31) / 32);
+            dim3 blk_e(32, 1);
+            dim3 grd_e((N_q + 31) / 32, ((nm_t * max_atoms_t) + 255) / 256);
             inference_E_and_diag_kernel<<<grd_e, blk_e>>>(
-                d_C_qt, d_inner_F, d_expd_iF, d_alpha_E, d_N_t,
+                d_C_qt, d_inner_F, d_alpha_E_t,
                 d_E_partial, d_wE_arr, d_row_expd_iF,
                 sigma * sigma,
-                N_q, N_t, max_atoms_t, nm_t);
+                N_q, nm_t * max_atoms_t);
         }
 
-        // 7. Diagonal correction: G_acc[q,k] += (row_expd_iF[q] - wE[q]) * X_q[q,k]
+        // 6. Diagonal correction: G_acc[q,k] += (row_expd_iF[q] - wE[q]) * X_q[q,k]
         {
             long long total = (long long)N_q * rep_size;
             inference_G_diag_correction_kernel<<<(int)((total + 255) / 256), 256>>>(
                 d_G_acc, d_X_q, d_row_expd_iF, d_wE_arr,
                 N_q, rep_size);
         }
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        cudaFree(d_C_qt);
-        cudaFree(d_inner_F);
-        cudaFree(d_expd_iF);
-        cudaFree(d_row_expd_iF);
     }
 
     // Phase 2: reduce E_partial → E_pred (sum over query atoms per molecule)
@@ -2424,27 +2839,17 @@ void kernel_gaussian_full_matvec_cached_local_cu(
         size_t smem_r = (size_t)reduce_block * sizeof(float);
         local_energy_reduce_kernel<<<nm_q, reduce_block, smem_r>>>(
             d_E_partial, d_N_q, d_E_pred, nm_q, max_atoms_q);
-        CUDA_CHECK(cudaDeviceSynchronize());
     }
 
     // Phase 3: back-project G_acc → F_pred via dX_q^T @ G_acc per query molecule
     {
         int ncols_max = 3 * max_atoms_q;
-        int bp_block  = ((ncols_max + 31) / 32) * 32;
-        if (bp_block < 32)  bp_block = 32;
-        if (bp_block > 512) bp_block = 512;
-        CUDA_CHECK(cudaMemset(d_F_pred, 0, (long long)naq_q * sizeof(float)));
-        local_force_backproject_kernel<<<nm_q, bp_block>>>(
+        int bp_block  = 256;
+        dim3 bp_grid(ncols_max, nm_q);
+        local_force_backproject_kernel<<<bp_grid, bp_block>>>(
             d_dX_q, d_G_acc, d_N_q, d_offs_q,
             d_F_pred, nm_q, max_atoms_q, rep_size);
-        CUDA_CHECK(cudaDeviceSynchronize());
     }
-
-    // Cleanup (query-side only; training-side precomputed buffers are caller-owned)
-    cudaFree(d_offs_q);
-    cudaFree(d_E_partial);
-    cudaFree(d_G_acc);
-    cudaFree(d_wE_arr);
 }
 
 

@@ -704,16 +704,16 @@ class CudaLocalKRRModel(BaseModel):
     def _precompute_matvec_cache(self) -> None:
         """Precompute fixed training-side constants for kernel_gaussian_full_matvec_cached.
 
-        Stores three GPU tensors that depend only on X_train, alpha_E, and
+        Stores four GPU tensors that depend only on X_train, alpha_E, and
         alpha_desc_F.  They are valid for the lifetime of the fitted model and
-        can be reused across every MD step, avoiding ~3 cudaMalloc/cudaFree
-        round-trips and ~3 kernel launches per inference call.
+        can be reused across every MD step, avoiding repeated training-side
+        preprocessing inside each inference call.
         """
         if self.training_mode_ != "energy_and_force":
             return
         import torch  # noqa: F401 — ensure torch is available
 
-        norms_t, S_adF, combined_t = _ext.precompute_train(  # type: ignore[union-attr]
+        norms_t, S_adF, alpha_E_t, combined_t = _ext.precompute_train(  # type: ignore[union-attr]
             self._X_train_cuda,
             self._Q_train_cuda,
             self._N_train_cuda,
@@ -722,6 +722,7 @@ class CudaLocalKRRModel(BaseModel):
         )
         self._norms_t_cuda = norms_t
         self._S_adF_cuda = S_adF
+        self._alpha_E_t_cuda = alpha_E_t
         self._combined_t_cuda = combined_t
 
     # ------------------------------------------------------------------
@@ -792,6 +793,7 @@ class CudaLocalKRRModel(BaseModel):
                 self._alpha_desc_F_cuda,
                 self._norms_t_cuda,
                 self._S_adF_cuda,
+                self._alpha_E_t_cuda,
                 self._combined_t_cuda,
                 float(self.sigma),
             )

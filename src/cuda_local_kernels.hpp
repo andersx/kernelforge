@@ -170,7 +170,8 @@ void kernel_gaussian_symm_rfp_local_cu(
 // Caller must allocate output buffers:
 //   d_norms_t    : (nm_t * max_atoms_t,)          squared norms ||X_t[t]||²
 //   d_S_adF      : (nm_t * max_atoms_t,)          X_t[t] · alpha_desc[t]
-//   d_combined_t : (nm_t * max_atoms_t, rep_size) alpha_desc + alpha_E[mol]*X_t
+//   d_alpha_E_t  : (nm_t * max_atoms_t,)          alpha_E expanded to atom rows
+//   d_combined_t : (nm_t * max_atoms_t, rep_size) alpha_desc + alpha_E_t[t]*X_t
 // ---------------------------------------------------------------------------
 void kernel_gaussian_precompute_train_local_cu(
     const float *d_X_t,
@@ -179,6 +180,7 @@ void kernel_gaussian_precompute_train_local_cu(
     const int   *d_N_t,
     float       *d_norms_t,
     float       *d_S_adF,
+    float       *d_alpha_E_t,
     float       *d_combined_t,
     int nm_t, int max_atoms_t, int rep_size
 );
@@ -198,6 +200,7 @@ void kernel_gaussian_precompute_train_local_cu(
 // Parameters:
 //   d_norms_t    : (nm_t * max_atoms_t,)           precomputed squared norms
 //   d_S_adF      : (nm_t * max_atoms_t,)           precomputed dot products
+//   d_alpha_E_t  : (nm_t * max_atoms_t,)           alpha_E expanded to atom rows
 //   d_combined_t : (nm_t * max_atoms_t, rep_size)  precomputed combined matrix
 // ---------------------------------------------------------------------------
 void kernel_gaussian_full_matvec_cached_local_cu(
@@ -212,6 +215,7 @@ void kernel_gaussian_full_matvec_cached_local_cu(
     const float *d_alpha_desc,
     const float *d_norms_t,
     const float *d_S_adF,
+    const float *d_alpha_E_t,
     const float *d_combined_t,
     float       *d_E_pred,
     float       *d_F_pred,

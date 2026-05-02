@@ -32,9 +32,9 @@ from kernelforge.models import CudaLocalKRRModel
 # Configuration
 # ---------------------------------------------------------------------------
 MOLECULE = "azobenzene"
-N_TRAIN = 150
-N_EQUIL_STEPS = 10  # silent equilibration before production
-N_MD_STEPS = 0
+N_TRAIN = 950
+N_EQUIL_STEPS = 1000  # silent equilibration before production
+N_MD_STEPS = 10000
 DT_FS = 0.5
 TEMPERATURE_K = 300.0
 TRAJ_OUT = Path("azobenzene_krr_md.extxyz")

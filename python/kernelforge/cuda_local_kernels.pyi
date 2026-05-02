@@ -239,7 +239,7 @@ def precompute_train(
     N_t: torch.Tensor,
     alpha_E: torch.Tensor,
     alpha_desc: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Precompute training-side constants for repeated inference (e.g. MD simulation).
 
     Call once after fitting.  The returned tensors are constant as long as the
@@ -260,8 +260,10 @@ def precompute_train(
         Squared norms ||X_t[t]||².
     S_adF : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
         Dot products X_t[t] · alpha_desc[t].
+    alpha_E_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        Atom-expanded energy dual coefficients alpha_E[mol(t)].
     combined_t : torch.Tensor, shape (nm_t * max_atoms_t, rep), float32, CUDA
-        Combined matrix alpha_desc + alpha_E[mol(t)] * X_t.
+        Combined matrix alpha_desc + alpha_E_t[t] * X_t.
     """
     ...
 
@@ -277,6 +279,7 @@ def kernel_gaussian_full_matvec_cached(
     alpha_desc: torch.Tensor,
     norms_t: torch.Tensor,
     S_adF: torch.Tensor,
+    alpha_E_t: torch.Tensor,
     combined_t: torch.Tensor,
     sigma: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -301,6 +304,8 @@ def kernel_gaussian_full_matvec_cached(
     norms_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
         From ``precompute_train``.
     S_adF : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        From ``precompute_train``.
+    alpha_E_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
         From ``precompute_train``.
     combined_t : torch.Tensor, shape (nm_t * max_atoms_t, rep), float32, CUDA
         From ``precompute_train``.
