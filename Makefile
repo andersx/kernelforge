@@ -18,6 +18,9 @@ install-linux-openblas:
 install-linux-openblas-ilp64:
 	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=OpenBLAS -DKF_BLAS_ILP64=ON" uv pip install -e .[test,dev] --verbose
 
+install-linux-mkl-ilp64-cuda:
+	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL -DKF_BLAS_ILP64=ON -DCMAKE_CUDA_ARCHITECTURES=native" uv pip install -e .[test,dev] --verbose
+
 install-macos:
 	CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DKF_USE_NATIVE=ON " uv pip install -e .[test,dev] --verbose
 

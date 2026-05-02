@@ -150,11 +150,13 @@ class KernelForgeCalculator(_AseCalculator):  # type: ignore[misc]
             msg = "atoms is None after Calculator.calculate(); this should not happen."
             raise RuntimeError(msg)
 
-        coords = self.atoms.get_positions().astype(np.float64)  # (n_atoms, 3)  Å
-        z = self.atoms.get_atomic_numbers().astype(np.int32)  # (n_atoms,)
+        coords = self.atoms.get_positions().astype(np.float64)   # (n_atoms, 3)  Å
+        z = self.atoms.get_atomic_numbers().astype(np.int32)     # (n_atoms,)
 
-        E_arr, F_flat = self._kf_model.predict([coords], [z])
+        want_energy = properties is not None and "energy" in properties
+        E_arr, F_flat = self._kf_model.predict([coords], [z], compute_energy=want_energy)
 
         factor = self._kf_factor
-        self.results["energy"] = float(E_arr[0]) * factor
+        if want_energy:
+            self.results["energy"] = float(E_arr[0]) * factor
         self.results["forces"] = F_flat.reshape(-1, 3).astype(np.float64) * factor

@@ -701,6 +701,7 @@ class CudaLocalKRRModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,  # E+F computed together in matvec; param kept for API compat
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         import time as _time
 
@@ -723,7 +724,7 @@ class CudaLocalKRRModel(BaseModel):
             self.elements,
             with_gradients=need_gradients,
             repr_params=self.repr_params,
-            deterministic=True,
+            deterministic=False,
         )
         t0 = _tp(f"compute_fchl19 (GPU, {'grad' if need_gradients else 'no grad'})", t0)
 

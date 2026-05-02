@@ -185,6 +185,7 @@ class GlobalKRRModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,  # E+F computed together; param kept for API compat
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
 

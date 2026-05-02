@@ -24,6 +24,7 @@ def run_md(
     n_steps: int,
     dt: float = 0.5,
     temperature: float | None = 300.0,
+    n_equil: int = 0,
     trajectory_file: str | Path | None = "md.traj",
     traj_interval: int = 10,
     logfile: str | Path | None = "md.log",
@@ -49,6 +50,10 @@ def run_md(
         Temperature in Kelvin used to draw initial velocities from a
         Maxwell-Boltzmann distribution.  Pass ``None`` (or 0) to keep any
         existing momenta on *atoms* unchanged.
+    n_equil:
+        Number of silent equilibration steps to run *before* production.
+        No frames are saved and no log entries are written during this phase.
+        Defaults to 0 (no equilibration).
     trajectory_file:
         Path for the ASE trajectory file (``*.traj``).  Pass ``None`` to
         disable.
@@ -94,6 +99,15 @@ def run_md(
 
     dyn = VelocityVerlet(atoms, timestep=dt * _units.fs)
 
+    # --- equilibration (silent, no observers) ---
+    if n_equil > 0:
+        print(f"[run_md] Equilibrating for {n_equil} steps ...")
+        dyn.run(n_equil)
+        print("[run_md] Equilibration done.")
+
+    # Production step offset so log step numbers start from 0 after equil
+    prod_offset = dyn.nsteps
+
     # --- trajectory writer ---
     traj_obj = None
     if trajectory_file is not None:
@@ -110,7 +124,7 @@ def run_md(
         log_handle.write("# step  time_fs  Epot_eV  Ekin_eV  Etot_eV  T_K\n")
 
         def _write_log() -> None:
-            step = dyn.nsteps
+            step = dyn.nsteps - prod_offset
             time_fs = step * dt
             e_pot = atoms.get_potential_energy()
             e_kin = atoms.get_kinetic_energy()

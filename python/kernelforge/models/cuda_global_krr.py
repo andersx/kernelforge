@@ -372,6 +372,7 @@ class CudaGlobalKRRModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,  # E+F computed together; param kept for API compat
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         if self.training_mode_ == "energy_only":
             return self._predict_energy_only(coords_list, z_list)
