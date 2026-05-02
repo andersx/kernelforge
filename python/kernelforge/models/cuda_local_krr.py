@@ -498,6 +498,7 @@ class CudaLocalKRRModel(BaseModel):
         self.cg_atol = cg_atol
         self.cg_max_iter = cg_max_iter
         self.is_fitted_ = False
+        self._cached_graph_state: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # fit
@@ -725,6 +726,150 @@ class CudaLocalKRRModel(BaseModel):
         self._alpha_E_t_cuda = alpha_E_t
         self._combined_t_cuda = combined_t
 
+    def _reset_cached_graph(self) -> None:
+        self._cached_graph_state = None
+
+    def _build_query_group_tensors(self, Q_q: Any, N_q: NDArray[np.int32]) -> tuple[list[Any], list[int]]:  # noqa: ANN401
+        import torch
+
+        Q_q_flat = Q_q.reshape(-1)
+        nm_q = int(Q_q.shape[0])
+        max_atoms_q = int(Q_q.shape[1])
+        active_mask_np = np.zeros(nm_q * max_atoms_q, dtype=np.bool_)
+        for m in range(nm_q):
+            start = m * max_atoms_q
+            active_mask_np[start : start + int(N_q[m])] = True
+
+        active_mask = torch.from_numpy(active_mask_np).to(device=Q_q.device)
+        query_indices_by_group: list[Any] = []
+        query_counts: list[int] = []
+        labels: list[int] = []
+        nm_t = int(self._Q_train_np.shape[0])
+        max_atoms_t = int(self._Q_train_np.shape[1])
+        for m in range(nm_t):
+            for i in range(int(self._N_train_np[m])):
+                label = int(self._Q_train_np[m, i])
+                if label not in labels:
+                    labels.append(label)
+        flat_idx = torch.arange(nm_q * max_atoms_q, device=Q_q.device, dtype=torch.int32)
+        for label in labels:
+            idx = flat_idx[(Q_q_flat == label) & active_mask]
+            idx = idx.contiguous()
+            query_indices_by_group.append(idx)
+            query_counts.append(int(idx.numel()))
+
+        return query_indices_by_group, query_counts
+
+    def _get_or_create_cached_graph(
+        self,
+        X_q: Any,  # noqa: ANN401
+        dX_q: Any,  # noqa: ANN401
+        Q_q: Any,  # noqa: ANN401
+        N_q: NDArray[np.int32],
+    ) -> dict[str, Any] | None:
+        import torch
+
+        if self.training_mode_ != "energy_and_force":
+            return None
+        if int(X_q.shape[0]) != 1:
+            return None
+
+        shape_key = (
+            tuple(int(v) for v in X_q.shape),
+            tuple(int(v) for v in dX_q.shape),
+            tuple(int(v) for v in Q_q.shape),
+            tuple(int(v) for v in N_q.tolist()),
+            tuple(int(v) for v in Q_q.reshape(-1).detach().cpu().tolist()),
+            X_q.device.index,
+        )
+        state = self._cached_graph_state
+        if state is not None and state.get("shape_key") == shape_key:
+            return state
+
+        self._reset_cached_graph()
+
+        X_buf = torch.empty_like(X_q)
+        dX_buf = torch.empty_like(dX_q)
+        Q_buf = torch.empty_like(Q_q)
+        N_buf = torch.from_numpy(np.ascontiguousarray(N_q, dtype=np.int32)).to(device=Q_q.device)
+        offs_q = np.zeros(int(N_q.shape[0]), dtype=np.int32)
+        acc = 0
+        for m, n_m in enumerate(N_q.tolist()):
+            offs_q[m] = acc
+            acc += 3 * int(n_m)
+        offs_buf = torch.from_numpy(offs_q).to(device=Q_q.device)
+        query_indices_by_group, query_counts_by_group = self._build_query_group_tensors(Q_q, N_q)
+        naq_q = 3 * int(np.sum(N_q))
+        E_buf = torch.empty((int(X_q.shape[0]),), device=X_q.device, dtype=torch.float32)
+        F_buf = torch.empty((naq_q,), device=X_q.device, dtype=torch.float32)
+
+        X_buf.copy_(X_q)
+        dX_buf.copy_(dX_q)
+        Q_buf.copy_(Q_q)
+
+        _ext.kernel_gaussian_full_matvec_cached_graph_with_offsets(  # type: ignore[union-attr]
+            X_buf,
+            dX_buf,
+            Q_buf,
+            N_buf,
+            offs_buf,
+            self._X_train_cuda,
+            self._Q_train_cuda,
+            self._N_train_cuda,
+            self._alpha_E_cuda,
+            self._alpha_desc_F_cuda,
+            self._norms_t_cuda,
+            self._S_adF_cuda,
+            self._alpha_E_t_cuda,
+            self._combined_t_cuda,
+            query_indices_by_group,
+            query_counts_by_group,
+            E_buf,
+            F_buf,
+            float(self.sigma),
+        )
+
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            _ext.kernel_gaussian_full_matvec_cached_graph_with_offsets(  # type: ignore[union-attr]
+                X_buf,
+                dX_buf,
+                Q_buf,
+                N_buf,
+                offs_buf,
+                self._X_train_cuda,
+                self._Q_train_cuda,
+                self._N_train_cuda,
+                self._alpha_E_cuda,
+                self._alpha_desc_F_cuda,
+                self._norms_t_cuda,
+                self._S_adF_cuda,
+                self._alpha_E_t_cuda,
+                self._combined_t_cuda,
+                query_indices_by_group,
+                query_counts_by_group,
+                E_buf,
+                F_buf,
+                float(self.sigma),
+            )
+
+        state = {
+            "shape_key": shape_key,
+            "graph": graph,
+            "X_buf": X_buf,
+            "dX_buf": dX_buf,
+            "Q_buf": Q_buf,
+            "N_buf": N_buf,
+            "offs_buf": offs_buf,
+            "query_indices_by_group": query_indices_by_group,
+            "query_counts_by_group": query_counts_by_group,
+            "E_buf": E_buf,
+            "F_buf": F_buf,
+        }
+        self._cached_graph_state = state
+        return state
+
     # ------------------------------------------------------------------
     # predict
     # ------------------------------------------------------------------
@@ -781,22 +926,31 @@ class CudaLocalKRRModel(BaseModel):
             F_pred = np.zeros(int(np.sum(N_te) * 3), dtype=np.float64)
             return E_pred, F_pred
         else:
-            E_cuda, F_cuda = _ext.kernel_gaussian_full_matvec_cached(  # type: ignore[union-attr]
-                X_te_cuda,
-                dX_te_cuda,
-                Q_te_cuda,
-                N_te_cuda,
-                self._X_train_cuda,
-                self._Q_train_cuda,
-                self._N_train_cuda,
-                self._alpha_E_cuda,
-                self._alpha_desc_F_cuda,
-                self._norms_t_cuda,
-                self._S_adF_cuda,
-                self._alpha_E_t_cuda,
-                self._combined_t_cuda,
-                float(self.sigma),
-            )
+            graph_state = self._get_or_create_cached_graph(X_te_cuda, dX_te_cuda, Q_te_cuda, N_te)
+            if graph_state is not None:
+                graph_state["X_buf"].copy_(X_te_cuda)
+                graph_state["dX_buf"].copy_(dX_te_cuda)
+                graph_state["Q_buf"].copy_(Q_te_cuda)
+                graph_state["graph"].replay()
+                E_cuda = graph_state["E_buf"]
+                F_cuda = graph_state["F_buf"]
+            else:
+                E_cuda, F_cuda = _ext.kernel_gaussian_full_matvec_cached(  # type: ignore[union-attr]
+                    X_te_cuda,
+                    dX_te_cuda,
+                    Q_te_cuda,
+                    N_te_cuda,
+                    self._X_train_cuda,
+                    self._Q_train_cuda,
+                    self._N_train_cuda,
+                    self._alpha_E_cuda,
+                    self._alpha_desc_F_cuda,
+                    self._norms_t_cuda,
+                    self._S_adF_cuda,
+                    self._alpha_E_t_cuda,
+                    self._combined_t_cuda,
+                    float(self.sigma),
+                )
             t0 = _tp("kernel_gaussian_full_matvec_cached (GPU)", t0)
 
             E_pred = E_cuda.cpu().numpy().astype(np.float64)
@@ -920,3 +1074,4 @@ class CudaLocalKRRModel(BaseModel):
 
         # Rebuild precomputed matvec cache (energy_and_force models only)
         self._precompute_matvec_cache()
+        self._reset_cached_graph()

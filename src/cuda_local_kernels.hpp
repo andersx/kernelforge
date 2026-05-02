@@ -12,6 +12,8 @@
 //   alpha_desc[m,i,k] at d_alpha_desc[(m*max_atoms+i)*rep_size + k]
 #pragma once
 
+#include <cuda_runtime.h>
+
 namespace kf {
 namespace fchl19 {
 
@@ -219,6 +221,67 @@ void kernel_gaussian_full_matvec_cached_local_cu(
     const float *d_combined_t,
     float       *d_E_pred,
     float       *d_F_pred,
+    cudaStream_t stream,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size, int naq_q
+);
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_full_matvec_cached_graph_local_cu
+//
+// Graph-capture-friendly cached matvec variant. Query-side active atom indices
+// are precomputed by the caller per element group, so the kernel performs no
+// device->host synchronization or dynamic query grouping internally.
+// ---------------------------------------------------------------------------
+void kernel_gaussian_full_matvec_cached_graph_local_cu(
+    const float *d_X_q,
+    const float *d_dX_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    const float *d_alpha_E,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_alpha_E_t,
+    const float *d_combined_t,
+    const int   *const *d_query_indices_by_group,
+    const int   *d_query_counts_by_group,
+    int          n_query_groups,
+    float       *d_E_pred,
+    float       *d_F_pred,
+    cudaStream_t stream,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size, int naq_q
+);
+
+void kernel_gaussian_full_matvec_cached_graph_local_offsets_cu(
+    const float *d_X_q,
+    const float *d_dX_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const int   *d_offs_q,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    const float *d_alpha_E,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_alpha_E_t,
+    const float *d_combined_t,
+    const int   *const *d_query_indices_by_group,
+    const int   *d_query_counts_by_group,
+    int          n_query_groups,
+    float       *d_E_pred,
+    float       *d_F_pred,
+    cudaStream_t stream,
     float        sigma,
     int nm_q, int nm_t,
     int max_atoms_q, int max_atoms_t,

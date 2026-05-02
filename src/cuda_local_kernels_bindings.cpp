@@ -22,6 +22,8 @@
 //          F_pred : (naq_q,) float32 CUDA)
 
 #include <torch/extension.h>
+#include <c10/cuda/CUDAStream.h>
+#include <pybind11/stl.h>
 #include "cuda_local_kernels.hpp"
 
 namespace py = pybind11;
@@ -516,6 +518,7 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec_cached_local
     auto opts   = X_q.options();
     auto E_pred = torch::zeros({nm_q},  opts);
     auto F_pred = torch::zeros({naq_q}, opts);
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(Q_q.device().index()).stream();
 
     kf::fchl19::kernel_gaussian_full_matvec_cached_local_cu(
         X_q.data_ptr<float>(),
@@ -533,10 +536,185 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec_cached_local
         combined_t.data_ptr<float>(),
         E_pred.data_ptr<float>(),
         F_pred.data_ptr<float>(),
+        stream,
         (float)sigma,
         nm_q, nm_t, max_atoms_q, max_atoms_t, rep_size, naq_q);
 
     return {E_pred, F_pred};
+}
+
+void kernel_gaussian_full_matvec_cached_graph_local(
+    torch::Tensor X_q,
+    torch::Tensor dX_q,
+    torch::Tensor Q_q,
+    torch::Tensor N_q,
+    torch::Tensor X_t,
+    torch::Tensor Q_t,
+    torch::Tensor N_t,
+    torch::Tensor alpha_E,
+    torch::Tensor alpha_desc,
+    torch::Tensor norms_t,
+    torch::Tensor S_adF,
+    torch::Tensor alpha_E_t,
+    torch::Tensor combined_t,
+    std::vector<torch::Tensor> query_indices_by_group,
+    std::vector<int> query_counts_by_group,
+    torch::Tensor E_pred,
+    torch::Tensor F_pred,
+    double sigma)
+{
+    check_cuda_float32(X_q,         "X_q");
+    check_cuda_float32(dX_q,        "dX_q");
+    check_cuda_int32(Q_q,           "Q_q");
+    check_cuda_int32(N_q,           "N_q");
+    check_cuda_float32(X_t,         "X_t");
+    check_cuda_int32(Q_t,           "Q_t");
+    check_cuda_int32(N_t,           "N_t");
+    check_cuda_float32(alpha_E,     "alpha_E");
+    check_cuda_float32(alpha_desc,  "alpha_desc");
+    check_cuda_float32(norms_t,     "norms_t");
+    check_cuda_float32(S_adF,       "S_adF");
+    check_cuda_float32(alpha_E_t,   "alpha_E_t");
+    check_cuda_float32(combined_t,  "combined_t");
+    check_cuda_float32(E_pred,      "E_pred");
+    check_cuda_float32(F_pred,      "F_pred");
+
+    TORCH_CHECK(sigma > 0.0, "sigma must be positive");
+
+    int nm_q        = (int)X_q.size(0);
+    int max_atoms_q = (int)X_q.size(1);
+    int rep_size    = (int)X_q.size(2);
+    int nm_t        = (int)X_t.size(0);
+    int max_atoms_t = (int)X_t.size(1);
+    TORCH_CHECK(X_t.size(2) == rep_size, "rep_size must match between X_q and X_t");
+    TORCH_CHECK(E_pred.dim() == 1 && E_pred.size(0) == nm_q, "E_pred has wrong shape");
+
+    int naq_q = (int)F_pred.size(0);
+    TORCH_CHECK(F_pred.dim() == 1 && F_pred.size(0) == naq_q, "F_pred has wrong shape");
+    TORCH_CHECK((int)query_indices_by_group.size() == (int)query_counts_by_group.size(),
+                "query_indices_by_group and query_counts_by_group must match");
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(Q_q.device().index()).stream();
+
+    std::vector<const int *> query_index_ptrs;
+    query_index_ptrs.reserve(query_indices_by_group.size());
+    for (size_t i = 0; i < query_indices_by_group.size(); i++) {
+        const torch::Tensor &idx = query_indices_by_group[i];
+        check_cuda_int32(idx, "query_indices_by_group[i]");
+        TORCH_CHECK(idx.dim() == 1, "query_indices_by_group[i] must be 1-D");
+        query_index_ptrs.push_back(idx.data_ptr<int>());
+    }
+
+    kf::fchl19::kernel_gaussian_full_matvec_cached_graph_local_cu(
+        X_q.data_ptr<float>(),
+        dX_q.data_ptr<float>(),
+        Q_q.data_ptr<int>(),
+        N_q.data_ptr<int>(),
+        X_t.data_ptr<float>(),
+        Q_t.data_ptr<int>(),
+        N_t.data_ptr<int>(),
+        alpha_E.data_ptr<float>(),
+        alpha_desc.data_ptr<float>(),
+        norms_t.data_ptr<float>(),
+        S_adF.data_ptr<float>(),
+        alpha_E_t.data_ptr<float>(),
+        combined_t.data_ptr<float>(),
+        query_index_ptrs.data(),
+        query_counts_by_group.data(),
+        (int)query_index_ptrs.size(),
+        E_pred.data_ptr<float>(),
+        F_pred.data_ptr<float>(),
+        stream,
+        (float)sigma,
+        nm_q, nm_t, max_atoms_q, max_atoms_t, rep_size, naq_q);
+}
+
+void kernel_gaussian_full_matvec_cached_graph_with_offsets_local(
+    torch::Tensor X_q,
+    torch::Tensor dX_q,
+    torch::Tensor Q_q,
+    torch::Tensor N_q,
+    torch::Tensor offs_q,
+    torch::Tensor X_t,
+    torch::Tensor Q_t,
+    torch::Tensor N_t,
+    torch::Tensor alpha_E,
+    torch::Tensor alpha_desc,
+    torch::Tensor norms_t,
+    torch::Tensor S_adF,
+    torch::Tensor alpha_E_t,
+    torch::Tensor combined_t,
+    std::vector<torch::Tensor> query_indices_by_group,
+    std::vector<int> query_counts_by_group,
+    torch::Tensor E_pred,
+    torch::Tensor F_pred,
+    double sigma)
+{
+    check_cuda_float32(X_q,         "X_q");
+    check_cuda_float32(dX_q,        "dX_q");
+    check_cuda_int32(Q_q,           "Q_q");
+    check_cuda_int32(N_q,           "N_q");
+    check_cuda_int32(offs_q,        "offs_q");
+    check_cuda_float32(X_t,         "X_t");
+    check_cuda_int32(Q_t,           "Q_t");
+    check_cuda_int32(N_t,           "N_t");
+    check_cuda_float32(alpha_E,     "alpha_E");
+    check_cuda_float32(alpha_desc,  "alpha_desc");
+    check_cuda_float32(norms_t,     "norms_t");
+    check_cuda_float32(S_adF,       "S_adF");
+    check_cuda_float32(alpha_E_t,   "alpha_E_t");
+    check_cuda_float32(combined_t,  "combined_t");
+    check_cuda_float32(E_pred,      "E_pred");
+    check_cuda_float32(F_pred,      "F_pred");
+
+    TORCH_CHECK(sigma > 0.0, "sigma must be positive");
+
+    int nm_q        = (int)X_q.size(0);
+    int max_atoms_q = (int)X_q.size(1);
+    int rep_size    = (int)X_q.size(2);
+    int nm_t        = (int)X_t.size(0);
+    int max_atoms_t = (int)X_t.size(1);
+    TORCH_CHECK(X_t.size(2) == rep_size, "rep_size must match between X_q and X_t");
+    TORCH_CHECK(offs_q.dim() == 1 && offs_q.size(0) == nm_q, "offs_q has wrong shape");
+    TORCH_CHECK(E_pred.dim() == 1 && E_pred.size(0) == nm_q, "E_pred has wrong shape");
+
+    int naq_q = (int)F_pred.size(0);
+    TORCH_CHECK(F_pred.dim() == 1 && F_pred.size(0) == naq_q, "F_pred has wrong shape");
+    TORCH_CHECK((int)query_indices_by_group.size() == (int)query_counts_by_group.size(),
+                "query_indices_by_group and query_counts_by_group must match");
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream(Q_q.device().index()).stream();
+
+    std::vector<const int *> query_index_ptrs;
+    query_index_ptrs.reserve(query_indices_by_group.size());
+    for (size_t i = 0; i < query_indices_by_group.size(); i++) {
+        const torch::Tensor &idx = query_indices_by_group[i];
+        check_cuda_int32(idx, "query_indices_by_group[i]");
+        TORCH_CHECK(idx.dim() == 1, "query_indices_by_group[i] must be 1-D");
+        query_index_ptrs.push_back(idx.data_ptr<int>());
+    }
+
+    kf::fchl19::kernel_gaussian_full_matvec_cached_graph_local_offsets_cu(
+        X_q.data_ptr<float>(),
+        dX_q.data_ptr<float>(),
+        Q_q.data_ptr<int>(),
+        N_q.data_ptr<int>(),
+        offs_q.data_ptr<int>(),
+        X_t.data_ptr<float>(),
+        Q_t.data_ptr<int>(),
+        N_t.data_ptr<int>(),
+        alpha_E.data_ptr<float>(),
+        alpha_desc.data_ptr<float>(),
+        norms_t.data_ptr<float>(),
+        S_adF.data_ptr<float>(),
+        alpha_E_t.data_ptr<float>(),
+        combined_t.data_ptr<float>(),
+        query_index_ptrs.data(),
+        query_counts_by_group.data(),
+        (int)query_index_ptrs.size(),
+        E_pred.data_ptr<float>(),
+        F_pred.data_ptr<float>(),
+        stream,
+        (float)sigma,
+        nm_q, nm_t, max_atoms_q, max_atoms_t, rep_size, naq_q);
 }
 
 
@@ -810,5 +988,61 @@ Returns
 -------
 E_pred : torch.Tensor, shape (nm_q,), float32, CUDA
 F_pred : torch.Tensor, shape (naq_q,), float32, CUDA  (flat Cartesian forces)
+)doc");
+
+    m.def("kernel_gaussian_full_matvec_cached_graph",
+          &kernel_gaussian_full_matvec_cached_graph_local,
+          py::arg("X_q"),
+          py::arg("dX_q"),
+          py::arg("Q_q"),
+          py::arg("N_q"),
+          py::arg("X_t"),
+          py::arg("Q_t"),
+          py::arg("N_t"),
+          py::arg("alpha_E"),
+          py::arg("alpha_desc"),
+          py::arg("norms_t"),
+          py::arg("S_adF"),
+          py::arg("alpha_E_t"),
+          py::arg("combined_t"),
+          py::arg("query_indices_by_group"),
+          py::arg("query_counts_by_group"),
+          py::arg("E_pred"),
+          py::arg("F_pred"),
+          py::arg("sigma"),
+          R"doc(
+Graph-capture-friendly cached matvec variant.
+
+This variant reuses caller-provided output tensors and precomputed per-element
+query index tensors, avoiding internal device-to-host synchronization so it can
+be captured inside a CUDA graph for repeated fixed-shape inference.
+)doc");
+
+    m.def("kernel_gaussian_full_matvec_cached_graph_with_offsets",
+          &kernel_gaussian_full_matvec_cached_graph_with_offsets_local,
+          py::arg("X_q"),
+          py::arg("dX_q"),
+          py::arg("Q_q"),
+          py::arg("N_q"),
+          py::arg("offs_q"),
+          py::arg("X_t"),
+          py::arg("Q_t"),
+          py::arg("N_t"),
+          py::arg("alpha_E"),
+          py::arg("alpha_desc"),
+          py::arg("norms_t"),
+          py::arg("S_adF"),
+          py::arg("alpha_E_t"),
+          py::arg("combined_t"),
+          py::arg("query_indices_by_group"),
+          py::arg("query_counts_by_group"),
+          py::arg("E_pred"),
+          py::arg("F_pred"),
+          py::arg("sigma"),
+          R"doc(
+Graph-capture-friendly cached matvec variant with caller-provided query offsets.
+
+This avoids the remaining internal query-offset host synchronization so the
+full cached inference path can be captured and replayed safely.
 )doc");
 }

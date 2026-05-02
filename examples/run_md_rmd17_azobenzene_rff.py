@@ -33,9 +33,9 @@ from kernelforge.models import CudaLocalRFFModel
 # Configuration
 # ---------------------------------------------------------------------------
 MOLECULE = "azobenzene"
-N_TRAIN = 100
-N_EQUIL_STEPS = 10  # silent equilibration before production
-N_MD_STEPS = 10
+N_TRAIN = 950
+N_EQUIL_STEPS = 0  # silent equilibration before production
+N_MD_STEPS = 1000
 DT_FS = 0.25
 TEMPERATURE_K = 300.0
 D_RFF = 16384
@@ -59,7 +59,7 @@ model = CudaLocalRFFModel(
     sigma=2.0,
     l2=1e-2,
     d_rff=D_RFF,
-    n_pca=128,
+    n_pca=None,
     elements=[1, 6, 7],
     seed=42,
 )

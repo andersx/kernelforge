@@ -317,3 +317,60 @@ def kernel_gaussian_full_matvec_cached(
     F_pred : torch.Tensor, shape (naq_q,), float32, CUDA
     """
     ...
+
+def kernel_gaussian_full_matvec_cached_graph(
+    X_q: torch.Tensor,
+    dX_q: torch.Tensor,
+    Q_q: torch.Tensor,
+    N_q: torch.Tensor,
+    X_t: torch.Tensor,
+    Q_t: torch.Tensor,
+    N_t: torch.Tensor,
+    alpha_E: torch.Tensor,
+    alpha_desc: torch.Tensor,
+    norms_t: torch.Tensor,
+    S_adF: torch.Tensor,
+    alpha_E_t: torch.Tensor,
+    combined_t: torch.Tensor,
+    query_indices_by_group: list[torch.Tensor],
+    query_counts_by_group: list[int],
+    E_pred: torch.Tensor,
+    F_pred: torch.Tensor,
+    sigma: float,
+) -> None:
+    """Graph-capture-friendly cached energy+force inference.
+
+    Uses caller-provided output buffers and fixed per-element query index
+    tensors so the cached matvec can be captured and replayed via a CUDA graph
+    for repeated fixed-shape inference.
+    """
+    ...
+
+def kernel_gaussian_full_matvec_cached_graph_with_offsets(
+    X_q: torch.Tensor,
+    dX_q: torch.Tensor,
+    Q_q: torch.Tensor,
+    N_q: torch.Tensor,
+    offs_q: torch.Tensor,
+    X_t: torch.Tensor,
+    Q_t: torch.Tensor,
+    N_t: torch.Tensor,
+    alpha_E: torch.Tensor,
+    alpha_desc: torch.Tensor,
+    norms_t: torch.Tensor,
+    S_adF: torch.Tensor,
+    alpha_E_t: torch.Tensor,
+    combined_t: torch.Tensor,
+    query_indices_by_group: list[torch.Tensor],
+    query_counts_by_group: list[int],
+    E_pred: torch.Tensor,
+    F_pred: torch.Tensor,
+    sigma: float,
+) -> None:
+    """Graph-capture-friendly cached energy+force inference with query offsets.
+
+    Uses caller-provided output buffers, fixed per-element query index tensors,
+    and precomputed query Cartesian offsets to avoid host synchronization during
+    CUDA graph capture and replay.
+    """
+    ...

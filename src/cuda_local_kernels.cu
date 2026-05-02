@@ -58,6 +58,9 @@
         }                                                                   \
     } while (0)
 
+#define CUDA_LAUNCH(kernel, grid, block, shmem, stream, ...) \
+    kernel<<<(grid), (block), (shmem), (stream)>>>(__VA_ARGS__)
+
 
 // ============================================================================
 // Module-level cuBLAS handle
@@ -2665,11 +2668,12 @@ void kernel_gaussian_precompute_train_local_cu(
 // Caller is responsible for ensuring precomputed buffers remain valid and
 // match the current d_X_t, d_alpha_desc, d_alpha_E, d_N_t.
 // ---------------------------------------------------------------------------
-void kernel_gaussian_full_matvec_cached_local_cu(
+static void kernel_gaussian_full_matvec_cached_local_impl(
     const float *d_X_q,
     const float *d_dX_q,
     const int   *d_Q_q,
     const int   *d_N_q,
+    const int   *d_offs_q_in,
     const float *d_X_t,
     const int   *d_Q_t,
     const int   *d_N_t,
@@ -2679,14 +2683,20 @@ void kernel_gaussian_full_matvec_cached_local_cu(
     const float *d_S_adF,
     const float *d_alpha_E_t,
     const float *d_combined_t,
+    const int   *const *d_query_indices_by_group,
+    const int   *d_query_counts_by_group,
+    int          n_query_groups,
+    bool         use_precomputed_query_groups,
     float       *d_E_pred,
     float       *d_F_pred,
+    cudaStream_t stream,
     float        sigma,
     int nm_q, int nm_t,
     int max_atoms_q, int max_atoms_t,
     int rep_size, int naq_q)
 {
     ensure_cublas();
+    CUBLAS_CHECK(cublasSetStream(s_cublas, stream));
 
     float inv_s2 = 1.0f / (sigma * sigma);
     ensure_cached_local_matvec_scratch(nm_q, max_atoms_q, rep_size, nm_t, max_atoms_t);
@@ -2696,7 +2706,11 @@ void kernel_gaussian_full_matvec_cached_local_cu(
 
     // Build query Cartesian offset array
     int *d_offs_q = s_cached_local_matvec_scratch.d_offs_q;
+    if (d_offs_q_in) {
+        d_offs_q = const_cast<int *>(d_offs_q_in);
+    } else {
     build_offsets(d_N_q, d_offs_q, nm_q);
+    }
 
     // Reuse per-call scratch buffers to avoid allocator overhead in MD inference.
     long long n_q_atoms = (long long)nm_q * max_atoms_q;
@@ -2717,16 +2731,16 @@ void kernel_gaussian_full_matvec_cached_local_cu(
 
         // 1a. Query squared norms only (training norms are precomputed)
         float *d_norms_q = s_cached_local_matvec_scratch.d_norms_q;
-        compute_sqnorms_kernel<<<(N_q + 255) / 256, 256>>>(
+        CUDA_LAUNCH(compute_sqnorms_kernel, (N_q + 255) / 256, 256, 0, stream,
             d_X_q, d_norms_q, rep_size, N_q);
 
         // 1b. Element-blocked SGEMMs to avoid cross-element work.
         float *d_C_qt = s_cached_local_matvec_scratch.d_C_qt;
         float *d_inner_F = s_cached_local_matvec_scratch.d_inner_F;
         float *d_row_expd_iF = s_cached_local_matvec_scratch.d_row_expd_iF;
-        CUDA_CHECK(cudaMemset(d_C_qt, 0, (long long)N_q * (long long)(nm_t * max_atoms_t) * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_inner_F, 0, (long long)N_q * (long long)(nm_t * max_atoms_t) * sizeof(float)));
-        CUDA_CHECK(cudaMemset(d_row_expd_iF, 0, N_q * sizeof(float)));
+        CUDA_CHECK(cudaMemsetAsync(d_C_qt, 0, (long long)N_q * (long long)(nm_t * max_atoms_t) * sizeof(float), stream));
+        CUDA_CHECK(cudaMemsetAsync(d_inner_F, 0, (long long)N_q * (long long)(nm_t * max_atoms_t) * sizeof(float), stream));
+        CUDA_CHECK(cudaMemsetAsync(d_row_expd_iF, 0, N_q * sizeof(float), stream));
 
         float *d_X_q_elem = s_cached_local_matvec_scratch.d_X_q_elem;
         float *d_norms_q_elem = s_cached_local_matvec_scratch.d_norms_q_elem;
@@ -2736,22 +2750,29 @@ void kernel_gaussian_full_matvec_cached_local_cu(
         float *d_G_acc_elem = s_cached_local_matvec_scratch.d_G_acc_elem;
         float *d_row_expd_iF_elem = s_cached_local_matvec_scratch.d_row_expd_iF_elem;
 
-        for (const CachedLocalTrainingElementGroup &group : elem_cache.groups) {
-            CUDA_CHECK(cudaMemset(d_query_count, 0, sizeof(int)));
-            gather_active_query_indices_kernel<<<(N_q + 255) / 256, 256>>>(
-                d_Q_q, d_N_q, d_query_indices, d_query_count,
-                group.label, nm_q, max_atoms_q);
+        for (int group_idx = 0; group_idx < (int)elem_cache.groups.size(); group_idx++) {
+            const CachedLocalTrainingElementGroup &group = elem_cache.groups[(size_t)group_idx];
 
             int query_count = 0;
-            CUDA_CHECK(cudaMemcpy(&query_count, d_query_count, sizeof(int), cudaMemcpyDeviceToHost));
+            if (use_precomputed_query_groups) {
+                if (group_idx >= n_query_groups) continue;
+                query_count = d_query_counts_by_group[group_idx];
+                d_query_indices = const_cast<int *>(d_query_indices_by_group[group_idx]);
+            } else {
+                CUDA_CHECK(cudaMemsetAsync(d_query_count, 0, sizeof(int), stream));
+                CUDA_LAUNCH(gather_active_query_indices_kernel, (N_q + 255) / 256, 256, 0, stream,
+                    d_Q_q, d_N_q, d_query_indices, d_query_count,
+                    group.label, nm_q, max_atoms_q);
+                CUDA_CHECK(cudaMemcpy(&query_count, d_query_count, sizeof(int), cudaMemcpyDeviceToHost));
+            }
             if (query_count == 0) continue;
 
-            CUDA_CHECK(cudaMemset(d_G_acc_elem, 0, (size_t)query_count * rep_size * sizeof(float)));
-            CUDA_CHECK(cudaMemset(d_row_expd_iF_elem, 0, (size_t)query_count * sizeof(float)));
+            CUDA_CHECK(cudaMemsetAsync(d_G_acc_elem, 0, (size_t)query_count * rep_size * sizeof(float), stream));
+            CUDA_CHECK(cudaMemsetAsync(d_row_expd_iF_elem, 0, (size_t)query_count * sizeof(float), stream));
 
-            gather_rows_kernel<<<(int)(((long long)query_count * rep_size + 255) / 256), 256>>>(
+            CUDA_LAUNCH(gather_rows_kernel, (int)(((long long)query_count * rep_size + 255) / 256), 256, 0, stream,
                 d_X_q, d_X_q_elem, d_query_indices, query_count, rep_size);
-            gather_scalars_kernel<<<(query_count + 255) / 256, 256>>>(
+            CUDA_LAUNCH(gather_scalars_kernel, (query_count + 255) / 256, 256, 0, stream,
                 d_norms_q, d_norms_q_elem, d_query_indices, query_count);
 
             CUBLAS_CHECK(cublasSgemm(s_cublas, CUBLAS_OP_T, CUBLAS_OP_N,
@@ -2761,7 +2782,7 @@ void kernel_gaussian_full_matvec_cached_local_cu(
 
             {
                 dim3 blk(16, 16), grd((query_count + 15) / 16, (group.count + 15) / 16);
-                apply_norms_exp_kernel<<<grd, blk>>>(
+                CUDA_LAUNCH(apply_norms_exp_kernel, grd, blk, 0, stream,
                     d_C_elem, d_norms_q_elem, group.d_norms_t,
                     inv_s2, query_count, group.count, 0);
             }
@@ -2775,7 +2796,7 @@ void kernel_gaussian_full_matvec_cached_local_cu(
                 long long total = (long long)query_count * group.count;
                 int blk = 256;
                 int grd = (int)((total + blk - 1) / blk);
-                inference_build_expd_iF_kernel<<<grd, blk>>>(
+                CUDA_LAUNCH(inference_build_expd_iF_kernel, grd, blk, 0, stream,
                     d_C_elem, d_inner_F_elem, group.d_S_adF, d_expd_iF_elem, d_row_expd_iF_elem,
                     inv_s2, query_count, group.count);
             }
@@ -2792,21 +2813,21 @@ void kernel_gaussian_full_matvec_cached_local_cu(
 
             {
                 dim3 blk(16, 16), grd((query_count + 15) / 16, (group.count + 15) / 16);
-                scatter_rect_tile_kernel<<<grd, blk>>>(
+                CUDA_LAUNCH(scatter_rect_tile_kernel, grd, blk, 0, stream,
                     d_C_elem, d_C_qt, d_query_indices, group.d_indices,
                     query_count, group.count, query_count, N_q);
-                scatter_rect_tile_kernel<<<grd, blk>>>(
+                CUDA_LAUNCH(scatter_rect_tile_kernel, grd, blk, 0, stream,
                     d_inner_F_elem, d_inner_F, d_query_indices, group.d_indices,
                     query_count, group.count, query_count, N_q);
             }
 
             {
                 long long total = (long long)query_count * rep_size;
-                scatter_g_acc_tile_kernel<<<(int)((total + 255) / 256), 256>>>(
+                CUDA_LAUNCH(scatter_g_acc_tile_kernel, (int)((total + 255) / 256), 256, 0, stream,
                     d_G_acc_elem, d_G_acc, d_query_indices, query_count, rep_size);
             }
 
-            scatter_row_sums_kernel<<<(query_count + 255) / 256, 256>>>(
+            CUDA_LAUNCH(scatter_row_sums_kernel, (query_count + 255) / 256, 256, 0, stream,
                 d_row_expd_iF_elem, d_row_expd_iF, d_query_indices, query_count);
         }
 
@@ -2815,7 +2836,7 @@ void kernel_gaussian_full_matvec_cached_local_cu(
         {
             dim3 blk_e(32, 1);
             dim3 grd_e((N_q + 31) / 32, ((nm_t * max_atoms_t) + 255) / 256);
-            inference_E_and_diag_kernel<<<grd_e, blk_e>>>(
+            CUDA_LAUNCH(inference_E_and_diag_kernel, grd_e, blk_e, 0, stream,
                 d_C_qt, d_inner_F, d_alpha_E_t,
                 d_E_partial, d_wE_arr, d_row_expd_iF,
                 sigma * sigma,
@@ -2825,7 +2846,7 @@ void kernel_gaussian_full_matvec_cached_local_cu(
         // 6. Diagonal correction: G_acc[q,k] += (row_expd_iF[q] - wE[q]) * X_q[q,k]
         {
             long long total = (long long)N_q * rep_size;
-            inference_G_diag_correction_kernel<<<(int)((total + 255) / 256), 256>>>(
+            CUDA_LAUNCH(inference_G_diag_correction_kernel, (int)((total + 255) / 256), 256, 0, stream,
                 d_G_acc, d_X_q, d_row_expd_iF, d_wE_arr,
                 N_q, rep_size);
         }
@@ -2837,7 +2858,7 @@ void kernel_gaussian_full_matvec_cached_local_cu(
         if (reduce_block < 32)  reduce_block = 32;
         if (reduce_block > 256) reduce_block = 256;
         size_t smem_r = (size_t)reduce_block * sizeof(float);
-        local_energy_reduce_kernel<<<nm_q, reduce_block, smem_r>>>(
+        CUDA_LAUNCH(local_energy_reduce_kernel, nm_q, reduce_block, smem_r, stream,
             d_E_partial, d_N_q, d_E_pred, nm_q, max_atoms_q);
     }
 
@@ -2846,10 +2867,116 @@ void kernel_gaussian_full_matvec_cached_local_cu(
         int ncols_max = 3 * max_atoms_q;
         int bp_block  = 256;
         dim3 bp_grid(ncols_max, nm_q);
-        local_force_backproject_kernel<<<bp_grid, bp_block>>>(
+        CUDA_LAUNCH(local_force_backproject_kernel, bp_grid, bp_block, 0, stream,
             d_dX_q, d_G_acc, d_N_q, d_offs_q,
             d_F_pred, nm_q, max_atoms_q, rep_size);
     }
+}
+
+void kernel_gaussian_full_matvec_cached_local_cu(
+    const float *d_X_q,
+    const float *d_dX_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    const float *d_alpha_E,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_alpha_E_t,
+    const float *d_combined_t,
+    float       *d_E_pred,
+    float       *d_F_pred,
+    cudaStream_t stream,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size, int naq_q)
+{
+    kernel_gaussian_full_matvec_cached_local_impl(
+        d_X_q, d_dX_q, d_Q_q, d_N_q, nullptr,
+        d_X_t, d_Q_t, d_N_t,
+        d_alpha_E, d_alpha_desc,
+        d_norms_t, d_S_adF, d_alpha_E_t, d_combined_t,
+        nullptr, nullptr, 0, false,
+        d_E_pred, d_F_pred,
+        stream,
+        sigma, nm_q, nm_t, max_atoms_q, max_atoms_t, rep_size, naq_q);
+}
+
+void kernel_gaussian_full_matvec_cached_graph_local_cu(
+    const float *d_X_q,
+    const float *d_dX_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    const float *d_alpha_E,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_alpha_E_t,
+    const float *d_combined_t,
+    const int   *const *d_query_indices_by_group,
+    const int   *d_query_counts_by_group,
+    int          n_query_groups,
+    float       *d_E_pred,
+    float       *d_F_pred,
+    cudaStream_t stream,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size, int naq_q)
+{
+    kernel_gaussian_full_matvec_cached_local_impl(
+        d_X_q, d_dX_q, d_Q_q, d_N_q, nullptr,
+        d_X_t, d_Q_t, d_N_t,
+        d_alpha_E, d_alpha_desc,
+        d_norms_t, d_S_adF, d_alpha_E_t, d_combined_t,
+        d_query_indices_by_group, d_query_counts_by_group, n_query_groups, true,
+        d_E_pred, d_F_pred,
+        stream,
+        sigma, nm_q, nm_t, max_atoms_q, max_atoms_t, rep_size, naq_q);
+}
+
+void kernel_gaussian_full_matvec_cached_graph_local_offsets_cu(
+    const float *d_X_q,
+    const float *d_dX_q,
+    const int   *d_Q_q,
+    const int   *d_N_q,
+    const int   *d_offs_q_in,
+    const float *d_X_t,
+    const int   *d_Q_t,
+    const int   *d_N_t,
+    const float *d_alpha_E,
+    const float *d_alpha_desc,
+    const float *d_norms_t,
+    const float *d_S_adF,
+    const float *d_alpha_E_t,
+    const float *d_combined_t,
+    const int   *const *d_query_indices_by_group,
+    const int   *d_query_counts_by_group,
+    int          n_query_groups,
+    float       *d_E_pred,
+    float       *d_F_pred,
+    cudaStream_t stream,
+    float        sigma,
+    int nm_q, int nm_t,
+    int max_atoms_q, int max_atoms_t,
+    int rep_size, int naq_q)
+{
+    kernel_gaussian_full_matvec_cached_local_impl(
+        d_X_q, d_dX_q, d_Q_q, d_N_q, d_offs_q_in,
+        d_X_t, d_Q_t, d_N_t,
+        d_alpha_E, d_alpha_desc,
+        d_norms_t, d_S_adF, d_alpha_E_t, d_combined_t,
+        d_query_indices_by_group, d_query_counts_by_group, n_query_groups, true,
+        d_E_pred, d_F_pred,
+        stream,
+        sigma, nm_q, nm_t, max_atoms_q, max_atoms_t, rep_size, naq_q);
 }
 
 
