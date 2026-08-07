@@ -381,81 +381,46 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
     for (int a = 0; a < nm; ++a)
         mols[a] = kf::fchl18::parse_mol(coords_list[a], z_list[a]);
 
-    // Offsets into the flattened coordinate dimension
-    std::vector<int> offset(nm + 1, 0);
+    int D = 0;
     for (int a = 0; a < nm; ++a)
-        offset[a + 1] = offset[a] + mols[a].n_atoms * 3;
-    const std::size_t BIG = static_cast<std::size_t>(offset[nm]);  // N*D
-
-    // Allocate RFP output (upper triangle packed, length = BIG*(BIG+1)/2)
+        D += mols[static_cast<std::size_t>(a)].n_atoms * 3;
+    const std::size_t BIG = static_cast<std::size_t>(D);
     const std::size_t rfp_len = BIG * (BIG + 1) / 2;
+
     py::array_t<double> H_rfp(static_cast<py::ssize_t>(rfp_len));
-    std::memset(H_rfp.mutable_data(), 0, sizeof(double) * rfp_len);
+
+    std::vector<std::vector<double>> coords_vecs(static_cast<std::size_t>(nm));
+    std::vector<std::vector<int>> z_vecs(static_cast<std::size_t>(nm));
+    for (int a = 0; a < nm; ++a) {
+        coords_vecs[static_cast<std::size_t>(a)] = mols[static_cast<std::size_t>(a)].coords;
+        z_vecs[static_cast<std::size_t>(a)] = mols[static_cast<std::size_t>(a)].z;
+    }
 
     {
         py::gil_scoped_release release;
-
-#pragma omp parallel for collapse(2) schedule(dynamic)
-        for (int a = 0; a < nm; ++a) {
-            for (int b = 0; b < nm; ++b) {
-                if (b > a) continue;
-
-                const kf::fchl18::MolData &ma = mols[a];
-                const int na3A = ma.n_atoms * 3;
-                const int r0 = offset[a];
-                const kf::fchl18::MolData &mb = mols[b];
-                const int na3B = mb.n_atoms * 3;
-                const int c0 = offset[b];
-
-                std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
-                kf::fchl18::kernel_gaussian_hessian(
-                    ma.coords,
-                    ma.z,
-                    mb.coords,
-                    mb.z,
-                    ma.n_atoms,
-                    mb.n_atoms,
-                    sigma,
-                    two_body_scaling,
-                    two_body_width,
-                    two_body_power,
-                    three_body_scaling,
-                    three_body_width,
-                    three_body_power,
-                    cut_start,
-                    cut_distance,
-                    fourier_order,
-                    use_atm,
-                    block.data()
-                );
-
-                double *rfp_ptr = H_rfp.mutable_data();
-
-                if (a == b) {
-                    for (int amu = 0; amu < na3A; ++amu) {
-                        const std::size_t row = static_cast<std::size_t>(r0 + amu);
-                        for (int bnu = 0; bnu <= amu; ++bnu) {
-                            const std::size_t col = static_cast<std::size_t>(c0 + bnu);
-                            double val;
-                            if (amu == bnu) {
-                                val = block[static_cast<std::size_t>(amu) * na3B + bnu];
-                            } else {
-                                val = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu] +
-                                             block[static_cast<std::size_t>(bnu) * na3B + amu]);
-                            }
-                            rfp_ptr[kf::rfp_index_upper_N(BIG, col, row)] = val;
-                        }
-                    }
-                } else {
-                    for (int amu = 0; amu < na3A; ++amu) {
-                        const std::size_t row = static_cast<std::size_t>(r0 + amu);
-                        for (int bnu = 0; bnu < na3B; ++bnu) {
-                            const std::size_t col = static_cast<std::size_t>(c0 + bnu);
-                            rfp_ptr[kf::rfp_index_upper_N(BIG, col, row)] =
-                                block[static_cast<std::size_t>(amu) * na3B + bnu];
-                        }
-                    }
-                }
+        std::vector<double> H(static_cast<std::size_t>(D) * D, 0.0);
+        kf::fchl18::kernel_gaussian_hessian_symm_blocks(
+            coords_vecs,
+            z_vecs,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            H.data()
+        );
+        double *rfp_ptr = H_rfp.mutable_data();
+        for (int row = 0; row < D; ++row) {
+            for (int col = 0; col <= row; ++col) {
+                rfp_ptr[kf::rfp_index_upper_N(BIG, static_cast<std::size_t>(col),
+                                              static_cast<std::size_t>(row))] =
+                    H[static_cast<std::size_t>(row) * D + col];
             }
         }
     }
@@ -484,6 +449,7 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
         throw std::invalid_argument(
             "x_test must be 4-D with shape (N_test, max_size, 5, max_size)"
         );
+    if (N_train == 0) throw std::invalid_argument("kernel_gaussian_jacobian_t: empty training set");
 
     const int N_test = static_cast<int>(x_test.shape(0));
     const int max_size = static_cast<int>(x_test.shape(1));
@@ -492,72 +458,42 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
     auto n_te_flat = as_int_vector_1d(n_test);
     auto nn_te_flat = as_int_vector_2d(nn_test);
 
-    // Parse training molecules using shared helper
-    std::vector<kf::fchl18::MolData> train_mols(N_train);
-    for (int j = 0; j < N_train; ++j)
-        train_mols[j] = kf::fchl18::parse_mol(coords_train_list[j], z_train_list[j]);
-
-    if (N_train == 0) throw std::invalid_argument("kernel_gaussian_jacobian_t: empty training set");
-
-    // Compute per-training-mol column offsets (supports variable atom counts).
-    std::vector<int> col_offset(N_train + 1, 0);
-    for (int j = 0; j < N_train; ++j)
-        col_offset[j + 1] = col_offset[j] + train_mols[j].n_atoms * 3;
-    const int D_total = col_offset[N_train];  // sum_j n_atoms_j * 3
+    std::vector<std::vector<double>> coords_A(static_cast<std::size_t>(N_train));
+    std::vector<std::vector<int>> z_A(static_cast<std::size_t>(N_train));
+    int D_total = 0;
+    for (int j = 0; j < N_train; ++j) {
+        kf::fchl18::MolData mj = kf::fchl18::parse_mol(coords_train_list[j], z_train_list[j]);
+        D_total += mj.n_atoms * 3;
+        coords_A[static_cast<std::size_t>(j)] = std::move(mj.coords);
+        z_A[static_cast<std::size_t>(j)] = std::move(mj.z);
+    }
 
     // Output shape: (N_test, D_total)
     py::array_t<double> K_jt({(py::ssize_t)N_test, (py::ssize_t)D_total});
-    std::memset(K_jt.mutable_data(), 0, sizeof(double) * N_test * D_total);
 
     {
         py::gil_scoped_release release;
-
-// Parallelise over training molecules j.
-// Each j writes to disjoint columns [col_offset[j], col_offset[j+1]).
-#pragma omp parallel for schedule(dynamic)
-        for (int j = 0; j < N_train; ++j) {
-            const kf::fchl18::MolData &mj = train_mols[j];
-            const int na_j = mj.n_atoms;
-
-            // grad_j[alpha, mu, i] = dK(train_j, test_i) / dR_{train_j}[alpha,mu]
-            // shape: (na_j, 3, N_test)
-            std::vector<double> grad_j(static_cast<std::size_t>(na_j) * 3 * N_test, 0.0);
-
-            kf::fchl18::kernel_gaussian_gradient(
-                mj.coords,
-                mj.z,
-                x_te_flat,
-                n_te_flat,
-                nn_te_flat,
-                na_j,
-                N_test,
-                max_size,
-                sigma,
-                two_body_scaling,
-                two_body_width,
-                two_body_power,
-                three_body_scaling,
-                three_body_width,
-                three_body_power,
-                cut_start,
-                cut_distance,
-                fourier_order,
-                use_atm,
-                grad_j.data()
-            );
-
-            // Scatter: K_jt[i, col_offset[j] + alpha*3 + mu] = grad_j[alpha, mu, i]
-            double *K_ptr = K_jt.mutable_data();
-            for (int alpha = 0; alpha < na_j; ++alpha) {
-                for (int mu = 0; mu < 3; ++mu) {
-                    const int col = col_offset[j] + alpha * 3 + mu;
-                    for (int i = 0; i < N_test; ++i) {
-                        K_ptr[static_cast<std::ptrdiff_t>(i) * D_total + col] =
-                            grad_j[static_cast<std::size_t>(alpha) * 3 * N_test + mu * N_test + i];
-                    }
-                }
-            }
-        }
+        kf::fchl18::kernel_gaussian_jacobian_t(
+            coords_A,
+            z_A,
+            x_te_flat,
+            n_te_flat,
+            nn_te_flat,
+            N_test,
+            max_size,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            K_jt.mutable_data()
+        );
     }
 
     return K_jt;

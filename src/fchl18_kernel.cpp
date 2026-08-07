@@ -5,8 +5,11 @@
 
 // C++ standard library
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -108,7 +111,6 @@ static void compute_threebody_fourier(
     std::vector<double> &cosp,  // (pmax, order, max_size) flat
     std::vector<double> &sinp   // (pmax, order, max_size) flat
 ) {
-    const double pi = 4.0 * std::atan(1.0);
     const std::size_t sz = static_cast<std::size_t>(pmax) * order * max_size;
     cosp.assign(sz, 0.0);
     sinp.assign(sz, 0.0);
@@ -199,12 +201,15 @@ static void compute_threebody_fourier(
             const int pk = z_to_idx[zj];  // compact index for Z of j-th neighbour
             if (pj < 0 || pk < 0) continue;
 
-            for (int m = 0; m < order; ++m) {
+            // Only odd Fourier indices n=m+1 contribute: cos(nθ)-cos(n(θ+π)) = 2 cos(nθ)
+            // for odd n and 0 for even n. Step by 2 (m = 0,2,4,… → n = 1,3,5,…).
+            for (int m = 0; m < order; m += 2) {
                 const double mf = static_cast<double>(m + 1);
                 const double mth = mf * theta;
-                const double mthpi = mf * (theta + pi);
-                const double cos_m = (std::cos(mth) - std::cos(mthpi)) * ksi3;
-                const double sin_m = (std::sin(mth) - std::sin(mthpi)) * ksi3;
+                const double c = std::cos(mth);
+                const double s = std::sin(mth);
+                const double cos_m = 2.0 * c * ksi3;
+                const double sin_m = 2.0 * s * ksi3;
 
                 cosp[idx(pj, m, j)] += cos_m;
                 sinp[idx(pj, m, j)] += sin_m;
@@ -272,9 +277,9 @@ static double scalar_noalchemy(
 
             const double d = std::exp(r2 * inv_width);
 
-            // Angular contribution: sum over element types p and Fourier orders m
+            // Angular contribution: only odd Fourier n=m+1 are nonzero (see three-body).
             double angular = 0.0;
-            for (int m = 0; m < order; ++m) {
+            for (int m = 0; m < order; m += 2) {
                 double ang_m = 0.0;
                 // We sum over element types p that exist in both atoms' neighbourhoods.
                 // In the no-alchemy path elements must match (same p used for both sides).
@@ -933,7 +938,6 @@ static void compute_threebody_fourier_and_grad(
     std::vector<double> &dcosp,              // (pmax * order * max_size * na3)  output
     std::vector<double> &dsinp               // (pmax * order * max_size * na3)  output
 ) {
-    const double pi = 4.0 * std::atan(1.0);
     const int na3 = n_atoms_A * 3;
     const std::size_t sz = static_cast<std::size_t>(pmax) * order * max_size;
     const std::size_t sz_grad = sz * na3;
@@ -1388,20 +1392,22 @@ static void compute_threebody_fourier_and_grad(
 
             const int global_atoms[3] = {centre_atom_idx, j_atom, k_atom};
 
-            for (int m = 0; m < order; ++m) {
+            for (int m = 0; m < order; m += 2) {
                 const double mf = static_cast<double>(m + 1);
                 const double mth = mf * theta;
-                const double mthpi = mf * (theta + pi);
+                const double c = std::cos(mth);
+                const double s = std::sin(mth);
 
-                const double cos_mfac = std::cos(mth) - std::cos(mthpi);
-                const double sin_mfac = std::sin(mth) - std::sin(mthpi);
+                // Odd n=m+1: cos(nθ)-cos(n(θ+π)) = 2 cos(nθ); even n identically 0.
+                const double cos_mfac = 2.0 * c;
+                const double sin_mfac = 2.0 * s;
 
                 const double cos_m = cos_mfac * ksi3;
                 const double sin_m = sin_mfac * ksi3;
 
-                // d(cos_m_factor)/d(theta) = -mf*sin(mth) + mf*sin(mthpi)
-                const double dcos_mfac_dtheta = -mf * std::sin(mth) + mf * std::sin(mthpi);
-                const double dsin_mfac_dtheta = mf * std::cos(mth) - mf * std::cos(mthpi);
+                // d(cos_m_factor)/d(theta) = -2*mf*sin(mth)
+                const double dcos_mfac_dtheta = -2.0 * mf * s;
+                const double dsin_mfac_dtheta = 2.0 * mf * c;
 
                 // d(theta)/dR[la,mu] = d(theta)/d(cos_i) * d(cos_i)/dR[la,mu]
                 //                   = (-1/sin_theta) * dcos_i_dR[la][mu]
@@ -1456,6 +1462,8 @@ struct AtomDataGrad {
     // d(cosp[p,m,neigh])/dR[alpha,mu]    layout: [flat_idx * na3 + alpha*3 + mu]
     std::vector<double> dcosp;
     std::vector<double> dsinp;
+    // Neighbour slot k -> atom index in molecule A (built once, reused for dri).
+    std::vector<int> nbr_atom_idx;
 };
 
 // Build neighbour atom index map for one atom i in molecule A.
@@ -1500,28 +1508,35 @@ static std::vector<int> build_nbr_atom_idx(
 }
 
 // Precompute all per-atom data WITH gradients for molecule A.
-// (serial — molecule A is a single query molecule, not a batch)
+// parallel_atoms: OpenMP over atoms when not already in a parallel region
+// (avoids nested OpenMP; caller disables for large nm2 where B-parallelism dominates).
 static std::vector<AtomDataGrad> precompute_atom_data_grad(
     const std::vector<double> &x,     // (max_size, 5, max_size) for one molecule
     const std::vector<int> &n_vec,    // {n_atoms_A}
     const std::vector<int> &nn_flat,  // (max_size) neighbour counts
     int n_atoms_A, int max_size, const std::vector<double> &coords_A, const std::vector<int> &z_A,
     double two_body_power, double cut_start, double cut_distance, double three_body_power,
-    int order, int pmax, const std::vector<int> &z_to_idx, bool use_atm
+    int order, int pmax, const std::vector<int> &z_to_idx, bool use_atm, bool parallel_atoms
 ) {
     std::vector<AtomDataGrad> data(n_atoms_A);
     const std::size_t atom_stride = static_cast<std::size_t>(5) * max_size;
+    (void)n_vec;
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) \
+    if (parallel_atoms && n_atoms_A >= 4 && !omp_in_parallel())
+#endif
     for (int i = 0; i < n_atoms_A; ++i) {
-        AtomDataGrad &ad = data[i];
-        const int n_neigh = nn_flat[i];
+        AtomDataGrad &ad = data[static_cast<std::size_t>(i)];
+        const int n_neigh = nn_flat[static_cast<std::size_t>(i)];
         ad.n_neigh = n_neigh;
 
-        const double *atom_chan = x.data() + i * atom_stride;
+        const double *atom_chan = x.data() + static_cast<std::size_t>(i) * atom_stride;
 
         // Build neighbour -> atom-index map
-        const std::vector<int> nbr_idx =
+        ad.nbr_atom_idx =
             build_nbr_atom_idx(atom_chan, max_size, n_neigh, coords_A, z_A, i, n_atoms_A);
+        const std::vector<int> &nbr_idx = ad.nbr_atom_idx;
 
         compute_ksi_and_grad(
             atom_chan,
@@ -1629,9 +1644,9 @@ static double scalar_noalchemy_and_grad(
             // dG/d(ri) = G * 2*(ri-rj) * inv_width = G * 2*dr * inv_width
             const double dG_dri = G * 2.0 * dr * inv_width;
 
-            // Angular term
+            // Angular term (even Fourier modes are identically zero).
             double angular = 0.0;
-            for (int m = 0; m < order; ++m) {
+            for (int m = 0; m < order; m += 2) {
                 double ang_m = 0.0;
                 for (int p = 0; p < pmax; ++p) {
                     ang_m += cos1[cos1_idx(p, m, i)] * cos2[cos2_idx(p, m, j)] +
@@ -1734,9 +1749,9 @@ static double scalar_noalchemy_and_grad(
                     // d(W_ksi)/dR = d(ksi1[i])/dR * ksi2[j]
                     const double dW_ksi = dksi1[base] * ksi2[j];
 
-                    // d(angular)/dR
+                    // d(angular)/dR (even Fourier modes are identically zero)
                     double d_angular = 0.0;
-                    for (int m = 0; m < order; ++m) {
+                    for (int m = 0; m < order; m += 2) {
                         double dam = 0.0;
                         for (int p = 0; p < pmax; ++p) {
                             const std::size_t fi = cos1_idx(p, m, i);
@@ -1769,31 +1784,31 @@ static double scalar_noalchemy_and_grad_full(
     double distance_scale, double angular_scale, int n_atoms_A, std::vector<double> &ds_dR
 ) {
     // Early exit: central atoms must have the same nuclear charge (matches Fortran
-    // scalar_noalchemy)
+    // scalar_noalchemy). Caller may also fast-path this case.
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
-    ds_dR.assign(static_cast<std::size_t>(n_atoms_A) * 3, 0.0);
+    if (Z1 != Z2) {
+        ds_dR.assign(static_cast<std::size_t>(n_atoms_A) * 3, 0.0);
+        return 0.0;
+    }
 
-    if (Z1 != Z2) return 0.0;
+    const std::size_t na3 = static_cast<std::size_t>(n_atoms_A) * 3;
+    ds_dR.assign(na3, 0.0);
 
     const double inv_width = -1.0 / (4.0 * d_width * d_width);
     const double maxgausdist2 = (8.0 * d_width) * (8.0 * d_width);
 
     double aadist = 1.0;
-    const int na3 = n_atoms_A * 3;
 
-    auto cos1_idx = [&](int p, int m, int neigh) -> std::size_t {
-        return static_cast<std::size_t>(p) * order * max_size1 +
-               static_cast<std::size_t>(m) * max_size1 + neigh;
-    };
-    auto cos2_idx = [&](int p, int m, int neigh) -> std::size_t {
-        return static_cast<std::size_t>(p) * order * max_size2 +
-               static_cast<std::size_t>(m) * max_size2 + neigh;
-    };
+    // Layout helpers (order and max_size are invariant in the hot loops).
+    const std::size_t ord = static_cast<std::size_t>(order);
+    const std::size_t ms1 = static_cast<std::size_t>(max_size1);
+    const std::size_t ms2 = static_cast<std::size_t>(max_size2);
 
     for (int i = 1; i < n1; ++i) {
         const int Zi = static_cast<int>(x1_chan[1 * max_size1 + i]);
         const double ri = x1_chan[i];
+        const std::size_t i_na3 = static_cast<std::size_t>(i) * na3;
 
         for (int j = 1; j < n2; ++j) {
             const int Zj = static_cast<int>(x2_chan[1 * max_size2 + j]);
@@ -1807,44 +1822,85 @@ static double scalar_noalchemy_and_grad_full(
             const double G = std::exp(r2 * inv_width);
             const double dG_dri = G * 2.0 * dr * inv_width;
 
-            // Angular contribution
+            // Angular scalar. order==2 reduces to a single active mode (m=0, n=1);
+            // even n are identically zero. order==1 is the same math.
             double angular = 0.0;
-            for (int m = 0; m < order; ++m) {
-                double ang_m = 0.0;
+            if (order == 1 || order == 2) {
                 for (int p = 0; p < pmax; ++p) {
-                    ang_m += cos1[cos1_idx(p, m, i)] * cos2[cos2_idx(p, m, j)] +
-                             sin1[cos1_idx(p, m, i)] * sin2[cos2_idx(p, m, j)];
+                    const std::size_t base1 = static_cast<std::size_t>(p) * ord * ms1 + i;
+                    const std::size_t base2 = static_cast<std::size_t>(p) * ord * ms2 + j;
+                    angular += (cos1[base1] * cos2[base2] + sin1[base1] * sin2[base2]) * s_prefactor[0];
                 }
-                angular += ang_m * s_prefactor[m];
+            } else {
+                for (int m = 0; m < order; m += 2) {
+                    double ang_m = 0.0;
+                    for (int p = 0; p < pmax; ++p) {
+                        const std::size_t i1 =
+                            static_cast<std::size_t>(p) * ord * ms1 + static_cast<std::size_t>(m) * ms1 +
+                            static_cast<std::size_t>(i);
+                        const std::size_t i2 =
+                            static_cast<std::size_t>(p) * ord * ms2 + static_cast<std::size_t>(m) * ms2 +
+                            static_cast<std::size_t>(j);
+                        ang_m += cos1[i1] * cos2[i2] + sin1[i1] * sin2[i2];
+                    }
+                    angular += ang_m * s_prefactor[m];
+                }
             }
 
             const double W_ksi = ksi1[i] * ksi2[j];
-            aadist += G * (W_ksi * distance_scale + angular * angular_scale);
+            const double W = W_ksi * distance_scale + angular * angular_scale;
+            aadist += G * W;
 
-            for (int alpha = 0; alpha < n_atoms_A; ++alpha) {
-                for (int mu = 0; mu < 3; ++mu) {
-                    const std::size_t base = static_cast<std::size_t>(i) * na3 + alpha * 3 + mu;
+            const double G_dist = G * distance_scale;
+            const double G_ang = G * angular_scale;
+            const double ksi2_j = ksi2[j];
 
-                    // dG/dR contribution: dG/d(ri) * d(ri)/dR[alpha,mu]
-                    const double dG_dR = dG_dri * dri1[base];
+            // Gradient: loop (p,m) outer so cos2/sin2 load once; amu inner.
+            // Two-body (ksi + distance) contribution.
+#ifdef _OPENMP
+#pragma omp simd
+#endif
+            for (std::size_t amu = 0; amu < na3; ++amu) {
+                const double dG_dR = dG_dri * dri1[i_na3 + amu];
+                const double dW_ksi = dksi1[i_na3 + amu] * ksi2_j;
+                ds_dR[amu] += dG_dR * W + G_dist * dW_ksi;
+            }
 
-                    // d(W)/dR
-                    const double dW_ksi = dksi1[base] * ksi2[j];
-                    double d_angular = 0.0;
-                    for (int m = 0; m < order; ++m) {
-                        double dam = 0.0;
-                        for (int p = 0; p < pmax; ++p) {
-                            const std::size_t fi = cos1_idx(p, m, i);
-                            dam += dcos1[fi * na3 + alpha * 3 + mu] * cos2[cos2_idx(p, m, j)] +
-                                   dsin1[fi * na3 + alpha * 3 + mu] * sin2[cos2_idx(p, m, j)];
-                        }
-                        d_angular += dam * s_prefactor[m];
+            // Angular gradient contribution (active Fourier modes only).
+            if (order == 1 || order == 2) {
+                const double sp0 = s_prefactor[0];
+                for (int p = 0; p < pmax; ++p) {
+                    const std::size_t base1 = static_cast<std::size_t>(p) * ord * ms1 + i;
+                    const std::size_t base2 = static_cast<std::size_t>(p) * ord * ms2 + j;
+                    const double c2_0 = cos2[base2];
+                    const double s2_0 = sin2[base2];
+                    const std::size_t fi0 = base1 * na3;
+#ifdef _OPENMP
+#pragma omp simd
+#endif
+                    for (std::size_t amu = 0; amu < na3; ++amu) {
+                        ds_dR[amu] +=
+                            G_ang * sp0 * (dcos1[fi0 + amu] * c2_0 + dsin1[fi0 + amu] * s2_0);
                     }
-
-                    const double dW = dW_ksi * distance_scale + d_angular * angular_scale;
-                    const double W = W_ksi * distance_scale + angular * angular_scale;
-
-                    ds_dR[alpha * 3 + mu] += dG_dR * W + G * dW;
+                }
+            } else {
+                for (int m = 0; m < order; m += 2) {
+                    const double spf = s_prefactor[m];
+                    for (int p = 0; p < pmax; ++p) {
+                        const std::size_t i1 =
+                            static_cast<std::size_t>(p) * ord * ms1 + static_cast<std::size_t>(m) * ms1 +
+                            static_cast<std::size_t>(i);
+                        const std::size_t i2 =
+                            static_cast<std::size_t>(p) * ord * ms2 + static_cast<std::size_t>(m) * ms2 +
+                            static_cast<std::size_t>(j);
+                        const double c2 = cos2[i2];
+                        const double s2 = sin2[i2];
+                        const std::size_t fi = i1 * na3;
+                        for (std::size_t amu = 0; amu < na3; ++amu) {
+                            ds_dR[amu] +=
+                                G_ang * spf * (dcos1[fi + amu] * c2 + dsin1[fi + amu] * s2);
+                        }
+                    }
                 }
             }
         }
@@ -1860,6 +1916,349 @@ static double scalar_noalchemy_and_grad_full(
 // Since modifying the struct is inconvenient at this stage, we compute dri
 // as an auxiliary in kernel_gaussian_gradient directly from the geometry.
 // =============================================================================
+
+// =============================================================================
+// Shared B-side cache for gradient / jacobian (hoisted across many A molecules).
+// =============================================================================
+struct GradBSide {
+    std::vector<int> z_to_idx;
+    int pmax = 0;
+    std::vector<AtomData> adB;
+    std::vector<double> ss_B;
+    std::vector<double> s_prefactor;
+    double true_distance_scale = 0.0;
+    double true_angular_scale = 0.0;
+    double inv_sigma2 = 0.0;
+};
+
+static GradBSide build_grad_b_side(
+    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2,
+    int nm2, int max_size2, std::vector<int> z_to_idx, int pmax, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm
+) {
+    GradBSide B;
+    B.z_to_idx = std::move(z_to_idx);
+    B.pmax = pmax;
+    B.true_distance_scale = two_body_scaling / 16.0;
+    B.true_angular_scale = three_body_scaling / std::sqrt(8.0);
+    B.inv_sigma2 = 0.5 / (sigma * sigma);
+
+    const double ang_norm2 = get_angular_norm2(three_body_width);
+    const double pi = 4.0 * std::atan(1.0);
+    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
+    B.s_prefactor.resize(static_cast<std::size_t>(fourier_order));
+    for (int m = 0; m < fourier_order; ++m) {
+        const double mf = static_cast<double>(m + 1);
+        B.s_prefactor[static_cast<std::size_t>(m)] =
+            g1 * std::exp(-(three_body_width * mf) * (three_body_width * mf) / 2.0);
+    }
+
+    if (pmax == 0) return B;
+
+    B.adB = precompute_atom_data(
+        x2,
+        n2,
+        nn2,
+        nm2,
+        max_size2,
+        two_body_power,
+        cut_start,
+        cut_distance,
+        three_body_power,
+        fourier_order,
+        pmax,
+        B.z_to_idx,
+        use_atm
+    );
+    B.ss_B = compute_self_scalars(
+        x2,
+        n2,
+        B.adB,
+        nm2,
+        max_size2,
+        fourier_order,
+        pmax,
+        three_body_width,
+        two_body_width,
+        ang_norm2,
+        B.true_distance_scale,
+        B.true_angular_scale
+    );
+    return B;
+}
+
+// Element map from nuclear-charge lists (A) + B representation neighbour scan.
+// Neighbours are atoms of the same molecule, so A Z-lists cover all A-side elements.
+static int build_element_map_zlists_and_repr(
+    const std::vector<std::vector<int>> &z_lists, const std::vector<double> &x2,
+    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2,
+    std::vector<int> &z_to_idx
+) {
+    z_to_idx.assign(256, -1);
+    std::vector<int> present;
+
+    auto add_z = [&](int z) {
+        if (z > 0 && z < 256 && z_to_idx[static_cast<std::size_t>(z)] < 0) {
+            z_to_idx[static_cast<std::size_t>(z)] = static_cast<int>(present.size());
+            present.push_back(z);
+        }
+    };
+
+    for (const auto &zl : z_lists)
+        for (int z : zl)
+            add_z(z);
+
+    const std::size_t mol_s = static_cast<std::size_t>(max_size2) * 5 * max_size2;
+    const std::size_t atom_s = static_cast<std::size_t>(5) * max_size2;
+    for (int a = 0; a < nm2; ++a) {
+        for (int i = 0; i < n2[static_cast<std::size_t>(a)]; ++i) {
+            const double *chan = x2.data() + static_cast<std::size_t>(a) * mol_s +
+                                 static_cast<std::size_t>(i) * atom_s;
+            const int n_neigh = nn2[static_cast<std::size_t>(a) * max_size2 + i];
+            for (int k = 0; k < n_neigh; ++k)
+                add_z(static_cast<int>(chan[max_size2 + k]));
+        }
+    }
+    return static_cast<int>(present.size());
+}
+
+// Core: one query molecule A against precomputed B.
+// parallel_over_B: enable OpenMP over training molecules (disable when outer A-parallel).
+static void gradient_one_A_against_B(
+    const std::vector<double> &coords_A, const std::vector<int> &z_A, int n_atoms_A,
+    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2,
+    int nm2, int max_size2, const GradBSide &B, double two_body_width, double two_body_power,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order,
+    bool use_atm, bool parallel_over_B, double *grad_out
+) {
+    std::memset(grad_out, 0, sizeof(double) * static_cast<std::size_t>(n_atoms_A) * 3 * nm2);
+    if (B.pmax == 0) return;
+
+    static const bool kProfile = [] {
+        const char *e = std::getenv("KF_FCHL18_PROFILE");
+        return e != nullptr && e[0] == '1';
+    }();
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+
+    const int max_size_A = n_atoms_A;
+    const int pmax = B.pmax;
+    const double true_distance_scale = B.true_distance_scale;
+    const double true_angular_scale = B.true_angular_scale;
+    const double inv_sigma2 = B.inv_sigma2;
+    const double *s_prefactor = B.s_prefactor.data();
+
+    std::vector<double> x_A_mol;
+    std::vector<int> nn_A_mol;
+    kf::fchl18::generate_fchl18(coords_A, z_A, max_size_A, cut_distance, x_A_mol, nn_A_mol);
+    const auto t_repr = clock::now();
+
+    const std::vector<int> n_A_vec = {n_atoms_A};
+    const std::vector<int> &nn_A_flat = nn_A_mol;
+
+    // Parallelise A-side atom precompute when B-parallelism owns the team.
+    // Skip when already inside an outer A-parallel region (nested OpenMP off).
+    // Always worth it for typical n_atoms_A >= 4; large-nm2 fork cost is small
+    // vs. O(n_atoms^2) three-body grad work.
+#ifdef _OPENMP
+    const bool parallel_ad_atoms = parallel_over_B;
+#else
+    const bool parallel_ad_atoms = false;
+#endif
+    const std::vector<AtomDataGrad> adA = precompute_atom_data_grad(
+        x_A_mol,
+        n_A_vec,
+        nn_A_flat,
+        n_atoms_A,
+        max_size_A,
+        coords_A,
+        z_A,
+        two_body_power,
+        cut_start,
+        cut_distance,
+        three_body_power,
+        fourier_order,
+        pmax,
+        B.z_to_idx,
+        use_atm,
+        parallel_ad_atoms
+    );
+    const auto t_ad = clock::now();
+
+    const int na3 = n_atoms_A * 3;
+    const std::size_t atom_stride_A = static_cast<std::size_t>(5) * max_size_A;
+
+    // dri from stored neighbour indices (no O(n^2) coordinate matching).
+    std::vector<std::vector<double>> dri_A(static_cast<std::size_t>(n_atoms_A));
+    for (int i = 0; i < n_atoms_A; ++i) {
+        const AtomDataGrad &adi = adA[static_cast<std::size_t>(i)];
+        const int n_neigh = adi.n_neigh;
+        dri_A[static_cast<std::size_t>(i)].assign(static_cast<std::size_t>(n_neigh) * na3, 0.0);
+
+        const double *atom_chan = x_A_mol.data() + static_cast<std::size_t>(i) * atom_stride_A;
+        const double *dist_chan = atom_chan;
+        const double *xc = atom_chan + 2 * max_size_A;
+        const double *yc = atom_chan + 3 * max_size_A;
+        const double *zc = atom_chan + 4 * max_size_A;
+
+        for (int k = 1; k < n_neigh; ++k) {
+            const double r = dist_chan[k];
+            if (r < 1e-14) continue;
+            const int k_atom = adi.nbr_atom_idx[static_cast<std::size_t>(k)];
+            if (k_atom < 0) continue;
+            const double inv_r = 1.0 / r;
+            const double dxk = xc[k], dyk = yc[k], dzk = zc[k];
+
+            const std::size_t base_k = static_cast<std::size_t>(k) * na3 + k_atom * 3;
+            const std::size_t base_i = static_cast<std::size_t>(k) * na3 + i * 3;
+            dri_A[static_cast<std::size_t>(i)][base_k + 0] = dxk * inv_r;
+            dri_A[static_cast<std::size_t>(i)][base_k + 1] = dyk * inv_r;
+            dri_A[static_cast<std::size_t>(i)][base_k + 2] = dzk * inv_r;
+            dri_A[static_cast<std::size_t>(i)][base_i + 0] = -dxk * inv_r;
+            dri_A[static_cast<std::size_t>(i)][base_i + 1] = -dyk * inv_r;
+            dri_A[static_cast<std::size_t>(i)][base_i + 2] = -dzk * inv_r;
+        }
+    }
+    const auto t_dri = clock::now();
+
+    std::vector<double> ss_A(static_cast<std::size_t>(n_atoms_A), 0.0);
+    std::vector<std::vector<double>> dss_A(static_cast<std::size_t>(n_atoms_A));
+
+    for (int i = 0; i < n_atoms_A; ++i) {
+        const AtomDataGrad &adi = adA[static_cast<std::size_t>(i)];
+        const double *x1_chan = x_A_mol.data() + static_cast<std::size_t>(i) * atom_stride_A;
+
+        std::vector<double> ds_tmp;
+        ss_A[static_cast<std::size_t>(i)] = scalar_noalchemy_and_grad_full(
+            x1_chan,
+            max_size_A,
+            adi.n_neigh,
+            adi.ksi.data(),
+            adi.dksi.data(),
+            dri_A[static_cast<std::size_t>(i)].data(),
+            adi.cosp,
+            adi.sinp,
+            adi.dcosp,
+            adi.dsinp,
+            x1_chan,
+            max_size_A,
+            adi.n_neigh,
+            adi.ksi.data(),
+            adi.cosp,
+            adi.sinp,
+            two_body_width,
+            fourier_order,
+            pmax,
+            s_prefactor,
+            true_distance_scale,
+            true_angular_scale,
+            n_atoms_A,
+            ds_tmp
+        );
+
+        dss_A[static_cast<std::size_t>(i)].resize(static_cast<std::size_t>(n_atoms_A) * 3);
+        for (std::size_t q = 0; q < dss_A[static_cast<std::size_t>(i)].size(); ++q)
+            dss_A[static_cast<std::size_t>(i)][q] = 2.0 * ds_tmp[q];
+    }
+    const auto t_ss = clock::now();
+
+    const std::size_t mol2_stride = static_cast<std::size_t>(max_size2) * 5 * max_size2;
+    const std::size_t at2_stride = static_cast<std::size_t>(5) * max_size2;
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) if (parallel_over_B)
+#endif
+    for (int b = 0; b < nm2; ++b) {
+        const int nb = n2[static_cast<std::size_t>(b)];
+        std::vector<double> dsij_dR(static_cast<std::size_t>(n_atoms_A) * 3);
+
+        for (int i = 0; i < n_atoms_A; ++i) {
+            const AtomDataGrad &adi = adA[static_cast<std::size_t>(i)];
+            const double *x1_chan = x_A_mol.data() + static_cast<std::size_t>(i) * atom_stride_A;
+            const double sii = ss_A[static_cast<std::size_t>(i)];
+            const double *dsii = dss_A[static_cast<std::size_t>(i)].data();
+            const int Zi = static_cast<int>(x1_chan[max_size_A]);  // channel 1, self
+
+            for (int j = 0; j < nb; ++j) {
+                const AtomData &adj = B.adB[static_cast<std::size_t>(b) * max_size2 + j];
+                const double *x2_chan = x2.data() + static_cast<std::size_t>(b) * mol2_stride +
+                                       static_cast<std::size_t>(j) * at2_stride;
+                const double sjj = B.ss_B[static_cast<std::size_t>(b) * max_size2 + j];
+                const int Zj = static_cast<int>(x2_chan[max_size2]);
+
+                double sij = 0.0;
+                if (Zi == Zj) {
+                    sij = scalar_noalchemy_and_grad_full(
+                        x1_chan,
+                        max_size_A,
+                        adi.n_neigh,
+                        adi.ksi.data(),
+                        adi.dksi.data(),
+                        dri_A[static_cast<std::size_t>(i)].data(),
+                        adi.cosp,
+                        adi.sinp,
+                        adi.dcosp,
+                        adi.dsinp,
+                        x2_chan,
+                        max_size2,
+                        adj.n_neigh,
+                        adj.ksi.data(),
+                        adj.cosp,
+                        adj.sinp,
+                        two_body_width,
+                        fourier_order,
+                        pmax,
+                        s_prefactor,
+                        true_distance_scale,
+                        true_angular_scale,
+                        n_atoms_A,
+                        dsij_dR
+                    );
+                } else {
+                    // sij = 0, dsij = 0 — only -ds_ii contributes (matches scalar early-exit).
+                    std::fill(dsij_dR.begin(), dsij_dR.end(), 0.0);
+                }
+
+                const double kij = std::exp(-(sii + sjj - 2.0 * sij) * inv_sigma2);
+                const double coeff = kij * inv_sigma2;
+
+                for (int alpha = 0; alpha < n_atoms_A; ++alpha) {
+                    for (int mu = 0; mu < 3; ++mu) {
+                        const double dval =
+                            -dsii[alpha * 3 + mu] +
+                            2.0 * dsij_dR[static_cast<std::size_t>(alpha) * 3 + mu];
+                        grad_out[static_cast<std::size_t>(alpha) * 3 * nm2 + mu * nm2 + b] +=
+                            coeff * dval;
+                    }
+                }
+            }
+        }
+    }
+
+    if (kProfile) {
+        const double t_repr_ms = std::chrono::duration<double, std::milli>(t_repr - t0).count();
+        const double t_ad_ms = std::chrono::duration<double, std::milli>(t_ad - t_repr).count();
+        const double t_dri_ms = std::chrono::duration<double, std::milli>(t_dri - t_ad).count();
+        const double t_ss_ms = std::chrono::duration<double, std::milli>(t_ss - t_dri).count();
+        const double t_main_ms = std::chrono::duration<double, std::milli>(clock::now() - t_ss).count();
+        const double total = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
+        std::fprintf(
+            stderr,
+            "[fchl18-grad] na=%d nm2=%d  repr=%.2f  ad_grad=%.2f  dri=%.2f  ss_A=%.2f  "
+            "main=%.2f  total=%.2f ms\n",
+            n_atoms_A,
+            nm2,
+            t_repr_ms,
+            t_ad_ms,
+            t_dri_ms,
+            t_ss_ms,
+            t_main_ms,
+            total
+        );
+    }
+}
 
 // =============================================================================
 // Public API: kernel_gaussian_gradient
@@ -1884,317 +2283,242 @@ void kernel_gaussian_gradient(
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
     if (n_atoms_A <= 0) throw std::invalid_argument("n_atoms_A must be > 0");
 
-    const int max_size_A = n_atoms_A;  // molecule A uses itself as max_size
-    const double true_distance_scale = two_body_scaling / 16.0;
-    const double true_angular_scale = three_body_scaling / std::sqrt(8.0);
-    const double ang_norm2 = get_angular_norm2(three_body_width);
-    // qmllib convention: K = exp(-0.5*(l2)/sigma^2), l2 = s_ii+s_jj-2*s_ij
-    // => dK/dR = K * (-0.5/sigma^2) * dl2/dR
-    const double inv_sigma2 = 0.5 / (sigma * sigma);
-
-    // -----------------------------------------------------------------------
-    // Build representation for molecule A
-    // -----------------------------------------------------------------------
-    std::vector<double> x_A_mol;
-    std::vector<int> nn_A_mol;
-    kf::fchl18::generate_fchl18(coords_A, z_A, max_size_A, cut_distance, x_A_mol, nn_A_mol);
-
-    // Wrap as single-molecule arrays (nm=1)
-    // n_A and nn_A
-    const std::vector<int> n_A_vec = {n_atoms_A};
-    std::vector<int> nn_A_flat = nn_A_mol;  // size max_size_A
-
-    // -----------------------------------------------------------------------
-    // Build element map covering both A and B
-    // -----------------------------------------------------------------------
-    // Wrap x_A_mol as a nm=1 array (same layout as x for nm=1)
-    // n_A flat: {n_atoms_A}, nn_A flat: nn_A_mol (size max_size_A)
     std::vector<int> z_to_idx;
-    // Temporarily build a 1-mol wrapper compatible with build_element_map signature
-    const int nm_A = 1;
-    const int pmax = build_element_map(
-        x_A_mol,
-        n_A_vec,
-        nn_A_flat,
-        nm_A,
-        max_size_A,
+    const std::vector<std::vector<int>> z_lists = {z_A};
+    const int pmax =
+        build_element_map_zlists_and_repr(z_lists, x2, n2, nn2, nm2, max_size2, z_to_idx);
+
+    GradBSide B = build_grad_b_side(
         x2,
         n2,
         nn2,
         nm2,
         max_size2,
-        z_to_idx
+        std::move(z_to_idx),
+        pmax,
+        sigma,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm
     );
 
-    if (pmax == 0) {
-        std::memset(grad_out, 0, sizeof(double) * n_atoms_A * 3 * nm2);
-        return;
-    }
-
-    // -----------------------------------------------------------------------
-    // Precompute per-atom data for A (with gradients)
-    // -----------------------------------------------------------------------
-    const std::vector<AtomDataGrad> adA = precompute_atom_data_grad(
-        x_A_mol,
-        n_A_vec,
-        nn_A_flat,
-        n_atoms_A,
-        max_size_A,
+    gradient_one_A_against_B(
         coords_A,
         z_A,
-        two_body_power,
-        cut_start,
-        cut_distance,
-        three_body_power,
-        fourier_order,
-        pmax,
-        z_to_idx,
-        use_atm
-    );
-
-    // -----------------------------------------------------------------------
-    // Build dri_dR for each atom i of A: d(r_ik)/dR[alpha,mu]
-    // Same support as dksi; store as (n_atoms_A, n_neigh, na3) flat.
-    // We compute it from the displacement vectors in x_A_mol.
-    // -----------------------------------------------------------------------
-    const int na3 = n_atoms_A * 3;
-    const std::size_t atom_stride_A = static_cast<std::size_t>(5) * max_size_A;
-
-    // dri[i][k * na3 + alpha*3 + mu]  where i = centre atom, k = neighbour slot
-    std::vector<std::vector<double>> dri_A(n_atoms_A);
-    for (int i = 0; i < n_atoms_A; ++i) {
-        const int n_neigh = adA[i].n_neigh;
-        dri_A[i].assign(static_cast<std::size_t>(n_neigh) * na3, 0.0);
-
-        const double *atom_chan = x_A_mol.data() + i * atom_stride_A;
-        const double *dist_chan = atom_chan;
-        const double *xc = atom_chan + 2 * max_size_A;
-        const double *yc = atom_chan + 3 * max_size_A;
-        const double *zc = atom_chan + 4 * max_size_A;
-        const double *z_chan = atom_chan + max_size_A;
-
-        for (int k = 1; k < n_neigh; ++k) {
-            const double r = dist_chan[k];
-            if (r < 1e-14) continue;
-            const double inv_r = 1.0 / r;
-            const double dxk = xc[k], dyk = yc[k], dzk = zc[k];
-
-            // Find k_atom index
-            const int zval = static_cast<int>(z_chan[k]);
-            int k_atom = -1;
-            for (int jj = 0; jj < n_atoms_A; ++jj) {
-                if (z_A[jj] != zval) continue;
-                const double ex = coords_A[jj * 3 + 0] - coords_A[i * 3 + 0];
-                const double ey = coords_A[jj * 3 + 1] - coords_A[i * 3 + 1];
-                const double ez = coords_A[jj * 3 + 2] - coords_A[i * 3 + 2];
-                if (std::abs(ex - dxk) < 1e-10 && std::abs(ey - dyk) < 1e-10 &&
-                    std::abs(ez - dzk) < 1e-10) {
-                    k_atom = jj;
-                    break;
-                }
-            }
-            if (k_atom < 0) continue;
-
-            const std::size_t base_k = static_cast<std::size_t>(k) * na3 + k_atom * 3;
-            const std::size_t base_i = static_cast<std::size_t>(k) * na3 + i * 3;
-            dri_A[i][base_k + 0] = dxk * inv_r;
-            dri_A[i][base_k + 1] = dyk * inv_r;
-            dri_A[i][base_k + 2] = dzk * inv_r;
-            dri_A[i][base_i + 0] = -dxk * inv_r;
-            dri_A[i][base_i + 1] = -dyk * inv_r;
-            dri_A[i][base_i + 2] = -dzk * inv_r;
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Precompute per-atom data for B (standard, no gradient)
-    // -----------------------------------------------------------------------
-    const auto adB = precompute_atom_data(
+        n_atoms_A,
         x2,
         n2,
         nn2,
         nm2,
         max_size2,
+        B,
+        two_body_width,
         two_body_power,
+        three_body_power,
         cut_start,
         cut_distance,
-        three_body_power,
         fourier_order,
+        use_atm,
+        /*parallel_over_B=*/true,
+        grad_out
+    );
+}
+
+// =============================================================================
+// Public API: kernel_gaussian_jacobian
+//
+// Batch form of kernel_gaussian_gradient over many query molecules A.
+// Hoists B-side precompute (element map, AtomData, self-scalars) once.
+// =============================================================================
+enum class JacStoreLayout { RowsAreCoords, ColsAreCoords };
+
+static void kernel_gaussian_jacobian_impl(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
+    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm, JacStoreLayout layout, double *out
+) {
+    if (!out) throw std::invalid_argument("jacobian output is null");
+    if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    const int N_A = static_cast<int>(coords_A_list.size());
+    if (N_A == 0) throw std::invalid_argument("kernel_gaussian_jacobian: empty query set");
+    if (static_cast<int>(z_A_list.size()) != N_A)
+        throw std::invalid_argument("coords_A_list and z_A_list size mismatch");
+
+    std::vector<int> atom_offset(static_cast<std::size_t>(N_A) + 1, 0);
+    for (int i = 0; i < N_A; ++i) {
+        const int na = static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size());
+        if (na <= 0) throw std::invalid_argument("n_atoms_A must be > 0");
+        if (static_cast<int>(coords_A_list[static_cast<std::size_t>(i)].size()) != na * 3)
+            throw std::invalid_argument("coords_A length must be n_atoms*3");
+        atom_offset[static_cast<std::size_t>(i) + 1] =
+            atom_offset[static_cast<std::size_t>(i)] + na * 3;
+    }
+    const int D_A = atom_offset[static_cast<std::size_t>(N_A)];
+    const std::size_t out_n =
+        (layout == JacStoreLayout::RowsAreCoords)
+            ? static_cast<std::size_t>(D_A) * nm2
+            : static_cast<std::size_t>(nm2) * D_A;
+    std::memset(out, 0, sizeof(double) * out_n);
+
+    std::vector<int> z_to_idx;
+    const int pmax =
+        build_element_map_zlists_and_repr(z_A_list, x2, n2, nn2, nm2, max_size2, z_to_idx);
+
+    GradBSide B = build_grad_b_side(
+        x2,
+        n2,
+        nn2,
+        nm2,
+        max_size2,
+        std::move(z_to_idx),
         pmax,
-        z_to_idx,
+        sigma,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
         use_atm
     );
 
-    // -----------------------------------------------------------------------
-    // Fourier prefactors
-    // -----------------------------------------------------------------------
-    const double pi = 4.0 * std::atan(1.0);
-    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
-    std::vector<double> s_prefactor(fourier_order);
-    for (int m = 0; m < fourier_order; ++m) {
-        const double mf = static_cast<double>(m + 1);
-        s_prefactor[m] = g1 * std::exp(-(three_body_width * mf) * (three_body_width * mf) / 2.0);
-    }
+#ifdef _OPENMP
+    const bool parallel_over_A = (N_A >= omp_get_max_threads());
+#else
+    const bool parallel_over_A = false;
+#endif
+    const bool parallel_over_B = !parallel_over_A;
 
-    // -----------------------------------------------------------------------
-    // Compute self-scalars for A and their gradients.
-    //   s_ii = scalar(atom i of A, atom i of A)
-    //   ds_ii/dR is needed.
-    //
-    // For the self-scalar s(i,i): both sides are the same atom from A.
-    // We compute it using the _full gradient function with the same
-    // AtomDataGrad for both sides (treating one side as fixed = side 2).
-    // By symmetry, the full derivative is:
-    //   d(s_ii)/dR = 2 * (d(s_ij)/dR evaluated at j=i with side-1 carrying gradient)
-    // We'll compute it directly.
-    // -----------------------------------------------------------------------
-    std::vector<double> ss_A(n_atoms_A, 0.0);
-    std::vector<std::vector<double>> dss_A(n_atoms_A);  // [i][alpha*3+mu]
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) if (parallel_over_A)
+#endif
+    for (int i = 0; i < N_A; ++i) {
+        const int na_i = static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size());
+        std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * nm2, 0.0);
 
-    const std::size_t mol_stride_A = static_cast<std::size_t>(max_size_A) * 5 * max_size_A;
-    (void)mol_stride_A;  // x_A_mol is for a single molecule
-
-    for (int i = 0; i < n_atoms_A; ++i) {
-        const AtomDataGrad &adi = adA[i];
-        const double *x1_chan = x_A_mol.data() + i * atom_stride_A;
-
-        // For self-scalar, both sides have the same data.
-        // d(s_ii)/dR = 2 * gradient from side-1 only (by symmetry).
-        // We call the gradient function treating side-2 as fixed (same atom data).
-        std::vector<double> ds_tmp;
-        ss_A[i] = scalar_noalchemy_and_grad_full(
-            x1_chan,
-            max_size_A,
-            adi.n_neigh,
-            adi.ksi.data(),
-            adi.dksi.data(),
-            dri_A[i].data(),
-            adi.cosp,
-            adi.sinp,
-            adi.dcosp,
-            adi.dsinp,
-            x1_chan,
-            max_size_A,
-            adi.n_neigh,
-            adi.ksi.data(),
-            adi.cosp,
-            adi.sinp,
+        gradient_one_A_against_B(
+            coords_A_list[static_cast<std::size_t>(i)],
+            z_A_list[static_cast<std::size_t>(i)],
+            na_i,
+            x2,
+            n2,
+            nn2,
+            nm2,
+            max_size2,
+            B,
             two_body_width,
+            two_body_power,
+            three_body_power,
+            cut_start,
+            cut_distance,
             fourier_order,
-            pmax,
-            s_prefactor.data(),
-            true_distance_scale,
-            true_angular_scale,
-            n_atoms_A,
-            ds_tmp
+            use_atm,
+            parallel_over_B,
+            grad.data()
         );
 
-        // Multiply by 2 for symmetry (both sides of the self-scalar depend on R_A)
-        dss_A[i].resize(static_cast<std::size_t>(n_atoms_A) * 3);
-        for (std::size_t q = 0; q < dss_A[i].size(); ++q)
-            dss_A[i][q] = 2.0 * ds_tmp[q];
-    }
-
-    // -----------------------------------------------------------------------
-    // Self-scalars for B (no gradient needed)
-    // -----------------------------------------------------------------------
-    const auto ss_B = compute_self_scalars(
-        x2,
-        n2,
-        adB,
-        nm2,
-        max_size2,
-        fourier_order,
-        pmax,
-        three_body_width,
-        two_body_width,
-        ang_norm2,
-        true_distance_scale,
-        true_angular_scale
-    );
-
-    // -----------------------------------------------------------------------
-    // Zero gradient output
-    // -----------------------------------------------------------------------
-    std::memset(grad_out, 0, sizeof(double) * n_atoms_A * 3 * nm2);
-
-    // -----------------------------------------------------------------------
-    // Main loop: accumulate gradient contributions.
-    //
-    // G[alpha, mu, b] = dK[A,b]/dR[alpha,mu]
-    //   = sum_{i in A, j in b: Zi=Zj}  k(i,j) * (1/sigma^2) *
-    //       (- ds_ii/dR[alpha,mu]  +  2 * ds_ij/dR[alpha,mu])
-    //
-    // Output layout: grad_out[alpha * 3 * nm2 + mu * nm2 + b]
-    //
-    // Parallelised over b (training molecule index): each b writes exclusively
-    // to the column grad_out[:, :, b], so there are no write conflicts.
-    // -----------------------------------------------------------------------
-    const std::size_t mol2_stride = static_cast<std::size_t>(max_size2) * 5 * max_size2;
-    const std::size_t at2_stride = static_cast<std::size_t>(5) * max_size2;
-
-#pragma omp parallel for schedule(dynamic)
-    for (int b = 0; b < nm2; ++b) {
-        const int nb = n2[b];
-
-        for (int i = 0; i < n_atoms_A; ++i) {
-            const AtomDataGrad &adi = adA[i];
-            const double *x1_chan = x_A_mol.data() + i * atom_stride_A;
-            const double sii = ss_A[i];
-            const double *dsii = dss_A[i].data();
-
-            for (int j = 0; j < nb; ++j) {
-                const AtomData &adj = adB[static_cast<std::size_t>(b) * max_size2 + j];
-                const double *x2_chan = x2.data() + b * mol2_stride + j * at2_stride;
-
-                const double sjj = ss_B[static_cast<std::size_t>(b) * max_size2 + j];
-
-                // Compute s_ij and ds_ij/dR_A
-                std::vector<double> dsij_dR;
-                const double sij = scalar_noalchemy_and_grad_full(
-                    x1_chan,
-                    max_size_A,
-                    adi.n_neigh,
-                    adi.ksi.data(),
-                    adi.dksi.data(),
-                    dri_A[i].data(),
-                    adi.cosp,
-                    adi.sinp,
-                    adi.dcosp,
-                    adi.dsinp,
-                    x2_chan,
-                    max_size2,
-                    adj.n_neigh,
-                    adj.ksi.data(),
-                    adj.cosp,
-                    adj.sinp,
-                    two_body_width,
-                    fourier_order,
-                    pmax,
-                    s_prefactor.data(),
-                    true_distance_scale,
-                    true_angular_scale,
-                    n_atoms_A,
-                    dsij_dR
-                );
-
-                // k(i,j) = exp(-0.5*(sii + sjj - 2*sij) / sigma^2)
-                // dK/dR = k(i,j) * (-0.5/sigma^2) * d(sii+sjj-2*sij)/dR
-                const double kij = std::exp(-(sii + sjj - 2.0 * sij) * inv_sigma2);
-                const double coeff = kij * inv_sigma2;  // = k(i,j) * 0.5/sigma^2
-
-                // Accumulate: G[alpha,mu,b] += coeff * (-dsii[alpha,mu] + 2*dsij[alpha,mu])
-                // Each b writes exclusively to grad_out[:, :, b] — no race condition.
-                for (int alpha = 0; alpha < n_atoms_A; ++alpha) {
-                    for (int mu = 0; mu < 3; ++mu) {
-                        const double dval = -dsii[alpha * 3 + mu] + 2.0 * dsij_dR[alpha * 3 + mu];
-                        grad_out[static_cast<std::size_t>(alpha) * 3 * nm2 + mu * nm2 + b] +=
-                            coeff * dval;
+        const int flat0 = atom_offset[static_cast<std::size_t>(i)];
+        if (layout == JacStoreLayout::RowsAreCoords) {
+            // J[flat, b]
+            for (int alpha = 0; alpha < na_i; ++alpha) {
+                for (int mu = 0; mu < 3; ++mu) {
+                    const int row = flat0 + alpha * 3 + mu;
+                    for (int b = 0; b < nm2; ++b) {
+                        out[static_cast<std::size_t>(row) * nm2 + b] =
+                            grad[static_cast<std::size_t>(alpha) * 3 * nm2 + mu * nm2 + b];
+                    }
+                }
+            }
+        } else {
+            // K_jt[b, flat]
+            for (int alpha = 0; alpha < na_i; ++alpha) {
+                for (int mu = 0; mu < 3; ++mu) {
+                    const int col = flat0 + alpha * 3 + mu;
+                    for (int b = 0; b < nm2; ++b) {
+                        out[static_cast<std::size_t>(b) * D_A + col] =
+                            grad[static_cast<std::size_t>(alpha) * 3 * nm2 + mu * nm2 + b];
                     }
                 }
             }
         }
     }
+}
+
+void kernel_gaussian_jacobian(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
+    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm, double *J_out
+) {
+    kernel_gaussian_jacobian_impl(
+        coords_A_list,
+        z_A_list,
+        x2,
+        n2,
+        nn2,
+        nm2,
+        max_size2,
+        sigma,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        JacStoreLayout::RowsAreCoords,
+        J_out
+    );
+}
+
+void kernel_gaussian_jacobian_t(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
+    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm, double *K_jt_out
+) {
+    kernel_gaussian_jacobian_impl(
+        coords_A_list,
+        z_A_list,
+        x2,
+        n2,
+        nn2,
+        nm2,
+        max_size2,
+        sigma,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        JacStoreLayout::ColsAreCoords,
+        K_jt_out
+    );
 }
 
 // =============================================================================
@@ -2250,6 +2574,10 @@ static void scalar_noalchemy_cross_hessian(
                static_cast<std::size_t>(m) * max_size2 + neigh;
     };
 
+    // Reused across (p,q) neighbour pairs.
+    std::vector<double> dV_dRA(static_cast<std::size_t>(na3A));
+    std::vector<double> dV_dRB(static_cast<std::size_t>(na3B));
+
     for (int p = 1; p < n1; ++p) {
         const int Zp = static_cast<int>(x1_chan[1 * max_size1 + p]);
         const double rp = x1_chan[p];  // channel 0
@@ -2269,9 +2597,9 @@ static void scalar_noalchemy_cross_hessian(
             // d²G / drp drq = G * 2γ * (2γδ² - 1)
             const double d2G_drpq = G * 2.0 * inv_width * (-2.0 * inv_width * r2 - 1.0);
 
-            // Angular contribution: angular = Σ_{m,pp} (c1[pp,m,p]*c2[pp,m,q] + s1*s2) * spf[m]
+            // Angular contribution (even Fourier modes identically zero).
             double angular = 0.0;
-            for (int m = 0; m < order; ++m) {
+            for (int m = 0; m < order; m += 2) {
                 double ang_m = 0.0;
                 for (int pp = 0; pp < pmax; ++pp) {
                     ang_m += adi.cosp[cos1_idx(pp, m, p)] * adj.cosp[cos2_idx(pp, m, q)] +
@@ -2284,14 +2612,10 @@ static void scalar_noalchemy_cross_hessian(
             const double V = W_ksi * distance_scale + angular * angular_scale;
 
             // ---- Precompute dV/dR_A[α,μ] for this (p,q) pair ----
-            // dV/dR_A = d(ksi_i[p])/dR_A * ksi_j[q] * d_scale
-            //         + d(angular_i[p])/dR_A * angular_j[q-part] * a_scale
-            // We store as a flat (na3A,) vector.
-            std::vector<double> dV_dRA(na3A, 0.0);
             for (int amu = 0; amu < na3A; ++amu) {
                 const std::size_t base_ksi = static_cast<std::size_t>(p) * na3A + amu;
                 double dang_A = 0.0;
-                for (int m = 0; m < order; ++m) {
+                for (int m = 0; m < order; m += 2) {
                     double dam = 0.0;
                     for (int pp = 0; pp < pmax; ++pp) {
                         const std::size_t fi = cos1_idx(pp, m, p);
@@ -2300,16 +2624,15 @@ static void scalar_noalchemy_cross_hessian(
                     }
                     dang_A += dam * s_prefactor[m];
                 }
-                dV_dRA[amu] =
+                dV_dRA[static_cast<std::size_t>(amu)] =
                     adi.dksi[base_ksi] * adj.ksi[q] * distance_scale + dang_A * angular_scale;
             }
 
             // ---- Precompute dV/dR_B[β,ν] for this (p,q) pair ----
-            std::vector<double> dV_dRB(na3B, 0.0);
             for (int bnu = 0; bnu < na3B; ++bnu) {
                 const std::size_t base_ksi = static_cast<std::size_t>(q) * na3B + bnu;
                 double dang_B = 0.0;
-                for (int m = 0; m < order; ++m) {
+                for (int m = 0; m < order; m += 2) {
                     double dam = 0.0;
                     for (int pp = 0; pp < pmax; ++pp) {
                         const std::size_t fi = cos2_idx(pp, m, q);
@@ -2318,43 +2641,27 @@ static void scalar_noalchemy_cross_hessian(
                     }
                     dang_B += dam * s_prefactor[m];
                 }
-                dV_dRB[bnu] =
+                dV_dRB[static_cast<std::size_t>(bnu)] =
                     adj.dksi[base_ksi] * adi.ksi[p] * distance_scale + dang_B * angular_scale;
             }
 
             // ---- Accumulate the four terms into hess[amu, bnu] ----
-            // hess layout: (na3A, na3B) row-major
-            //
-            // d²(G*V)/dR_A dR_B has four terms by the product rule:
-            //   Term1: d²G/dR_A dR_B * V
-            //   Term2: dG/dR_A * dV/dR_B
-            //   Term3: dG/dR_B * dV/dR_A
-            //   Term4: G * d²V/dR_A dR_B   ← V factors as (A-only)*(B-only) parts,
-            //                                 so d²V/dR_A dR_B = Σ dVA/dR_A ⊗ dVB/dR_B
             for (int amu = 0; amu < na3A; ++amu) {
                 const double drp_dRA = dri_i[static_cast<std::size_t>(p) * na3A + amu];
                 const double dG_dRA = dG_drp * drp_dRA;
-                // A-side raw ksi gradient for Term 4 ksi contribution
                 const double dksi_A_amu = adi.dksi[static_cast<std::size_t>(p) * na3A + amu];
 
                 for (int bnu = 0; bnu < na3B; ++bnu) {
                     const double drq_dRB = dri_j[static_cast<std::size_t>(q) * na3B + bnu];
                     const double dG_dRB = dG_drq * drq_dRB;
 
-                    // Term 1: dG/dR_A * dV/dR_B
-                    double val = dG_dRA * dV_dRB[bnu];
-                    // Term 2: dG/dR_B * dV/dR_A
-                    val += dG_dRB * dV_dRA[amu];
-                    // Term 3: d²G/drp drq * drp/dRA * drq/dRB * V
+                    double val = dG_dRA * dV_dRB[static_cast<std::size_t>(bnu)];
+                    val += dG_dRB * dV_dRA[static_cast<std::size_t>(amu)];
                     val += d2G_drpq * drp_dRA * drq_dRB * V;
 
-                    // Term 4: G * d²V/dR_A dR_B
-                    //   ksi contribution: dksi_A[p,amu] * dksi_B[q,bnu] * distance_scale
                     const double dksi_B_bnu = adj.dksi[static_cast<std::size_t>(q) * na3B + bnu];
                     double d2V = dksi_A_amu * dksi_B_bnu * distance_scale;
-                    //   angular contribution: Σ_{m,pp} (dc_A*dc_B + ds_A*ds_B) * spf[m] *
-                    //   angular_scale
-                    for (int m = 0; m < order; ++m) {
+                    for (int m = 0; m < order; m += 2) {
                         double dam4 = 0.0;
                         for (int pp = 0; pp < pmax; ++pp) {
                             const std::size_t fiA = cos1_idx(pp, m, p);
@@ -2374,16 +2681,313 @@ static void scalar_noalchemy_cross_hessian(
 }
 
 // =============================================================================
+// Hessian helpers: per-molecule cache + pair kernel (hoisted across many pairs).
+// =============================================================================
+struct HessMolSide {
+    int n_atoms = 0;
+    int max_size = 0;
+    std::vector<double> x_mol;
+    std::vector<int> nn_mol;
+    std::vector<AtomDataGrad> ad;
+    std::vector<std::vector<double>> dri;
+    std::vector<double> ss;
+    std::vector<std::vector<double>> dss;
+};
+
+struct HessSharedParams {
+    std::vector<int> z_to_idx;
+    int pmax = 0;
+    std::vector<double> s_prefactor;
+    double true_distance_scale = 0.0;
+    double true_angular_scale = 0.0;
+    double inv_sigma2 = 0.0;
+    double two_body_width = 0.0;
+    int fourier_order = 0;
+};
+
+static void build_dri_from_ad(
+    const std::vector<AtomDataGrad> &ad, const std::vector<double> &x_mol, int n_atoms,
+    int max_size, std::vector<std::vector<double>> &dri_out
+) {
+    const int na3 = n_atoms * 3;
+    const std::size_t atom_stride = static_cast<std::size_t>(5) * max_size;
+    dri_out.resize(static_cast<std::size_t>(n_atoms));
+    for (int i = 0; i < n_atoms; ++i) {
+        const AtomDataGrad &adi = ad[static_cast<std::size_t>(i)];
+        const int n_neigh = adi.n_neigh;
+        dri_out[static_cast<std::size_t>(i)].assign(static_cast<std::size_t>(n_neigh) * na3, 0.0);
+
+        const double *atom_chan = x_mol.data() + static_cast<std::size_t>(i) * atom_stride;
+        const double *dist_chan = atom_chan;
+        const double *xc = atom_chan + 2 * max_size;
+        const double *yc = atom_chan + 3 * max_size;
+        const double *zc = atom_chan + 4 * max_size;
+
+        for (int k = 1; k < n_neigh; ++k) {
+            const double r = dist_chan[k];
+            if (r < 1e-14) continue;
+            const int k_atom = adi.nbr_atom_idx[static_cast<std::size_t>(k)];
+            if (k_atom < 0) continue;
+            const double inv_r = 1.0 / r;
+            const double dxk = xc[k], dyk = yc[k], dzk = zc[k];
+
+            const std::size_t base_k = static_cast<std::size_t>(k) * na3 + k_atom * 3;
+            const std::size_t base_i = static_cast<std::size_t>(k) * na3 + i * 3;
+            auto &dri = dri_out[static_cast<std::size_t>(i)];
+            dri[base_k + 0] = dxk * inv_r;
+            dri[base_k + 1] = dyk * inv_r;
+            dri[base_k + 2] = dzk * inv_r;
+            dri[base_i + 0] = -dxk * inv_r;
+            dri[base_i + 1] = -dyk * inv_r;
+            dri[base_i + 2] = -dzk * inv_r;
+        }
+    }
+}
+
+static HessMolSide build_hess_mol_side(
+    const std::vector<double> &coords, const std::vector<int> &z, int n_atoms,
+    const HessSharedParams &P, double two_body_power, double three_body_power, double cut_start,
+    double cut_distance, bool use_atm, bool parallel_atoms
+) {
+    HessMolSide S;
+    S.n_atoms = n_atoms;
+    S.max_size = n_atoms;
+    kf::fchl18::generate_fchl18(coords, z, S.max_size, cut_distance, S.x_mol, S.nn_mol);
+
+    const std::vector<int> n_vec = {n_atoms};
+    S.ad = precompute_atom_data_grad(
+        S.x_mol,
+        n_vec,
+        S.nn_mol,
+        n_atoms,
+        S.max_size,
+        coords,
+        z,
+        two_body_power,
+        cut_start,
+        cut_distance,
+        three_body_power,
+        P.fourier_order,
+        P.pmax,
+        P.z_to_idx,
+        use_atm,
+        parallel_atoms
+    );
+
+    build_dri_from_ad(S.ad, S.x_mol, n_atoms, S.max_size, S.dri);
+
+    const int na3 = n_atoms * 3;
+    const std::size_t atom_stride = static_cast<std::size_t>(5) * S.max_size;
+    S.ss.assign(static_cast<std::size_t>(n_atoms), 0.0);
+    S.dss.resize(static_cast<std::size_t>(n_atoms));
+
+    for (int i = 0; i < n_atoms; ++i) {
+        const AtomDataGrad &adi = S.ad[static_cast<std::size_t>(i)];
+        const double *x1_chan = S.x_mol.data() + static_cast<std::size_t>(i) * atom_stride;
+        std::vector<double> ds_tmp;
+        S.ss[static_cast<std::size_t>(i)] = scalar_noalchemy_and_grad_full(
+            x1_chan,
+            S.max_size,
+            adi.n_neigh,
+            adi.ksi.data(),
+            adi.dksi.data(),
+            S.dri[static_cast<std::size_t>(i)].data(),
+            adi.cosp,
+            adi.sinp,
+            adi.dcosp,
+            adi.dsinp,
+            x1_chan,
+            S.max_size,
+            adi.n_neigh,
+            adi.ksi.data(),
+            adi.cosp,
+            adi.sinp,
+            P.two_body_width,
+            P.fourier_order,
+            P.pmax,
+            P.s_prefactor.data(),
+            P.true_distance_scale,
+            P.true_angular_scale,
+            n_atoms,
+            ds_tmp
+        );
+        S.dss[static_cast<std::size_t>(i)].resize(static_cast<std::size_t>(na3));
+        for (int q = 0; q < na3; ++q)
+            S.dss[static_cast<std::size_t>(i)][static_cast<std::size_t>(q)] = 2.0 * ds_tmp[static_cast<std::size_t>(q)];
+    }
+    return S;
+}
+
+static HessSharedParams build_hess_shared(
+    const std::vector<std::vector<int>> &z_lists, double sigma, double two_body_scaling,
+    double three_body_scaling, double three_body_width, double two_body_width, int fourier_order
+) {
+    HessSharedParams P;
+    P.true_distance_scale = two_body_scaling / 16.0;
+    P.true_angular_scale = three_body_scaling / std::sqrt(8.0);
+    P.inv_sigma2 = 0.5 / (sigma * sigma);
+    P.two_body_width = two_body_width;
+    P.fourier_order = fourier_order;
+
+    // Element map from nuclear charges only (neighbours are same-molecule atoms).
+    P.z_to_idx.assign(256, -1);
+    std::vector<int> present;
+    for (const auto &zl : z_lists) {
+        for (int z : zl) {
+            if (z > 0 && z < 256 && P.z_to_idx[static_cast<std::size_t>(z)] < 0) {
+                P.z_to_idx[static_cast<std::size_t>(z)] = static_cast<int>(present.size());
+                present.push_back(z);
+            }
+        }
+    }
+    P.pmax = static_cast<int>(present.size());
+
+    const double ang_norm2 = get_angular_norm2(three_body_width);
+    const double pi = 4.0 * std::atan(1.0);
+    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
+    P.s_prefactor.resize(static_cast<std::size_t>(fourier_order));
+    for (int m = 0; m < fourier_order; ++m) {
+        const double mf = static_cast<double>(m + 1);
+        P.s_prefactor[static_cast<std::size_t>(m)] =
+            g1 * std::exp(-(three_body_width * mf) * (three_body_width * mf) / 2.0);
+    }
+    return P;
+}
+
+// Core pair kernel using precomputed molecule sides.
+static void hessian_pair_from_sides(
+    const HessMolSide &A, const HessMolSide &B, const HessSharedParams &P, double *hess_out
+) {
+    const int na3A = A.n_atoms * 3;
+    const int na3B = B.n_atoms * 3;
+    std::memset(hess_out, 0, sizeof(double) * static_cast<std::size_t>(na3A) * na3B);
+    if (P.pmax == 0) return;
+
+    const std::size_t atom_stride_A = static_cast<std::size_t>(5) * A.max_size;
+    const std::size_t atom_stride_B = static_cast<std::size_t>(5) * B.max_size;
+    const std::size_t hess_size = static_cast<std::size_t>(na3A) * na3B;
+
+    std::vector<double> dsij_dRA(static_cast<std::size_t>(na3A));
+    std::vector<double> dsij_dRB(static_cast<std::size_t>(na3B));
+    std::vector<double> Hij(hess_size);
+
+    for (int i = 0; i < A.n_atoms; ++i) {
+        const AtomDataGrad &adi = A.ad[static_cast<std::size_t>(i)];
+        const double *x1_chan = A.x_mol.data() + static_cast<std::size_t>(i) * atom_stride_A;
+        const int Zi = static_cast<int>(x1_chan[A.max_size]);
+
+        for (int j = 0; j < B.n_atoms; ++j) {
+            const AtomDataGrad &adj = B.ad[static_cast<std::size_t>(j)];
+            const double *x2_chan = B.x_mol.data() + static_cast<std::size_t>(j) * atom_stride_B;
+            const int Zj = static_cast<int>(x2_chan[B.max_size]);
+
+            double sij = 0.0;
+            if (Zi == Zj) {
+                sij = scalar_noalchemy_and_grad_full(
+                    x1_chan,
+                    A.max_size,
+                    adi.n_neigh,
+                    adi.ksi.data(),
+                    adi.dksi.data(),
+                    A.dri[static_cast<std::size_t>(i)].data(),
+                    adi.cosp,
+                    adi.sinp,
+                    adi.dcosp,
+                    adi.dsinp,
+                    x2_chan,
+                    B.max_size,
+                    adj.n_neigh,
+                    adj.ksi.data(),
+                    adj.cosp,
+                    adj.sinp,
+                    P.two_body_width,
+                    P.fourier_order,
+                    P.pmax,
+                    P.s_prefactor.data(),
+                    P.true_distance_scale,
+                    P.true_angular_scale,
+                    A.n_atoms,
+                    dsij_dRA
+                );
+                scalar_noalchemy_and_grad_full(
+                    x2_chan,
+                    B.max_size,
+                    adj.n_neigh,
+                    adj.ksi.data(),
+                    adj.dksi.data(),
+                    B.dri[static_cast<std::size_t>(j)].data(),
+                    adj.cosp,
+                    adj.sinp,
+                    adj.dcosp,
+                    adj.dsinp,
+                    x1_chan,
+                    A.max_size,
+                    adi.n_neigh,
+                    adi.ksi.data(),
+                    adi.cosp,
+                    adi.sinp,
+                    P.two_body_width,
+                    P.fourier_order,
+                    P.pmax,
+                    P.s_prefactor.data(),
+                    P.true_distance_scale,
+                    P.true_angular_scale,
+                    B.n_atoms,
+                    dsij_dRB
+                );
+                std::fill(Hij.begin(), Hij.end(), 0.0);
+                scalar_noalchemy_cross_hessian(
+                    x1_chan,
+                    A.max_size,
+                    adi.n_neigh,
+                    x2_chan,
+                    B.max_size,
+                    adj.n_neigh,
+                    adi,
+                    A.dri[static_cast<std::size_t>(i)].data(),
+                    adj,
+                    B.dri[static_cast<std::size_t>(j)].data(),
+                    P.two_body_width,
+                    P.fourier_order,
+                    P.pmax,
+                    P.s_prefactor.data(),
+                    P.true_distance_scale,
+                    P.true_angular_scale,
+                    A.n_atoms,
+                    B.n_atoms,
+                    Hij
+                );
+            } else {
+                std::fill(dsij_dRA.begin(), dsij_dRA.end(), 0.0);
+                std::fill(dsij_dRB.begin(), dsij_dRB.end(), 0.0);
+                std::fill(Hij.begin(), Hij.end(), 0.0);
+            }
+
+            const double kij =
+                std::exp(-(A.ss[static_cast<std::size_t>(i)] + B.ss[static_cast<std::size_t>(j)] -
+                           2.0 * sij) *
+                         P.inv_sigma2);
+            const double coeff = kij * P.inv_sigma2;
+
+            for (int amu = 0; amu < na3A; ++amu) {
+                const double gA =
+                    -A.dss[static_cast<std::size_t>(i)][static_cast<std::size_t>(amu)] +
+                    2.0 * dsij_dRA[static_cast<std::size_t>(amu)];
+                for (int bnu = 0; bnu < na3B; ++bnu) {
+                    const double gB =
+                        -B.dss[static_cast<std::size_t>(j)][static_cast<std::size_t>(bnu)] +
+                        2.0 * dsij_dRB[static_cast<std::size_t>(bnu)];
+                    hess_out[static_cast<std::size_t>(amu) * na3B + bnu] +=
+                        coeff * (P.inv_sigma2 * gA * gB +
+                                 2.0 * Hij[static_cast<std::size_t>(amu) * na3B + bnu]);
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
 // Public API: kernel_gaussian_hessian
-//
-// Computes H[α*3+μ, β*3+ν] = d²K[A,B] / dR_A[α,μ] dR_B[β,ν]
-// for a single (A, B) molecule pair.
-//
-// Restrictions (raises std::invalid_argument if violated):
-//   - use_atm must be false
-//   - cut_start must be >= 1.0 (i.e. cutoff is inactive: cut_function == 1 everywhere)
-//
-// hess_out: (n_atoms_A*3, n_atoms_B*3) row-major output.
 // =============================================================================
 void kernel_gaussian_hessian(
     const std::vector<double> &coords_A, const std::vector<int> &z_A,
@@ -2395,366 +2999,237 @@ void kernel_gaussian_hessian(
 ) {
     if (!hess_out) throw std::invalid_argument("hess_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    if (n_atoms_A <= 0 || n_atoms_B <= 0)
+        throw std::invalid_argument("n_atoms must be > 0");
 
-    const int na3A = n_atoms_A * 3;
-    const int na3B = n_atoms_B * 3;
-
-    const double true_distance_scale = two_body_scaling / 16.0;
-    const double true_angular_scale = three_body_scaling / std::sqrt(8.0);
-    const double ang_norm2 = get_angular_norm2(three_body_width);
-    const double inv_sigma2 = 0.5 / (sigma * sigma);
-
-    // -----------------------------------------------------------------------
-    // Generate representations for A and B
-    // -----------------------------------------------------------------------
-    const int max_size_A = n_atoms_A;
-    const int max_size_B = n_atoms_B;
-
-    std::vector<double> x_A_mol, x_B_mol;
-    std::vector<int> nn_A_mol, nn_B_mol;
-    kf::fchl18::generate_fchl18(coords_A, z_A, max_size_A, cut_distance, x_A_mol, nn_A_mol);
-    kf::fchl18::generate_fchl18(coords_B, z_B, max_size_B, cut_distance, x_B_mol, nn_B_mol);
-
-    const std::vector<int> n_A_vec = {n_atoms_A};
-    const std::vector<int> n_B_vec = {n_atoms_B};
-
-    // -----------------------------------------------------------------------
-    // Build element map covering A and B
-    // -----------------------------------------------------------------------
-    std::vector<int> z_to_idx;
-    const int pmax = build_element_map(
-        x_A_mol,
-        n_A_vec,
-        nn_A_mol,
-        1,
-        max_size_A,
-        x_B_mol,
-        n_B_vec,
-        nn_B_mol,
-        1,
-        max_size_B,
-        z_to_idx
+    const std::vector<std::vector<int>> z_lists = {z_A, z_B};
+    HessSharedParams P = build_hess_shared(
+        z_lists, sigma, two_body_scaling, three_body_scaling, three_body_width, two_body_width,
+        fourier_order
     );
 
-    if (pmax == 0) {
-        std::memset(hess_out, 0, sizeof(double) * na3A * na3B);
-        return;
+    // Single-pair call: parallelise atom precompute on each side.
+    HessMolSide sideA = build_hess_mol_side(
+        coords_A, z_A, n_atoms_A, P, two_body_power, three_body_power, cut_start, cut_distance,
+        use_atm, /*parallel_atoms=*/true
+    );
+    HessMolSide sideB = build_hess_mol_side(
+        coords_B, z_B, n_atoms_B, P, two_body_power, three_body_power, cut_start, cut_distance,
+        use_atm, /*parallel_atoms=*/true
+    );
+    hessian_pair_from_sides(sideA, sideB, P, hess_out);
+}
+
+// =============================================================================
+// Public API: kernel_gaussian_hessian_rect
+//
+// Batch Hessian over many A × B molecule pairs.
+// H_out layout (D_A, D_B) with molecule blocks:
+//   rows [atom_offset_A[i], atom_offset_A[i+1]) × cols [atom_offset_B[j], ...)
+// Hoists per-molecule AtomDataGrad / self-scalars once.
+// =============================================================================
+void kernel_gaussian_hessian_rect(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list,
+    const std::vector<std::vector<double>> &coords_B_list,
+    const std::vector<std::vector<int>> &z_B_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
+    double *H_out  // (D_A, D_B) row-major OUT
+) {
+    if (!H_out) throw std::invalid_argument("H_out is null");
+    if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    const int N_A = static_cast<int>(coords_A_list.size());
+    const int N_B = static_cast<int>(coords_B_list.size());
+    if (N_A == 0 || N_B == 0) throw std::invalid_argument("hessian_rect: empty molecule list");
+    if (static_cast<int>(z_A_list.size()) != N_A || static_cast<int>(z_B_list.size()) != N_B)
+        throw std::invalid_argument("coords/z list size mismatch");
+
+    std::vector<int> off_A(static_cast<std::size_t>(N_A) + 1, 0);
+    std::vector<int> off_B(static_cast<std::size_t>(N_B) + 1, 0);
+    for (int i = 0; i < N_A; ++i) {
+        const int na = static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size());
+        if (na <= 0) throw std::invalid_argument("n_atoms must be > 0");
+        off_A[static_cast<std::size_t>(i) + 1] = off_A[static_cast<std::size_t>(i)] + na * 3;
+    }
+    for (int j = 0; j < N_B; ++j) {
+        const int nb = static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size());
+        if (nb <= 0) throw std::invalid_argument("n_atoms must be > 0");
+        off_B[static_cast<std::size_t>(j) + 1] = off_B[static_cast<std::size_t>(j)] + nb * 3;
+    }
+    const int D_A = off_A[static_cast<std::size_t>(N_A)];
+    const int D_B = off_B[static_cast<std::size_t>(N_B)];
+    std::memset(H_out, 0, sizeof(double) * static_cast<std::size_t>(D_A) * D_B);
+
+    std::vector<std::vector<int>> z_all = z_A_list;
+    z_all.insert(z_all.end(), z_B_list.begin(), z_B_list.end());
+    HessSharedParams P = build_hess_shared(
+        z_all, sigma, two_body_scaling, three_body_scaling, three_body_width, two_body_width,
+        fourier_order
+    );
+    if (P.pmax == 0) return;
+
+    std::vector<HessMolSide> sides_A(static_cast<std::size_t>(N_A));
+    std::vector<HessMolSide> sides_B(static_cast<std::size_t>(N_B));
+
+    // Precompute all molecules once (parallel over molecules).
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for (int i = 0; i < N_A + N_B; ++i) {
+        if (i < N_A) {
+            sides_A[static_cast<std::size_t>(i)] = build_hess_mol_side(
+                coords_A_list[static_cast<std::size_t>(i)],
+                z_A_list[static_cast<std::size_t>(i)],
+                static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size()),
+                P,
+                two_body_power,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                use_atm,
+                /*parallel_atoms=*/false
+            );
+        } else {
+            const int j = i - N_A;
+            sides_B[static_cast<std::size_t>(j)] = build_hess_mol_side(
+                coords_B_list[static_cast<std::size_t>(j)],
+                z_B_list[static_cast<std::size_t>(j)],
+                static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size()),
+                P,
+                two_body_power,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                use_atm,
+                /*parallel_atoms=*/false
+            );
+        }
     }
 
-    // -----------------------------------------------------------------------
-    // Fourier prefactors
-    // -----------------------------------------------------------------------
-    const double pi = 4.0 * std::atan(1.0);
-    const double g1 = std::sqrt(2.0 * pi) / ang_norm2;
-    std::vector<double> s_prefactor(fourier_order);
-    for (int m = 0; m < fourier_order; ++m) {
-        const double mf = static_cast<double>(m + 1);
-        s_prefactor[m] = g1 * std::exp(-(three_body_width * mf) * (three_body_width * mf) / 2.0);
-    }
-
-    // -----------------------------------------------------------------------
-    // Precompute per-atom data WITH gradients for both A and B
-    // -----------------------------------------------------------------------
-    const std::vector<AtomDataGrad> adA = precompute_atom_data_grad(
-        x_A_mol,
-        n_A_vec,
-        nn_A_mol,
-        n_atoms_A,
-        max_size_A,
-        coords_A,
-        z_A,
-        two_body_power,
-        cut_start,
-        cut_distance,
-        three_body_power,
-        fourier_order,
-        pmax,
-        z_to_idx,
-        use_atm
-    );
-
-    const std::vector<AtomDataGrad> adB = precompute_atom_data_grad(
-        x_B_mol,
-        n_B_vec,
-        nn_B_mol,
-        n_atoms_B,
-        max_size_B,
-        coords_B,
-        z_B,
-        two_body_power,
-        cut_start,
-        cut_distance,
-        three_body_power,
-        fourier_order,
-        pmax,
-        z_to_idx,
-        use_atm
-    );
-
-    // -----------------------------------------------------------------------
-    // Build dri arrays: d(distance to neighbour k)/dR for both molecules
-    // Same pattern as in kernel_gaussian_gradient.
-    // -----------------------------------------------------------------------
-    const std::size_t atom_stride_A = static_cast<std::size_t>(5) * max_size_A;
-    const std::size_t atom_stride_B = static_cast<std::size_t>(5) * max_size_B;
-
-    auto build_dri = [](const std::vector<AtomDataGrad> &ad,
-                        const std::vector<double> &x_mol,
-                        const std::vector<double> &coords,
-                        const std::vector<int> &z_vec,
-                        int n_atoms,
-                        int max_size,
-                        int na3,
-                        std::size_t atom_stride) -> std::vector<std::vector<double>> {
-        std::vector<std::vector<double>> dri(n_atoms);
-        for (int i = 0; i < n_atoms; ++i) {
-            const int n_neigh = ad[i].n_neigh;
-            dri[i].assign(static_cast<std::size_t>(n_neigh) * na3, 0.0);
-
-            const double *atom_chan = x_mol.data() + i * atom_stride;
-            const double *dist_chan = atom_chan;
-            const double *xc = atom_chan + 2 * max_size;
-            const double *yc = atom_chan + 3 * max_size;
-            const double *zc = atom_chan + 4 * max_size;
-            const double *zch = atom_chan + 1 * max_size;
-
-            for (int k = 1; k < n_neigh; ++k) {
-                const double r = dist_chan[k];
-                if (r < 1e-14) continue;
-                const double inv_r = 1.0 / r;
-                const double dxk = xc[k], dyk = yc[k], dzk = zc[k];
-                const int zval = static_cast<int>(zch[k]);
-
-                int k_atom = -1;
-                for (int jj = 0; jj < n_atoms; ++jj) {
-                    if (z_vec[jj] != zval) continue;
-                    const double ex = coords[jj * 3 + 0] - coords[i * 3 + 0];
-                    const double ey = coords[jj * 3 + 1] - coords[i * 3 + 1];
-                    const double ez = coords[jj * 3 + 2] - coords[i * 3 + 2];
-                    if (std::abs(ex - dxk) < 1e-10 && std::abs(ey - dyk) < 1e-10 &&
-                        std::abs(ez - dzk) < 1e-10) {
-                        k_atom = jj;
-                        break;
-                    }
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(dynamic)
+#endif
+    for (int i = 0; i < N_A; ++i) {
+        for (int j = 0; j < N_B; ++j) {
+            const int na3A = sides_A[static_cast<std::size_t>(i)].n_atoms * 3;
+            const int na3B = sides_B[static_cast<std::size_t>(j)].n_atoms * 3;
+            std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
+            hessian_pair_from_sides(
+                sides_A[static_cast<std::size_t>(i)],
+                sides_B[static_cast<std::size_t>(j)],
+                P,
+                block.data()
+            );
+            const int r0 = off_A[static_cast<std::size_t>(i)];
+            const int c0 = off_B[static_cast<std::size_t>(j)];
+            for (int amu = 0; amu < na3A; ++amu) {
+                for (int bnu = 0; bnu < na3B; ++bnu) {
+                    H_out[static_cast<std::size_t>(r0 + amu) * D_B + (c0 + bnu)] =
+                        block[static_cast<std::size_t>(amu) * na3B + bnu];
                 }
-                if (k_atom < 0) continue;
-
-                const std::size_t base_k = static_cast<std::size_t>(k) * na3 + k_atom * 3;
-                const std::size_t base_i = static_cast<std::size_t>(k) * na3 + i * 3;
-                dri[i][base_k + 0] = dxk * inv_r;
-                dri[i][base_k + 1] = dyk * inv_r;
-                dri[i][base_k + 2] = dzk * inv_r;
-                dri[i][base_i + 0] = -dxk * inv_r;
-                dri[i][base_i + 1] = -dyk * inv_r;
-                dri[i][base_i + 2] = -dzk * inv_r;
             }
         }
-        return dri;
-    };
+    }
+}
 
-    const auto dri_A =
-        build_dri(adA, x_A_mol, coords_A, z_A, n_atoms_A, max_size_A, na3A, atom_stride_A);
-    const auto dri_B =
-        build_dri(adB, x_B_mol, coords_B, z_B, n_atoms_B, max_size_B, na3B, atom_stride_B);
+// =============================================================================
+// Public API: kernel_gaussian_hessian_symm_blocks
+//
+// Symmetric batch: fills (D, D) using lower-triangle pairs + mirror.
+// Diagonal blocks are symmetrised.
+// =============================================================================
+void kernel_gaussian_hessian_symm_blocks(
+    const std::vector<std::vector<double>> &coords_list,
+    const std::vector<std::vector<int>> &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
+    double *H_out  // (D, D) row-major OUT
+) {
+    if (!H_out) throw std::invalid_argument("H_out is null");
+    if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    const int nm = static_cast<int>(coords_list.size());
+    if (nm == 0) throw std::invalid_argument("hessian_symm_blocks: empty molecule list");
+    if (static_cast<int>(z_list.size()) != nm)
+        throw std::invalid_argument("coords/z list size mismatch");
 
-    // -----------------------------------------------------------------------
-    // Self-scalars and their gradients for A and B
-    // -----------------------------------------------------------------------
-    std::vector<double> ss_A(n_atoms_A, 0.0), ss_B(n_atoms_B, 0.0);
-    std::vector<std::vector<double>> dss_A(n_atoms_A), dss_B(n_atoms_B);
+    std::vector<int> offset(static_cast<std::size_t>(nm) + 1, 0);
+    for (int a = 0; a < nm; ++a) {
+        const int na = static_cast<int>(z_list[static_cast<std::size_t>(a)].size());
+        if (na <= 0) throw std::invalid_argument("n_atoms must be > 0");
+        offset[static_cast<std::size_t>(a) + 1] = offset[static_cast<std::size_t>(a)] + na * 3;
+    }
+    const int D = offset[static_cast<std::size_t>(nm)];
+    std::memset(H_out, 0, sizeof(double) * static_cast<std::size_t>(D) * D);
 
-    for (int i = 0; i < n_atoms_A; ++i) {
-        const AtomDataGrad &adi = adA[i];
-        const double *x1_chan = x_A_mol.data() + i * atom_stride_A;
-        std::vector<double> ds_tmp;
-        ss_A[i] = scalar_noalchemy_and_grad_full(
-            x1_chan,
-            max_size_A,
-            adi.n_neigh,
-            adi.ksi.data(),
-            adi.dksi.data(),
-            dri_A[i].data(),
-            adi.cosp,
-            adi.sinp,
-            adi.dcosp,
-            adi.dsinp,
-            x1_chan,
-            max_size_A,
-            adi.n_neigh,
-            adi.ksi.data(),
-            adi.cosp,
-            adi.sinp,
-            two_body_width,
-            fourier_order,
-            pmax,
-            s_prefactor.data(),
-            true_distance_scale,
-            true_angular_scale,
-            n_atoms_A,
-            ds_tmp
+    HessSharedParams P = build_hess_shared(
+        z_list, sigma, two_body_scaling, three_body_scaling, three_body_width, two_body_width,
+        fourier_order
+    );
+    if (P.pmax == 0) return;
+
+    std::vector<HessMolSide> sides(static_cast<std::size_t>(nm));
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for (int a = 0; a < nm; ++a) {
+        sides[static_cast<std::size_t>(a)] = build_hess_mol_side(
+            coords_list[static_cast<std::size_t>(a)],
+            z_list[static_cast<std::size_t>(a)],
+            static_cast<int>(z_list[static_cast<std::size_t>(a)].size()),
+            P,
+            two_body_power,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            use_atm,
+            /*parallel_atoms=*/false
         );
-        dss_A[i].resize(static_cast<std::size_t>(na3A));
-        for (int q = 0; q < na3A; ++q)
-            dss_A[i][q] = 2.0 * ds_tmp[q];
     }
 
-    for (int j = 0; j < n_atoms_B; ++j) {
-        const AtomDataGrad &adj = adB[j];
-        const double *x2_chan = x_B_mol.data() + j * atom_stride_B;
-        std::vector<double> ds_tmp;
-        ss_B[j] = scalar_noalchemy_and_grad_full(
-            x2_chan,
-            max_size_B,
-            adj.n_neigh,
-            adj.ksi.data(),
-            adj.dksi.data(),
-            dri_B[j].data(),
-            adj.cosp,
-            adj.sinp,
-            adj.dcosp,
-            adj.dsinp,
-            x2_chan,
-            max_size_B,
-            adj.n_neigh,
-            adj.ksi.data(),
-            adj.cosp,
-            adj.sinp,
-            two_body_width,
-            fourier_order,
-            pmax,
-            s_prefactor.data(),
-            true_distance_scale,
-            true_angular_scale,
-            n_atoms_B,
-            ds_tmp
-        );
-        dss_B[j].resize(static_cast<std::size_t>(na3B));
-        for (int q = 0; q < na3B; ++q)
-            dss_B[j][q] = 2.0 * ds_tmp[q];
-    }
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(dynamic)
+#endif
+    for (int a = 0; a < nm; ++a) {
+        for (int b = 0; b < nm; ++b) {
+            if (b > a) continue;
 
-    // -----------------------------------------------------------------------
-    // Zero output
-    // -----------------------------------------------------------------------
-    std::memset(hess_out, 0, sizeof(double) * na3A * na3B);
-
-    // -----------------------------------------------------------------------
-    // Main loop: accumulate Hessian contributions.
-    //
-    // d²K[A,B] / dR_A[α,μ] dR_B[β,ν]
-    //   = Σ_{i in A, j in B: Zi=Zj}  k_ij / σ² * {
-    //       (1/σ²) * g_A[α,μ] * g_B[β,ν]    ← outer product
-    //     + 2 * H_ij[α,μ,β,ν]               ← cross-Hessian of s_ij
-    //     }
-    //
-    // g_A[α,μ] = -ds_ii/dR_A[α,μ] + 2*ds_ij/dR_A[α,μ]
-    // g_B[β,ν] = -ds_jj/dR_B[β,ν] + 2*ds_ij/dR_B[β,ν]
-    // -----------------------------------------------------------------------
-    const std::size_t hess_size = static_cast<std::size_t>(na3A) * na3B;
-
-    for (int i = 0; i < n_atoms_A; ++i) {
-        const AtomDataGrad &adi = adA[i];
-        const double *x1_chan = x_A_mol.data() + i * atom_stride_A;
-
-        for (int j = 0; j < n_atoms_B; ++j) {
-            const AtomDataGrad &adj = adB[j];
-            const double *x2_chan = x_B_mol.data() + j * atom_stride_B;
-
-            // Compute s_ij and ds_ij/dR_A
-            std::vector<double> dsij_dRA;
-            const double sij = scalar_noalchemy_and_grad_full(
-                x1_chan,
-                max_size_A,
-                adi.n_neigh,
-                adi.ksi.data(),
-                adi.dksi.data(),
-                dri_A[i].data(),
-                adi.cosp,
-                adi.sinp,
-                adi.dcosp,
-                adi.dsinp,
-                x2_chan,
-                max_size_B,
-                adj.n_neigh,
-                adj.ksi.data(),
-                adj.cosp,
-                adj.sinp,
-                two_body_width,
-                fourier_order,
-                pmax,
-                s_prefactor.data(),
-                true_distance_scale,
-                true_angular_scale,
-                n_atoms_A,
-                dsij_dRA
+            const int na3A = sides[static_cast<std::size_t>(a)].n_atoms * 3;
+            const int na3B = sides[static_cast<std::size_t>(b)].n_atoms * 3;
+            std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
+            hessian_pair_from_sides(
+                sides[static_cast<std::size_t>(a)],
+                sides[static_cast<std::size_t>(b)],
+                P,
+                block.data()
             );
 
-            // Compute ds_ij/dR_B (B-side gradient of same scalar product)
-            // Swap A↔B: B-side is "side 1" carrying gradient, A-side is fixed "side 2"
-            std::vector<double> dsij_dRB;
-            scalar_noalchemy_and_grad_full(
-                x2_chan,
-                max_size_B,
-                adj.n_neigh,
-                adj.ksi.data(),
-                adj.dksi.data(),
-                dri_B[j].data(),
-                adj.cosp,
-                adj.sinp,
-                adj.dcosp,
-                adj.dsinp,
-                x1_chan,
-                max_size_A,
-                adi.n_neigh,
-                adi.ksi.data(),
-                adi.cosp,
-                adi.sinp,
-                two_body_width,
-                fourier_order,
-                pmax,
-                s_prefactor.data(),
-                true_distance_scale,
-                true_angular_scale,
-                n_atoms_B,
-                dsij_dRB
-            );
+            const int r0 = offset[static_cast<std::size_t>(a)];
+            const int c0 = offset[static_cast<std::size_t>(b)];
 
-            // k_ij = exp(-(s_ii + s_jj - 2*s_ij) / sigma^2)
-            const double kij = std::exp(-(ss_A[i] + ss_B[j] - 2.0 * sij) * inv_sigma2);
-            const double coeff = kij * inv_sigma2;
-
-            // Compute cross-Hessian of s_ij: H_ij shape (na3A, na3B)
-            std::vector<double> Hij(hess_size, 0.0);
-            scalar_noalchemy_cross_hessian(
-                x1_chan,
-                max_size_A,
-                adi.n_neigh,
-                x2_chan,
-                max_size_B,
-                adj.n_neigh,
-                adi,
-                dri_A[i].data(),
-                adj,
-                dri_B[j].data(),
-                two_body_width,
-                fourier_order,
-                pmax,
-                s_prefactor.data(),
-                true_distance_scale,
-                true_angular_scale,
-                n_atoms_A,
-                n_atoms_B,
-                Hij
-            );
-
-            // Accumulate into hess_out
-            for (int amu = 0; amu < na3A; ++amu) {
-                const double gA = -dss_A[i][amu] + 2.0 * dsij_dRA[amu];
-                for (int bnu = 0; bnu < na3B; ++bnu) {
-                    const double gB = -dss_B[j][bnu] + 2.0 * dsij_dRB[bnu];
-                    hess_out[static_cast<std::size_t>(amu) * na3B + bnu] +=
-                        coeff * (inv_sigma2 * gA * gB +
-                                 2.0 * Hij[static_cast<std::size_t>(amu) * na3B + bnu]);
+            if (a == b) {
+                for (int amu = 0; amu < na3A; ++amu) {
+                    for (int bnu = 0; bnu < na3B; ++bnu) {
+                        double v;
+                        if (amu == bnu) {
+                            v = block[static_cast<std::size_t>(amu) * na3B + bnu];
+                        } else {
+                            v = 0.5 * (block[static_cast<std::size_t>(amu) * na3B + bnu] +
+                                       block[static_cast<std::size_t>(bnu) * na3B + amu]);
+                        }
+                        H_out[static_cast<std::size_t>(r0 + amu) * D + (c0 + bnu)] = v;
+                        H_out[static_cast<std::size_t>(c0 + bnu) * D + (r0 + amu)] = v;
+                    }
+                }
+            } else {
+                for (int amu = 0; amu < na3A; ++amu) {
+                    for (int bnu = 0; bnu < na3B; ++bnu) {
+                        const double v = block[static_cast<std::size_t>(amu) * na3B + bnu];
+                        H_out[static_cast<std::size_t>(r0 + amu) * D + (c0 + bnu)] = v;
+                        H_out[static_cast<std::size_t>(c0 + bnu) * D + (r0 + amu)] = v;
+                    }
                 }
             }
         }

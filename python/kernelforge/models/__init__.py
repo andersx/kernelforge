@@ -38,12 +38,17 @@ CudaLocalKRRModel
     Requires CUDA + PyTorch at build time; raises ImportError if absent.
 CudaLocalRFFModel
     GPU-accelerated local RFF using FCHL19 descriptors and CUDA kernels.
+CudaFCHL18KRRModel
+    GPU-accelerated FCHL18 analytical KRR. Uses cuda_fchl18_repr and
+    cuda_fchl18_kernel (scalar / hessian_rfp / full_rfp). Requires CUDA +
+    PyTorch at build time; raises ImportError if absent.
 ModelScore
     Dataclass returned by model.score() containing MAE, Pearson r, slope,
     and intercept for energy and/or force predictions.
 """
 
 from .base import ModelScore as ModelScore
+from .cuda_fchl18_krr import CudaFCHL18KRRModel as CudaFCHL18KRRModel
 from .cuda_global_krr import CudaGlobalKRRModel as CudaGlobalKRRModel
 from .cuda_global_rff import CudaGlobalRFFModel as CudaGlobalRFFModel
 from .cuda_local_krr import CudaLocalKRRModel as CudaLocalKRRModel

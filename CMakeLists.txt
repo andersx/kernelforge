@@ -350,6 +350,55 @@ if(CMAKE_CUDA_COMPILER)
 
       list(APPEND _KF_ALL_MODULES cuda_local_kernels)
 
+      # ---- cuda_fchl18_kernel ----
+      pybind11_add_module(cuda_fchl18_kernel MODULE
+        src/cuda_fchl18_kernel.cu
+        src/cuda_fchl18_jacobian.cu
+        src/cuda_fchl18_hessian.cu
+        src/cuda_fchl18_full.cu
+        src/cuda_fchl18_kernel_bindings.cpp)
+
+      target_include_directories(cuda_fchl18_kernel BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
+
+      target_link_libraries(cuda_fchl18_kernel PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}")
+
+      set_property(TARGET cuda_fchl18_kernel PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_fchl18_kernel PROPERTY POSITION_INDEPENDENT_CODE ON)
+      set_property(TARGET cuda_fchl18_kernel PROPERTY CUDA_ARCHITECTURES OFF)
+
+      target_compile_options(cuda_fchl18_kernel PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_fchl18_kernel)
+
+      # ---- cuda_fchl18_repr ----
+      pybind11_add_module(cuda_fchl18_repr MODULE
+        src/cuda_fchl18_repr.cu
+        src/cuda_fchl18_repr_bindings.cpp)
+
+      target_include_directories(cuda_fchl18_repr BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
+
+      target_link_libraries(cuda_fchl18_repr PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}")
+
+      set_property(TARGET cuda_fchl18_repr PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_fchl18_repr PROPERTY POSITION_INDEPENDENT_CODE ON)
+      set_property(TARGET cuda_fchl18_repr PROPERTY CUDA_ARCHITECTURES OFF)
+
+      target_compile_options(cuda_fchl18_repr PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_fchl18_repr)
+
       # ---- cuda_invdist_repr ----
       pybind11_add_module(cuda_invdist_repr MODULE
         src/cuda_invdist_repr.cu
@@ -452,13 +501,13 @@ if(CMAKE_CUDA_COMPILER)
 
     else()
       message(STATUS
-        "CUDA found but Torch not found — skipping cuda_global_kernels and cuda_local_kernels")
+        "CUDA found but Torch not found — skipping optional CUDA kernel extensions")
     endif()
   else()
-    message(STATUS "CUDAToolkit not found — skipping cuda_global_kernels")
+    message(STATUS "CUDAToolkit not found — skipping optional CUDA kernel extensions")
   endif()
 else()
-  message(STATUS "No CUDA compiler found — skipping cuda_global_kernels")
+  message(STATUS "No CUDA compiler found — skipping optional CUDA kernel extensions")
 endif()
 
 # ---- Install ----------------------------------------------------------------

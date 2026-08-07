@@ -73,6 +73,34 @@ void kernel_gaussian_gradient(
     double *grad_out  // (n_atoms_A, 3, nm2) row-major OUT
 );
 
+// Batch Jacobian: J[row, b] = dK(A_i, B_b) / dR_{A_i}[flat], shape (D_A, nm2)
+// where D_A = sum_i n_atoms_i * 3 and row offsets follow molecule order.
+// Hoists B-side precompute (element map, AtomData, self-scalars) across all A.
+void kernel_gaussian_jacobian(
+    const std::vector<std::vector<double>> &coords_A_list,  // each (n_atoms_i * 3)
+    const std::vector<std::vector<int>> &z_A_list,          // each (n_atoms_i)
+    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2,
+    int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order,
+    bool use_atm,
+    double *J_out  // (D_A, nm2) row-major OUT
+);
+
+// Jacobian-transpose: K_jt[b, flat_A] = dK(A_i, B_b) / dR_{A_i}[flat]
+// Shape (nm2, D_A). Same work as kernel_gaussian_jacobian with transposed store.
+// coords_A / z_A are the differentiated molecules (e.g. training); x2 is the other set.
+void kernel_gaussian_jacobian_t(
+    const std::vector<std::vector<double>> &coords_A_list,  // each (n_atoms_i * 3)
+    const std::vector<std::vector<int>> &z_A_list,          // each (n_atoms_i)
+    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2,
+    int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order,
+    bool use_atm,
+    double *K_jt_out  // (nm2, D_A) row-major OUT
+);
+
 // Mixed second derivative of the FCHL18 Gaussian kernel w.r.t. coordinates of
 // both molecule A and molecule B (single pair).
 //
@@ -88,6 +116,31 @@ void kernel_gaussian_hessian(
     double two_body_power, double three_body_scaling, double three_body_width,
     double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
     double *hess_out  // (n_atoms_A*3, n_atoms_B*3) row-major OUT
+);
+
+// Batch Hessian over many A × B pairs. Hoists per-molecule AtomDataGrad once.
+// H_out shape (D_A, D_B) with molecule blocks in molecule order
+// (D_A = sum_i n_atoms_A_i * 3, likewise D_B).
+void kernel_gaussian_hessian_rect(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list,
+    const std::vector<std::vector<double>> &coords_B_list,
+    const std::vector<std::vector<int>> &z_B_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
+    double *H_out  // (D_A, D_B) row-major OUT
+);
+
+// Symmetric batch Hessian: fills (D, D), lower-triangle pairs + mirror,
+// diagonal blocks symmetrised.
+void kernel_gaussian_hessian_symm_blocks(
+    const std::vector<std::vector<double>> &coords_list,
+    const std::vector<std::vector<int>> &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
+    double *H_out  // (D, D) row-major OUT
 );
 
 }  // namespace fchl18
