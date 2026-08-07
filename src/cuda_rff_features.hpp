@@ -126,4 +126,20 @@ torch::Tensor rff_predict_force_elemental_cuda(
     int chunk_size
 );
 
+torch::Tensor rff_predict_force_elemental_cached_topology_cuda(
+    const torch::Tensor &X,
+    const torch::Tensor &dX,
+    const torch::Tensor &Q,
+    const torch::Tensor &N,
+    const torch::Tensor &W,
+    const torch::Tensor &b,
+    const torch::Tensor &weights,
+    const torch::Tensor &offsets,
+    const std::vector<torch::Tensor> &atom_maps,
+    const std::vector<torch::Tensor> &row_meta,
+    const std::vector<int> &total_rows_host,
+    int total_grads,
+    int chunk_size
+);
+
 }  // namespace kf::rff_cuda

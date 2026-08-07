@@ -137,6 +137,7 @@ class BaseModel(ABC):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Predict energies and forces for new structures.
 
@@ -146,21 +147,26 @@ class BaseModel(ABC):
             List of M (n_atoms_i, 3) coordinate arrays.
         z_list:
             List of M (n_atoms_i,) nuclear charge arrays.
+        compute_energy:
+            If False, skip the energy prediction and return a zero array for
+            energies.  Forces are always computed.  Useful for MD integrators
+            (e.g. VelocityVerlet) that only need forces on most steps.
 
         Returns
         -------
         energies : ndarray, shape (M,)
             Predicted molecular energies in the same units as training data.
+            Zeros if *compute_energy* is False.
         forces : ndarray, shape (M, n_atoms*3)
             Predicted physical forces F = -dE/dR.
         """
         _check_fitted(self)
         coords_list, z_list = _validate_geometry(coords_list, z_list)
 
-        E_pred, F_pred = self._predict(coords_list, z_list)
+        E_pred, F_pred = self._predict(coords_list, z_list, compute_energy=compute_energy)
 
-        # Restore the per-element energy baseline.
-        if len(self.baseline_elements_) > 0:
+        # Restore the per-element energy baseline (only when energy is needed).
+        if compute_energy and len(self.baseline_elements_) > 0:
             A_te = _build_composition_matrix(z_list, self.baseline_elements_)
             E_pred = E_pred + A_te @ self.element_energies_
 
@@ -282,6 +288,7 @@ class BaseModel(ABC):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Internal predict. Returns (E_pred_baseline_subtracted, F_pred)."""
 

@@ -109,6 +109,47 @@ static py::tuple generate_fchl_acsf_and_gradients_py(
     return py::make_tuple(rep, grad);
 }
 
+static py::tuple generate_fchl_acsf_and_gradients_md_single_py(
+    torch::Tensor coords,
+    torch::Tensor Q,
+    torch::Tensor N,
+    int nelements,
+    int nRs2,
+    int nRs3,
+    int nFourier,
+    double eta2,
+    double eta3,
+    double zeta,
+    double rcut,
+    double acut,
+    double two_body_decay,
+    double three_body_decay,
+    double three_body_weight,
+    bool deterministic
+) {
+    const float w3_norm = (float)(std::sqrt(eta3 / M_PI) * three_body_weight);
+
+    auto [rep, grad] = kf::fchl19::generate_fchl_acsf_and_gradients_md_single_cuda(
+        coords,
+        Q,
+        N,
+        nelements,
+        nRs2,
+        nRs3,
+        nFourier,
+        (float)eta2,
+        (float)eta3,
+        (float)zeta,
+        (float)rcut,
+        (float)acut,
+        (float)two_body_decay,
+        (float)three_body_decay,
+        w3_norm,
+        deterministic
+    );
+    return py::make_tuple(rep, grad);
+}
+
 
 // ---------------------------------------------------------------------------
 // Module registration
@@ -215,7 +256,40 @@ Returns
 -------
 (rep, grad)
     rep : torch.Tensor, shape (nm, max_atoms, rep_size), float32, CUDA
-    grad : torch.Tensor, shape (nm, max_atoms, rep_size, max_atoms, 3), float32, CUDA
+        grad : torch.Tensor, shape (nm, max_atoms, rep_size, max_atoms, 3), float32, CUDA
+)doc"
+    );
+
+    m.def(
+        "generate_fchl_acsf_and_gradients_md_single",
+        &generate_fchl_acsf_and_gradients_md_single_py,
+        py::arg("coords"),
+        py::arg("Q"),
+        py::arg("N"),
+        py::arg("nelements"),
+        py::arg("nRs2") = 24,
+        py::arg("nRs3") = 20,
+        py::arg("nFourier") = 1,
+        py::arg("eta2") = 0.32,
+        py::arg("eta3") = 2.7,
+        py::arg("zeta") = M_PI,
+        py::arg("rcut") = 8.0,
+        py::arg("acut") = 8.0,
+        py::arg("two_body_decay") = 1.8,
+        py::arg("three_body_decay") = 0.57,
+        py::arg("three_body_weight") = 13.4,
+        py::arg("deterministic") = false,
+        R"doc(
+Generate FCHL19 ACSF representations and Jacobians on the GPU (FP32) using an
+MD-oriented single-molecule gradient path.
+
+This specialized path is intended for ``nm == 1`` inference workloads.
+
+Returns
+-------
+(rep, grad)
+    rep : torch.Tensor, shape (1, max_atoms, rep_size), float32, CUDA
+    grad : torch.Tensor, shape (1, max_atoms, rep_size, max_atoms, 3), float32, CUDA
 )doc"
     );
 }

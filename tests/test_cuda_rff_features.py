@@ -317,6 +317,87 @@ def test_rff_predict_force_elemental_vs_cpu() -> None:
     np.testing.assert_allclose(got.cpu().numpy().astype(np.float64), ref, rtol=2e-4, atol=2e-4)
 
 
+def test_rff_predict_force_elemental_cached_topology_matches_default() -> None:
+    rng = np.random.default_rng(91)
+    nmol, max_atoms, rep_size, nel, D = 4, 3, 5, 2, 8
+    N = np.array([3, 2, 1, 3], dtype=np.int32)
+    X = rng.normal(size=(nmol, max_atoms, rep_size)).astype(np.float64)
+    dX = rng.normal(size=(nmol, max_atoms, rep_size, max_atoms, 3)).astype(np.float64)
+    Q = rng.integers(0, nel, size=(nmol, max_atoms), dtype=np.int32)
+    for i, n_i in enumerate(N):
+        X[i, n_i:] = 0.0
+        dX[i, n_i:] = 0.0
+        dX[i, :, :, n_i:] = 0.0
+        Q[i, n_i:] = -1
+    W = rng.normal(size=(nel, rep_size, D)).astype(np.float64)
+    b = rng.uniform(0, 2 * np.pi, size=(nel, D)).astype(np.float64)
+    weights = rng.normal(size=(D,)).astype(np.float64)
+
+    offsets = np.zeros(len(N) + 1, dtype=np.int32)
+    offsets[1:] = np.cumsum(3 * N, dtype=np.int32)
+    atom_maps: list[torch.Tensor] = []
+    row_meta: list[torch.Tensor] = []
+    total_rows = np.zeros(nel, dtype=np.int32)
+    for q_elem in range(nel):
+        rows: list[list[int]] = []
+        row_meta_rows: list[list[int]] = []
+        row_offset = 0
+        ci = 0
+        for m_local, n_atoms in enumerate(N.tolist()):
+            for a in range(int(n_atoms)):
+                if int(Q[m_local, a]) != q_elem:
+                    continue
+                n_grads_mol = int(n_atoms) * 3
+                rows.append([m_local, a, row_offset, n_grads_mol])
+                for coord_flat in range(n_grads_mol):
+                    row_meta_rows.append([ci, m_local, coord_flat])
+                row_offset += n_grads_mol
+                ci += 1
+        total_rows[q_elem] = row_offset
+        atom_map_np = (
+            np.asarray(rows, dtype=np.int32).reshape(-1) if rows else np.zeros((0,), dtype=np.int32)
+        )
+        row_meta_np = (
+            np.asarray(row_meta_rows, dtype=np.int32).reshape(-1)
+            if row_meta_rows
+            else np.zeros((0,), dtype=np.int32)
+        )
+        atom_maps.append(torch.from_numpy(atom_map_np).to(device="cuda", dtype=torch.int32))
+        row_meta.append(torch.from_numpy(row_meta_np).to(device="cuda", dtype=torch.int32))
+
+    got_default = cuda_rff_features.rff_predict_force_elemental(
+        _to_cuda(X),
+        _to_cuda(dX),
+        _to_cuda_i32(Q),
+        _to_cuda_i32(N),
+        _to_cuda(W),
+        _to_cuda(b),
+        _to_cuda(weights),
+        2,
+    )
+    got_cached = cuda_rff_features.rff_predict_force_elemental_cached_topology(
+        _to_cuda(X),
+        _to_cuda(dX),
+        _to_cuda_i32(Q),
+        _to_cuda_i32(N),
+        _to_cuda(W),
+        _to_cuda(b),
+        _to_cuda(weights),
+        _to_cuda_i32(offsets),
+        atom_maps,
+        row_meta,
+        total_rows.tolist(),
+        int(offsets[-1]),
+        2,
+    )
+    np.testing.assert_allclose(
+        got_cached.cpu().numpy().astype(np.float64),
+        got_default.cpu().numpy().astype(np.float64),
+        rtol=2e-6,
+        atol=2e-6,
+    )
+
+
 def test_rff_features_elemental_col_major_matches_row_major() -> None:
     """Col-major output must be the transpose of row-major output (same values)."""
     rng = np.random.default_rng(99)

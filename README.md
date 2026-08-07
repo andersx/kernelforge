@@ -84,6 +84,24 @@ CC=icx CXX=icpx uv pip install -e .[test] --verbose
 
 **Note**: In practice, GCC/G++ with OpenBLAS performs similarly to (or better than) Intel compilers with MKL. On macOS, LLVM with Accelerate framework is highly optimized for Apple Silicon.
 
+## ASE molecular dynamics
+
+Install the optional ASE extra:
+
+```bash
+pip install 'kernelforge[ase]'
+```
+
+Wrap a fitted force-capable model (for example ``CudaLocalKRRModel``) with
+``KernelForgeCalculator``, or use ``run_md()`` / the ``kernelmd`` CLI:
+
+```bash
+kernelmd --model model.npz --structure start.xyz --steps 5000 --dt 0.5 \
+         --temperature 300 --output traj.extxyz
+```
+
+See ``examples/run_md_rmd17_*.py`` and ``examples/run_opt_rmd17_*.py``.
+
 ## Timings
 I've rewritten a few of the kernels from the original QML code completely in C++.
 There are performance gains in most cases.
@@ -214,4 +232,4 @@ The goal is to remove pain-points of existing QML libraries
 #### Stretch goals:
 - [ ] Plan RDKit interface
 - [ ] Plan Scikit-learn interface
-- [ ] Plan ASE interface
+- [x] ASE interface (`KernelForgeCalculator`, `run_md()`, `kernelmd` CLI)

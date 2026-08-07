@@ -232,3 +232,145 @@ def kernel_gaussian_full_matvec(
         Predicted forces as flat Cartesian vector.  naq_q = 3*sum(N_q).
     """
     ...
+
+def precompute_train(
+    X_t: torch.Tensor,
+    Q_t: torch.Tensor,
+    N_t: torch.Tensor,
+    alpha_E: torch.Tensor,
+    alpha_desc: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Precompute training-side constants for repeated inference (e.g. MD simulation).
+
+    Call once after fitting.  The returned tensors are constant as long as the
+    training data (X_t, alpha_E, alpha_desc) does not change.  Pass them to
+    ``kernel_gaussian_full_matvec_cached`` at every inference step.
+
+    Parameters
+    ----------
+    X_t : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+    Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
+    N_t : torch.Tensor, shape (nm_t,), int32, CUDA
+    alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
+    alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+
+    Returns
+    -------
+    norms_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        Squared norms ||X_t[t]||².
+    S_adF : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        Dot products X_t[t] · alpha_desc[t].
+    alpha_E_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        Atom-expanded energy dual coefficients alpha_E[mol(t)].
+    combined_t : torch.Tensor, shape (nm_t * max_atoms_t, rep), float32, CUDA
+        Combined matrix alpha_desc + alpha_E_t[t] * X_t.
+    """
+    ...
+
+def kernel_gaussian_full_matvec_cached(
+    X_q: torch.Tensor,
+    dX_q: torch.Tensor,
+    Q_q: torch.Tensor,
+    N_q: torch.Tensor,
+    X_t: torch.Tensor,
+    Q_t: torch.Tensor,
+    N_t: torch.Tensor,
+    alpha_E: torch.Tensor,
+    alpha_desc: torch.Tensor,
+    norms_t: torch.Tensor,
+    S_adF: torch.Tensor,
+    alpha_E_t: torch.Tensor,
+    combined_t: torch.Tensor,
+    sigma: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cached energy+force inference for repeated calls (MD simulation).
+
+    Variant of ``kernel_gaussian_full_matvec`` that accepts precomputed
+    training-side constants from ``precompute_train``.  Eliminates per-step
+    cudaMalloc/cudaFree overhead and redundant kernel launches for norms_t,
+    S_adF, and combined_t.
+
+    Parameters
+    ----------
+    X_q : torch.Tensor, shape (nm_q, max_atoms_q, rep), float32, CUDA
+    dX_q : torch.Tensor, shape (nm_q, max_atoms_q, rep, 3*max_atoms_q), float32, CUDA
+    Q_q : torch.Tensor, shape (nm_q, max_atoms_q), int32, CUDA
+    N_q : torch.Tensor, shape (nm_q,), int32, CUDA
+    X_t : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+    Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
+    N_t : torch.Tensor, shape (nm_t,), int32, CUDA
+    alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
+    alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+    norms_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        From ``precompute_train``.
+    S_adF : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        From ``precompute_train``.
+    alpha_E_t : torch.Tensor, shape (nm_t * max_atoms_t,), float32, CUDA
+        From ``precompute_train``.
+    combined_t : torch.Tensor, shape (nm_t * max_atoms_t, rep), float32, CUDA
+        From ``precompute_train``.
+    sigma : float
+
+    Returns
+    -------
+    E_pred : torch.Tensor, shape (nm_q,), float32, CUDA
+    F_pred : torch.Tensor, shape (naq_q,), float32, CUDA
+    """
+    ...
+
+def kernel_gaussian_full_matvec_cached_graph(
+    X_q: torch.Tensor,
+    dX_q: torch.Tensor,
+    Q_q: torch.Tensor,
+    N_q: torch.Tensor,
+    X_t: torch.Tensor,
+    Q_t: torch.Tensor,
+    N_t: torch.Tensor,
+    alpha_E: torch.Tensor,
+    alpha_desc: torch.Tensor,
+    norms_t: torch.Tensor,
+    S_adF: torch.Tensor,
+    alpha_E_t: torch.Tensor,
+    combined_t: torch.Tensor,
+    query_indices_by_group: list[torch.Tensor],
+    query_counts_by_group: list[int],
+    E_pred: torch.Tensor,
+    F_pred: torch.Tensor,
+    sigma: float,
+) -> None:
+    """Graph-capture-friendly cached energy+force inference.
+
+    Uses caller-provided output buffers and fixed per-element query index
+    tensors so the cached matvec can be captured and replayed via a CUDA graph
+    for repeated fixed-shape inference.
+    """
+    ...
+
+def kernel_gaussian_full_matvec_cached_graph_with_offsets(
+    X_q: torch.Tensor,
+    dX_q: torch.Tensor,
+    Q_q: torch.Tensor,
+    N_q: torch.Tensor,
+    offs_q: torch.Tensor,
+    X_t: torch.Tensor,
+    Q_t: torch.Tensor,
+    N_t: torch.Tensor,
+    alpha_E: torch.Tensor,
+    alpha_desc: torch.Tensor,
+    norms_t: torch.Tensor,
+    S_adF: torch.Tensor,
+    alpha_E_t: torch.Tensor,
+    combined_t: torch.Tensor,
+    query_indices_by_group: list[torch.Tensor],
+    query_counts_by_group: list[int],
+    E_pred: torch.Tensor,
+    F_pred: torch.Tensor,
+    sigma: float,
+) -> None:
+    """Graph-capture-friendly cached energy+force inference with query offsets.
+
+    Uses caller-provided output buffers, fixed per-element query index tensors,
+    and precomputed query Cartesian offsets to avoid host synchronization during
+    CUDA graph capture and replay.
+    """
+    ...

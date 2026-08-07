@@ -212,3 +212,19 @@ __marimo__/
 uv.lock
 
 .opencode/
+
+# ASE / MD / optimization artifacts (repo root and ad-hoc runs)
+/*.traj
+/*.gif
+/*.sdf
+/*.extxyz
+/*.log
+*.tmp/
+/*.tmp/
+
+# Local scratch at repo root
+/test.py
+/test.sh
+/test_ncu.sh
+/sdf
+
