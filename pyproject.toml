@@ -130,7 +130,7 @@ ignore = [
 ]
 
 [tool.ty.analysis]
-# torch is an optional GPU dependency not present in CI or non-CUDA environments.
-# Treat it as Any so unresolved-import errors are suppressed unconditionally,
+# Optional deps not present in CI / non-CUDA environments.
+# Treat them as Any so unresolved-import errors are suppressed unconditionally,
 # without needing per-line suppression comments.
-replace-imports-with-any = ["torch", "torch.**"]
+replace-imports-with-any = ["torch", "torch.**", "ase", "ase.**"]

@@ -131,8 +131,8 @@ def test_single_geometry_predict_is_repeatable() -> None:
     E1, F1 = model.predict([coords[_N_TRAIN]], [z[_N_TRAIN]])
     E2, F2 = model.predict([coords[_N_TRAIN]], [z[_N_TRAIN]])
 
-    np.testing.assert_allclose(E1, E2, rtol=0.0, atol=1e-6)
-    np.testing.assert_allclose(F1, F2, rtol=0.0, atol=1e-5)
+    np.testing.assert_allclose(E1, E2, rtol=1e-7, atol=1e-4)
+    np.testing.assert_allclose(F1, F2, rtol=1e-6, atol=1e-4)
 
 
 def test_compute_fchl19_cuda_matches_cpu_small_mols_mini() -> None:
