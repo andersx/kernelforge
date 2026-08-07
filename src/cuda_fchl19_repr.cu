@@ -60,6 +60,8 @@
 #define BLOCK_X      16
 #define BLOCK_Y      8
 #define BLOCK_SZ     (BLOCK_X * BLOCK_Y)
+#define MD_TWO_BODY_BLOCK 96
+#define MD_THREE_BODY_BLOCK 128
 #define MAX_NABASIS  16        // compile-time upper bound for angular register array
 #define SQRT_2PI_F   2.5066282746310002f
 #define PI_F         3.14159265358979323846f
@@ -605,6 +607,412 @@ __global__ static void fchl19_grad_kernel(
     for (int r = tid; r < rep_size; r += nthreads) dst[r] = sh_rep[r];
 }
 
+struct MdTwoBodyCommon {
+    int valid;
+    int feat_base;
+    float rij;
+    float s2;
+    float sigma;
+    float mu;
+    float decay_ij;
+    float scaling;
+    float inv_pref_common;
+    float exp_s2;
+    float sqrt_exp_s2;
+};
+
+struct MdThreeBodyCommon {
+    int valid;
+    int base;
+    float angular0;
+    float angular1;
+    float d_angular0;
+    float d_angular1;
+    float dai0;
+    float dai1;
+    float dai2;
+    float daj0;
+    float daj1;
+    float daj2;
+    float dak0;
+    float dak1;
+    float dak2;
+    float decay_prod;
+    float atm;
+    float atmi0;
+    float atmi1;
+    float atmi2;
+    float atmj0;
+    float atmj1;
+    float atmj2;
+    float atmk0;
+    float atmk1;
+    float atmk2;
+    float dec_i0;
+    float dec_i1;
+    float dec_i2;
+    float dec_j0;
+    float dec_j1;
+    float dec_j2;
+    float dec_k0;
+    float dec_k1;
+    float dec_k2;
+    float BmA0;
+    float BmA1;
+    float BmA2;
+    float BmC0;
+    float BmC1;
+    float BmC2;
+    float rij;
+    float rik;
+};
+
+__global__ static void fchl19_md_single_two_body_grad_kernel(
+    const float * __restrict__ coords,
+    const int   * __restrict__ Q,
+    const int   * __restrict__ N,
+    float       *              rep,
+    float       *              grad,
+    const float * __restrict__ d_log_Rs2,
+    const float * __restrict__ d_inv_Rs2,
+    int max_atoms,
+    int rep_size,
+    int nbasis2,
+    float eta2,
+    float rcut,
+    float two_body_decay
+) {
+    const int i = (int)blockIdx.x;
+    const int j = (int)blockIdx.y;
+    const int tid = (int)threadIdx.x;
+    const int natoms = N[0];
+
+    extern __shared__ char smem[];
+    float *sh_coords = reinterpret_cast<float *>(smem);
+    int *sh_Z = reinterpret_cast<int *>(smem + max_atoms * 3 * (int)sizeof(float));
+
+    for (int a = tid; a < natoms * 3; a += blockDim.x) sh_coords[a] = coords[a];
+    for (int a = tid; a < natoms; a += blockDim.x) sh_Z[a] = Q[a];
+    __syncthreads();
+
+    __shared__ MdTwoBodyCommon common;
+    if (tid == 0) {
+        common.valid = 0;
+        if (i < natoms && j < natoms && i != j) {
+            const float rij = dist3_dev(sh_coords, i, j);
+            if (rij <= rcut) {
+                const float rij2 = rij * rij;
+                const float invr2 = 1.0f / fmaxf(rij2, EPS_F);
+                const float s2 = log1pf(eta2 * invr2);
+                const float sigma = sqrtf(fmaxf(s2, 0.0f));
+                if (sigma >= EPS_F) {
+                    common.valid = 1;
+                    common.feat_base = sh_Z[j] * nbasis2;
+                    common.rij = rij;
+                    common.s2 = s2;
+                    common.sigma = sigma;
+                    common.mu = logf(rij) - 0.5f * s2;
+                    common.decay_ij = 0.5f * (cosf((PI_F / rcut) * rij) + 1.0f);
+                    common.scaling = powf(rij, -two_body_decay);
+                    common.inv_pref_common = 1.0f / (sigma * SQRT_2PI_F);
+                    common.exp_s2 = expf(s2);
+                    common.sqrt_exp_s2 = sqrtf(common.exp_s2);
+                }
+            }
+        }
+    }
+    __syncthreads();
+    if (common.valid == 0) return;
+
+    const long long rep_base = (long long)i * rep_size;
+    const long long grad_base = ((long long)i * rep_size) * max_atoms * 3;
+
+    if (tid < nbasis2 * 3) {
+        const int k = tid / 3;
+        const int t = tid % 3;
+        const float dx = sh_coords[j * 3 + t] - sh_coords[i * 3 + t];
+        const float L = d_log_Rs2[k] - common.mu;
+        const float g = expf(-0.5f * L * L / common.s2);
+        const float exp_ln = g * 1.4142135623730951f;
+        const float radial_base = common.inv_pref_common * d_inv_Rs2[k] * g;
+        if (t == 0) {
+            atomicAdd(&rep[rep_base + common.feat_base + k], radial_base * common.scaling * common.decay_ij);
+        }
+        const float dscal = two_body_decay * dx * powf(common.rij, -(two_body_decay + 2.0f));
+        const float ddecay =
+            dx * 0.5f * PI_F * sinf((PI_F / rcut) * common.rij) / (rcut * fmaxf(common.rij, EPS_F));
+        const float term1 =
+            L * (-dx * (common.rij * common.rij * common.exp_s2 + eta2) /
+                 powf(common.rij * common.sqrt_exp_s2, 3.0f)) *
+            (common.sqrt_exp_s2 / (common.s2 * common.rij));
+        const float term2 =
+            L * L * eta2 * dx / (common.s2 * common.s2 * powf(common.rij, 4.0f) * common.exp_s2);
+        const float A =
+            (term1 + term2) *
+                (exp_ln * d_inv_Rs2[k] / (common.sigma * 1.7724538509055160f * 2.0f)) -
+            (exp_ln * eta2 * dx * d_inv_Rs2[k]) /
+                (common.s2 * 1.7724538509055160f * common.sigma *
+                 powf(common.rij, 4.0f) * common.exp_s2 * 2.0f);
+        const float part =
+            A * common.scaling * common.decay_ij +
+            radial_base * dscal * common.decay_ij +
+            radial_base * common.scaling * ddecay;
+        const long long f = common.feat_base + k;
+        atomicAdd(&grad[grad_base + (f * max_atoms + i) * 3 + t], part);
+        atomicAdd(&grad[grad_base + (f * max_atoms + j) * 3 + t], -part);
+    }
+}
+
+__global__ static void fchl19_md_single_three_body_grad_kernel(
+    const float * __restrict__ coords,
+    const int   * __restrict__ Q,
+    const int   * __restrict__ N,
+    float       *              rep,
+    float       *              grad,
+    const float * __restrict__ d_Rs3,
+    int max_atoms,
+    int rep_size,
+    int nelements,
+    int nbasis2,
+    int nbasis3,
+    int nabasis,
+    float eta3,
+    float zeta,
+    float acut,
+    float three_body_decay,
+    float three_body_weight
+) {
+    const int i = (int)blockIdx.x;
+    const int j = (int)blockIdx.y;
+    const int k = (int)blockIdx.z;
+    const int tid = (int)threadIdx.x;
+    const int natoms = N[0];
+
+    extern __shared__ char smem[];
+    float *sh_coords = reinterpret_cast<float *>(smem);
+    int *sh_Z = reinterpret_cast<int *>(smem + max_atoms * 3 * (int)sizeof(float));
+
+    for (int a = tid; a < natoms * 3; a += blockDim.x) sh_coords[a] = coords[a];
+    for (int a = tid; a < natoms; a += blockDim.x) sh_Z[a] = Q[a];
+    __syncthreads();
+
+    __shared__ MdThreeBodyCommon common;
+    if (tid == 0) {
+        common.valid = 0;
+        if (i < natoms && j < natoms && k < natoms && i != j && i != k && j < k) {
+            const float rij = dist3_dev(sh_coords, i, j);
+            const float rik = dist3_dev(sh_coords, i, k);
+            if (rij <= acut && rik <= acut) {
+                const float rjk = dist3_dev(sh_coords, j, k);
+                const float rij2 = fmaxf(rij * rij, EPS_F);
+                const float rik2 = fmaxf(rik * rik, EPS_F);
+                const float invrij = 1.0f / fmaxf(rij, EPS_F);
+                const float invrik = 1.0f / fmaxf(rik, EPS_F);
+                const float invrjk = 1.0f / fmaxf(rjk, EPS_F);
+                const float invrij2 = 1.0f / rij2;
+                const float invrik2 = 1.0f / rik2;
+                const float invrjk2 = invrjk * invrjk;
+
+                const float Bx = sh_coords[i * 3 + 0], By = sh_coords[i * 3 + 1], Bz = sh_coords[i * 3 + 2];
+                const float Ax = sh_coords[j * 3 + 0], Ay = sh_coords[j * 3 + 1], Az = sh_coords[j * 3 + 2];
+                const float Cx = sh_coords[k * 3 + 0], Cy = sh_coords[k * 3 + 1], Cz = sh_coords[k * 3 + 2];
+
+                const float eij0 = (Ax - Bx) * invrij, eij1 = (Ay - By) * invrij, eij2 = (Az - Bz) * invrij;
+                const float eik0 = (Cx - Bx) * invrik, eik1 = (Cy - By) * invrik, eik2 = (Cz - Bz) * invrik;
+                const float ejk0 = (Cx - Ax) * invrjk, ejk1 = (Cy - Ay) * invrjk, ejk2 = (Cz - Az) * invrjk;
+
+                float cos_i = eij0 * eik0 + eij1 * eik1 + eij2 * eik2;
+                cos_i = fmaxf(-1.0f, fminf(1.0f, cos_i));
+                const float cos_j = -(eij0 * ejk0 + eij1 * ejk1 + eij2 * ejk2);
+                const float cos_k = eik0 * ejk0 + eik1 * ejk1 + eik2 * ejk2;
+                const float dot = (Ax - Bx) * (Cx - Bx) + (Ay - By) * (Cy - By) + (Az - Bz) * (Cz - Bz);
+
+                const float sin_i = sqrtf(fmaxf(0.0f, 1.0f - cos_i * cos_i));
+                const float ang_w_pre = expf(-0.5f * zeta * zeta) * 2.0f;
+                const float angular0 = ang_w_pre * cos_i;
+                const float angular1 = ang_w_pre * sin_i;
+                const float d_angular0 = ang_w_pre * sin_i;
+                const float d_angular1 = -ang_w_pre * cos_i;
+
+                const float denom = sqrtf(fmaxf(1e-10f, rij2 * rik2 - dot * dot));
+                const float inv_denom = 1.0f / denom;
+                const float d_ang_d_j0 = Cx - Bx + dot * ((Bx - Ax) * invrij2);
+                const float d_ang_d_j1 = Cy - By + dot * ((By - Ay) * invrij2);
+                const float d_ang_d_j2 = Cz - Bz + dot * ((Bz - Az) * invrij2);
+                const float d_ang_d_k0 = Ax - Bx + dot * ((Bx - Cx) * invrik2);
+                const float d_ang_d_k1 = Ay - By + dot * ((By - Cy) * invrik2);
+                const float d_ang_d_k2 = Az - Bz + dot * ((Bz - Cz) * invrik2);
+                const float dai0 = -(d_ang_d_j0 + d_ang_d_k0) * inv_denom;
+                const float dai1 = -(d_ang_d_j1 + d_ang_d_k1) * inv_denom;
+                const float dai2 = -(d_ang_d_j2 + d_ang_d_k2) * inv_denom;
+                const float daj0 = d_ang_d_j0 * inv_denom, daj1 = d_ang_d_j1 * inv_denom, daj2 = d_ang_d_j2 * inv_denom;
+                const float dak0 = d_ang_d_k0 * inv_denom, dak1 = d_ang_d_k1 * inv_denom, dak2 = d_ang_d_k2 * inv_denom;
+
+                const float decay_ij = 0.5f * (cosf((PI_F / acut) * rij) + 1.0f);
+                const float decay_ik = 0.5f * (cosf((PI_F / acut) * rik) + 1.0f);
+                const float decay_prod = decay_ij * decay_ik;
+                const float s_ij = -PI_F * sinf((PI_F / acut) * rij) * 0.5f * invrij / acut;
+                const float s_ik = -PI_F * sinf((PI_F / acut) * rik) * 0.5f * invrik / acut;
+                const float d_ijd0 = s_ij * (Bx - Ax), d_ijd1 = s_ij * (By - Ay), d_ijd2 = s_ij * (Bz - Az);
+                const float d_ikd0 = s_ik * (Bx - Cx), d_ikd1 = s_ik * (By - Cy), d_ikd2 = s_ik * (Bz - Cz);
+
+                const float invr_atm = powf(invrij * invrjk * invrik, three_body_decay);
+                const float atm = (1.0f + 3.0f * cos_i * cos_j * cos_k) * invr_atm * three_body_weight;
+                const float atm_i = (3.0f * cos_j * cos_k) * invr_atm * invrij * invrik;
+                const float atm_j = (3.0f * cos_k * cos_i) * invr_atm * invrij * invrjk;
+                const float atm_k = (3.0f * cos_i * cos_j) * invr_atm * invrjk * invrik;
+                const float vi = dot;
+                const float vj = (Cx - Ax) * (Bx - Ax) + (Cy - Ay) * (By - Ay) + (Cz - Az) * (Bz - Az);
+                const float vk = (Bx - Cx) * (Ax - Cx) + (By - Cy) * (Ay - Cy) + (Bz - Cz) * (Az - Cz);
+
+                const float d_atm_ii0 = 2 * Bx - Ax - Cx - vi * ((Bx - Ax) * invrij2 + (Bx - Cx) * invrik2);
+                const float d_atm_ii1 = 2 * By - Ay - Cy - vi * ((By - Ay) * invrij2 + (By - Cy) * invrik2);
+                const float d_atm_ii2 = 2 * Bz - Az - Cz - vi * ((Bz - Az) * invrij2 + (Bz - Cz) * invrik2);
+                const float d_atm_ij0 = Cx - Ax - vj * (Bx - Ax) * invrij2;
+                const float d_atm_ij1 = Cy - Ay - vj * (By - Ay) * invrij2;
+                const float d_atm_ij2 = Cz - Az - vj * (Bz - Az) * invrij2;
+                const float d_atm_ik0 = Ax - Cx - vk * (Bx - Cx) * invrik2;
+                const float d_atm_ik1 = Ay - Cy - vk * (By - Cy) * invrik2;
+                const float d_atm_ik2 = Az - Cz - vk * (Bz - Cz) * invrik2;
+                const float d_atm_ji0 = Cx - Bx - vi * (Ax - Bx) * invrij2;
+                const float d_atm_ji1 = Cy - By - vi * (Ay - By) * invrij2;
+                const float d_atm_ji2 = Cz - Bz - vi * (Az - Bz) * invrij2;
+                const float d_atm_jj0 = 2 * Ax - Bx - Cx - vj * ((Ax - Bx) * invrij2 + (Ax - Cx) * invrjk2);
+                const float d_atm_jj1 = 2 * Ay - By - Cy - vj * ((Ay - By) * invrij2 + (Ay - Cy) * invrjk2);
+                const float d_atm_jj2 = 2 * Az - Bz - Cz - vj * ((Az - Bz) * invrij2 + (Az - Cz) * invrjk2);
+                const float d_atm_jk0 = Bx - Cx - vk * (Ax - Cx) * invrjk2;
+                const float d_atm_jk1 = By - Cy - vk * (Ay - Cy) * invrjk2;
+                const float d_atm_jk2 = Bz - Cz - vk * (Az - Cz) * invrjk2;
+                const float d_atm_ki0 = Ax - Bx - vi * (Cx - Bx) * invrik2;
+                const float d_atm_ki1 = Ay - By - vi * (Cy - By) * invrik2;
+                const float d_atm_ki2 = Az - Bz - vi * (Cz - Bz) * invrik2;
+                const float d_atm_kj0 = Bx - Ax - vj * (Cx - Ax) * invrjk2;
+                const float d_atm_kj1 = By - Ay - vj * (Cy - Ay) * invrjk2;
+                const float d_atm_kj2 = Bz - Az - vj * (Cz - Az) * invrjk2;
+                const float d_atm_kk0 = 2 * Cx - Ax - Bx - vk * ((Cx - Ax) * invrjk2 + (Cx - Bx) * invrik2);
+                const float d_atm_kk1 = 2 * Cy - Ay - By - vk * ((Cy - Ay) * invrjk2 + (Cy - By) * invrik2);
+                const float d_atm_kk2 = 2 * Cz - Az - Bz - vk * ((Cz - Az) * invrjk2 + (Cz - Bz) * invrik2);
+
+                const float tbd_over_w_pre = (three_body_weight != 0.0f) ? (three_body_decay / three_body_weight) : 0.0f;
+                const float atm_tbd = atm * tbd_over_w_pre;
+                const float d_extra_i0 = ((Ax - Bx) * invrij2 + (Cx - Bx) * invrik2) * atm_tbd;
+                const float d_extra_i1 = ((Ay - By) * invrij2 + (Cy - By) * invrik2) * atm_tbd;
+                const float d_extra_i2 = ((Az - Bz) * invrij2 + (Cz - Bz) * invrik2) * atm_tbd;
+                const float d_extra_j0 = ((Bx - Ax) * invrij2 + (Cx - Ax) * invrjk2) * atm_tbd;
+                const float d_extra_j1 = ((By - Ay) * invrij2 + (Cy - Ay) * invrjk2) * atm_tbd;
+                const float d_extra_j2 = ((Bz - Az) * invrij2 + (Cz - Az) * invrjk2) * atm_tbd;
+                const float d_extra_k0 = ((Ax - Cx) * invrjk2 + (Bx - Cx) * invrik2) * atm_tbd;
+                const float d_extra_k1 = ((Ay - Cy) * invrjk2 + (By - Cy) * invrik2) * atm_tbd;
+                const float d_extra_k2 = ((Az - Cz) * invrjk2 + (Bz - Cz) * invrik2) * atm_tbd;
+
+                common.valid = 1;
+                common.base = nelements * nbasis2 + pair_index_dev(nelements, sh_Z[j], sh_Z[k]) * (nbasis3 * nabasis);
+                common.angular0 = angular0;
+                common.angular1 = angular1;
+                common.d_angular0 = d_angular0;
+                common.d_angular1 = d_angular1;
+                common.dai0 = dai0;
+                common.dai1 = dai1;
+                common.dai2 = dai2;
+                common.daj0 = daj0;
+                common.daj1 = daj1;
+                common.daj2 = daj2;
+                common.dak0 = dak0;
+                common.dak1 = dak1;
+                common.dak2 = dak2;
+                common.decay_prod = decay_prod;
+                common.atm = atm;
+                common.atmi0 = (atm_i * d_atm_ii0 + atm_j * d_atm_ij0 + atm_k * d_atm_ik0 + d_extra_i0) * three_body_weight;
+                common.atmi1 = (atm_i * d_atm_ii1 + atm_j * d_atm_ij1 + atm_k * d_atm_ik1 + d_extra_i1) * three_body_weight;
+                common.atmi2 = (atm_i * d_atm_ii2 + atm_j * d_atm_ij2 + atm_k * d_atm_ik2 + d_extra_i2) * three_body_weight;
+                common.atmj0 = (atm_i * d_atm_ji0 + atm_j * d_atm_jj0 + atm_k * d_atm_jk0 + d_extra_j0) * three_body_weight;
+                common.atmj1 = (atm_i * d_atm_ji1 + atm_j * d_atm_jj1 + atm_k * d_atm_jk1 + d_extra_j1) * three_body_weight;
+                common.atmj2 = (atm_i * d_atm_ji2 + atm_j * d_atm_jj2 + atm_k * d_atm_jk2 + d_extra_j2) * three_body_weight;
+                common.atmk0 = (atm_i * d_atm_ki0 + atm_j * d_atm_kj0 + atm_k * d_atm_kk0 + d_extra_k0) * three_body_weight;
+                common.atmk1 = (atm_i * d_atm_ki1 + atm_j * d_atm_kj1 + atm_k * d_atm_kk1 + d_extra_k1) * three_body_weight;
+                common.atmk2 = (atm_i * d_atm_ki2 + atm_j * d_atm_kj2 + atm_k * d_atm_kk2 + d_extra_k2) * three_body_weight;
+                common.dec_i0 = d_ijd0 * decay_ik + decay_ij * d_ikd0;
+                common.dec_i1 = d_ijd1 * decay_ik + decay_ij * d_ikd1;
+                common.dec_i2 = d_ijd2 * decay_ik + decay_ij * d_ikd2;
+                common.dec_j0 = -d_ijd0 * decay_ik;
+                common.dec_j1 = -d_ijd1 * decay_ik;
+                common.dec_j2 = -d_ijd2 * decay_ik;
+                common.dec_k0 = -decay_ij * d_ikd0;
+                common.dec_k1 = -decay_ij * d_ikd1;
+                common.dec_k2 = -decay_ij * d_ikd2;
+                common.BmA0 = (Bx - Ax) * invrij;
+                common.BmA1 = (By - Ay) * invrij;
+                common.BmA2 = (Bz - Az) * invrij;
+                common.BmC0 = (Bx - Cx) * invrik;
+                common.BmC1 = (By - Cy) * invrik;
+                common.BmC2 = (Bz - Cz) * invrik;
+                common.rij = rij;
+                common.rik = rik;
+            }
+        }
+    }
+    __syncthreads();
+    if (common.valid == 0) return;
+
+    const long long rep_base = (long long)i * rep_size;
+    const long long grad_base = ((long long)i * rep_size) * max_atoms * 3;
+    const int feature_count = nbasis3 * nabasis;
+    const int total_items = feature_count * 9;
+
+    if (tid < feature_count) {
+        const int l = tid / nabasis;
+        const int aidx = tid % nabasis;
+        const float rbar = 0.5f * (common.rij + common.rik) - d_Rs3[l];
+        const float rad_l = expf(-eta3 * rbar * rbar);
+        const float ang = (aidx == 0) ? common.angular0 : common.angular1;
+        atomicAdd(&rep[rep_base + common.base + l * nabasis + aidx], ang * rad_l * common.atm * common.decay_prod);
+    }
+
+    for (int item = tid; item < total_items; item += blockDim.x) {
+        const int feature_idx = item / 9;
+        const int atom_coord = item % 9;
+        const int l = feature_idx / nabasis;
+        const int aidx = feature_idx % nabasis;
+        const int atom_sel = atom_coord / 3;
+        const int coord = atom_coord % 3;
+
+        const float rbar = 0.5f * (common.rij + common.rik) - d_Rs3[l];
+        const float rad_l = expf(-eta3 * rbar * rbar);
+        const float d_rad_l = rad_l * eta3 * rbar;
+        const float scale_ang = common.decay_prod * rad_l;
+        const float dri0 = d_rad_l * (-(common.BmA0 + common.BmC0));
+        const float dri1 = d_rad_l * (-(common.BmA1 + common.BmC1));
+        const float dri2 = d_rad_l * (-(common.BmA2 + common.BmC2));
+        const float drj0 = d_rad_l * common.BmA0;
+        const float drj1 = d_rad_l * common.BmA1;
+        const float drj2 = d_rad_l * common.BmA2;
+        const float drk0 = d_rad_l * common.BmC0;
+        const float drk1 = d_rad_l * common.BmC1;
+        const float drk2 = d_rad_l * common.BmC2;
+        const float ang = (aidx == 0) ? common.angular0 : common.angular1;
+        const float dang = (aidx == 0) ? common.d_angular0 : common.d_angular1;
+        const long long f = common.base + l * nabasis + aidx;
+
+        float value = 0.0f;
+        if (atom_sel == 0) {
+            if (coord == 0) value = dang * common.dai0 * scale_ang * common.atm + ang * dri0 * common.atm * common.decay_prod + ang * rad_l * common.atmi0 * common.decay_prod + ang * rad_l * common.dec_i0 * common.atm;
+            else if (coord == 1) value = dang * common.dai1 * scale_ang * common.atm + ang * dri1 * common.atm * common.decay_prod + ang * rad_l * common.atmi1 * common.decay_prod + ang * rad_l * common.dec_i1 * common.atm;
+            else value = dang * common.dai2 * scale_ang * common.atm + ang * dri2 * common.atm * common.decay_prod + ang * rad_l * common.atmi2 * common.decay_prod + ang * rad_l * common.dec_i2 * common.atm;
+            atomicAdd(&grad[grad_base + (f * max_atoms + i) * 3 + coord], value);
+        } else if (atom_sel == 1) {
+            if (coord == 0) value = dang * common.daj0 * scale_ang * common.atm + ang * drj0 * common.atm * common.decay_prod + ang * rad_l * common.atmj0 * common.decay_prod + ang * rad_l * common.dec_j0 * common.atm;
+            else if (coord == 1) value = dang * common.daj1 * scale_ang * common.atm + ang * drj1 * common.atm * common.decay_prod + ang * rad_l * common.atmj1 * common.decay_prod + ang * rad_l * common.dec_j1 * common.atm;
+            else value = dang * common.daj2 * scale_ang * common.atm + ang * drj2 * common.atm * common.decay_prod + ang * rad_l * common.atmj2 * common.decay_prod + ang * rad_l * common.dec_j2 * common.atm;
+            atomicAdd(&grad[grad_base + (f * max_atoms + j) * 3 + coord], value);
+        } else {
+            if (coord == 0) value = dang * common.dak0 * scale_ang * common.atm + ang * drk0 * common.atm * common.decay_prod + ang * rad_l * common.atmk0 * common.decay_prod + ang * rad_l * common.dec_k0 * common.atm;
+            else if (coord == 1) value = dang * common.dak1 * scale_ang * common.atm + ang * drk1 * common.atm * common.decay_prod + ang * rad_l * common.atmk1 * common.decay_prod + ang * rad_l * common.dec_k1 * common.atm;
+            else value = dang * common.dak2 * scale_ang * common.atm + ang * drk2 * common.atm * common.decay_prod + ang * rad_l * common.atmk2 * common.decay_prod + ang * rad_l * common.dec_k2 * common.atm;
+            atomicAdd(&grad[grad_base + (f * max_atoms + k) * 3 + coord], value);
+        }
+    }
+}
+
 
 // ===========================================================================
 // Host driver
@@ -868,6 +1276,124 @@ std::tuple<torch::Tensor, torch::Tensor> generate_fchl_acsf_and_gradients_cuda(
         two_body_decay, three_body_decay, three_body_weight_norm
     );
     CUDA_CHECK(cudaGetLastError());
+
+    return std::make_tuple(rep, grad);
+}
+
+std::tuple<torch::Tensor, torch::Tensor> generate_fchl_acsf_and_gradients_md_single_cuda(
+    const torch::Tensor &coords,
+    const torch::Tensor &Q,
+    const torch::Tensor &N,
+    int nelements,
+    int nRs2,
+    int nRs3,
+    int nFourier,
+    float eta2,
+    float eta3,
+    float zeta,
+    float rcut,
+    float acut,
+    float two_body_decay,
+    float three_body_decay,
+    float three_body_weight_norm,
+    bool deterministic
+) {
+    TORCH_CHECK(!deterministic, "MD single gradient path only supports deterministic=False");
+    TORCH_CHECK(coords.is_cuda() && coords.scalar_type() == torch::kFloat32,
+                "coords must be float32 CUDA");
+    TORCH_CHECK(coords.is_contiguous(), "coords must be contiguous");
+    TORCH_CHECK(Q.is_cuda() && Q.scalar_type() == torch::kInt32,
+                "Q must be int32 CUDA");
+    TORCH_CHECK(Q.is_contiguous(), "Q must be contiguous");
+    TORCH_CHECK(N.is_cuda() && N.scalar_type() == torch::kInt32,
+                "N must be int32 CUDA");
+    TORCH_CHECK(N.is_contiguous(), "N must be contiguous");
+    TORCH_CHECK(coords.dim() == 3, "coords must be 3-D (nm, max_atoms, 3)");
+    TORCH_CHECK(Q.dim() == 2, "Q must be 2-D (nm, max_atoms)");
+    TORCH_CHECK(N.dim() == 1, "N must be 1-D (nm,)");
+    TORCH_CHECK(coords.size(2) == 3, "coords.size(2) must be 3");
+    TORCH_CHECK(coords.size(0) == 1, "MD single gradient path requires nm == 1");
+    TORCH_CHECK(Q.size(0) == 1, "Q.size(0) must equal 1");
+    TORCH_CHECK(N.size(0) == 1, "N.size(0) must equal 1");
+    TORCH_CHECK(nFourier == 1, "gradient currently supports nFourier == 1");
+
+    const int nm = (int)coords.size(0);
+    const int max_atoms = (int)coords.size(1);
+    const int nbasis2 = nRs2;
+    const int nbasis3 = nRs3;
+    const int nabasis = 2 * nFourier;
+    const int n_pairs_sym = nelements * (nelements + 1) / 2;
+    const int rep_size = nelements * nbasis2 + n_pairs_sym * nbasis3 * nabasis;
+
+    std::vector<float> h_Rs2(nbasis2), h_log_Rs2(nbasis2), h_inv_Rs2(nbasis2);
+    for (int i = 1; i <= nbasis2; ++i) {
+        h_Rs2[i - 1] = rcut * (float)i / (float)nbasis2;
+        h_log_Rs2[i - 1] = std::log(h_Rs2[i - 1]);
+        h_inv_Rs2[i - 1] = 1.0f / h_Rs2[i - 1];
+    }
+
+    std::vector<float> h_Rs3(nbasis3);
+    for (int i = 1; i <= nbasis3; ++i) h_Rs3[i - 1] = acut * (float)i / (float)nbasis3;
+
+    auto d_log_Rs2 = torch::from_blob(h_log_Rs2.data(), {nbasis2}, torch::kFloat32)
+                         .to(coords.device())
+                         .contiguous();
+    auto d_inv_Rs2 = torch::from_blob(h_inv_Rs2.data(), {nbasis2}, torch::kFloat32)
+                         .to(coords.device())
+                         .contiguous();
+    auto d_Rs3 = torch::from_blob(h_Rs3.data(), {nbasis3}, torch::kFloat32)
+                     .to(coords.device())
+                     .contiguous();
+
+    auto rep = torch::zeros({nm, max_atoms, rep_size}, coords.options());
+    auto grad = torch::zeros({nm, max_atoms, rep_size, max_atoms, 3}, coords.options());
+
+    const int natoms = N[0].item<int>();
+    const int smem_bytes =
+        max_atoms * 3 * (int)sizeof(float) +
+        max_atoms * (int)sizeof(int);
+
+    if (natoms > 1) {
+        dim3 grid_two((unsigned int)natoms, (unsigned int)natoms, 1U);
+        fchl19_md_single_two_body_grad_kernel<<<grid_two, MD_TWO_BODY_BLOCK, smem_bytes>>>(
+            coords.data_ptr<float>(),
+            Q.data_ptr<int>(),
+            N.data_ptr<int>(),
+            rep.data_ptr<float>(),
+            grad.data_ptr<float>(),
+            d_log_Rs2.data_ptr<float>(),
+            d_inv_Rs2.data_ptr<float>(),
+            max_atoms,
+            rep_size,
+            nbasis2,
+            eta2,
+            rcut,
+            two_body_decay
+        );
+        CUDA_CHECK(cudaGetLastError());
+
+        dim3 grid_three((unsigned int)natoms, (unsigned int)natoms, (unsigned int)natoms);
+        fchl19_md_single_three_body_grad_kernel<<<grid_three, MD_THREE_BODY_BLOCK, smem_bytes>>>(
+            coords.data_ptr<float>(),
+            Q.data_ptr<int>(),
+            N.data_ptr<int>(),
+            rep.data_ptr<float>(),
+            grad.data_ptr<float>(),
+            d_Rs3.data_ptr<float>(),
+            max_atoms,
+            rep_size,
+            nelements,
+            nbasis2,
+            nbasis3,
+            nabasis,
+            eta3,
+            zeta,
+            acut,
+            three_body_decay,
+            three_body_weight_norm
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     return std::make_tuple(rep, grad);
 }

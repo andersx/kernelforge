@@ -280,7 +280,7 @@ if(CMAKE_CUDA_COMPILER)
     if(Torch_FOUND)
       message(STATUS
         "CUDA ${CMAKE_CUDA_COMPILER_VERSION} + Torch ${Torch_VERSION} — "
-        "building cuda_global_kernels and cuda_local_kernels")
+        "building CUDA kernel extensions")
 
       # libtorch_python.so provides the pybind11 type_caster<at::Tensor>
       # specialisations; without it the modules fail to load at runtime.
@@ -312,9 +312,10 @@ if(CMAKE_CUDA_COMPILER)
 
       set_property(TARGET cuda_global_kernels PROPERTY CUDA_STANDARD 17)
       set_property(TARGET cuda_global_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
-      # CUDA 12.8 deprecates offline compilation for architectures below 75.
-      set(_KF_CUDA_ARCHITECTURES "75;80;86;89;90")
-      set_property(TARGET cuda_global_kernels PROPERTY CUDA_ARCHITECTURES "${_KF_CUDA_ARCHITECTURES}")
+      # Torch injects nvcc arch flags via TORCH_CUDA_ARCH_LIST and explicitly
+      # ignores CMAKE_CUDA_ARCHITECTURES. Disable CMake's own arch emission for
+      # these Torch-backed modules to avoid duplicate fatbin generation.
+      set_property(TARGET cuda_global_kernels PROPERTY CUDA_ARCHITECTURES OFF)
 
       target_compile_options(cuda_global_kernels PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
@@ -341,7 +342,7 @@ if(CMAKE_CUDA_COMPILER)
 
       set_property(TARGET cuda_local_kernels PROPERTY CUDA_STANDARD 17)
       set_property(TARGET cuda_local_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
-      set_property(TARGET cuda_local_kernels PROPERTY CUDA_ARCHITECTURES "${_KF_CUDA_ARCHITECTURES}")
+      set_property(TARGET cuda_local_kernels PROPERTY CUDA_ARCHITECTURES OFF)
 
       target_compile_options(cuda_local_kernels PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
@@ -364,7 +365,7 @@ if(CMAKE_CUDA_COMPILER)
 
       set_property(TARGET cuda_invdist_repr PROPERTY CUDA_STANDARD 17)
       set_property(TARGET cuda_invdist_repr PROPERTY POSITION_INDEPENDENT_CODE ON)
-      set_property(TARGET cuda_invdist_repr PROPERTY CUDA_ARCHITECTURES "${_KF_CUDA_ARCHITECTURES}")
+      set_property(TARGET cuda_invdist_repr PROPERTY CUDA_ARCHITECTURES OFF)
 
       target_compile_options(cuda_invdist_repr PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
@@ -393,7 +394,7 @@ if(CMAKE_CUDA_COMPILER)
 
       set_property(TARGET cuda_rff_features PROPERTY CUDA_STANDARD 17)
       set_property(TARGET cuda_rff_features PROPERTY POSITION_INDEPENDENT_CODE ON)
-      set_property(TARGET cuda_rff_features PROPERTY CUDA_ARCHITECTURES "${_KF_CUDA_ARCHITECTURES}")
+      set_property(TARGET cuda_rff_features PROPERTY CUDA_ARCHITECTURES OFF)
 
       target_compile_options(cuda_rff_features PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
@@ -416,7 +417,7 @@ if(CMAKE_CUDA_COMPILER)
 
       set_property(TARGET cuda_fchl19_repr PROPERTY CUDA_STANDARD 17)
       set_property(TARGET cuda_fchl19_repr PROPERTY POSITION_INDEPENDENT_CODE ON)
-      set_property(TARGET cuda_fchl19_repr PROPERTY CUDA_ARCHITECTURES "${_KF_CUDA_ARCHITECTURES}")
+      set_property(TARGET cuda_fchl19_repr PROPERTY CUDA_ARCHITECTURES OFF)
 
       target_compile_options(cuda_fchl19_repr PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
@@ -441,7 +442,7 @@ if(CMAKE_CUDA_COMPILER)
 
       set_property(TARGET cuda_solvers PROPERTY CUDA_STANDARD 17)
       set_property(TARGET cuda_solvers PROPERTY POSITION_INDEPENDENT_CODE ON)
-      set_property(TARGET cuda_solvers PROPERTY CUDA_ARCHITECTURES "${_KF_CUDA_ARCHITECTURES}")
+      set_property(TARGET cuda_solvers PROPERTY CUDA_ARCHITECTURES OFF)
 
       target_compile_options(cuda_solvers PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>

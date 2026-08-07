@@ -1,6 +1,7 @@
 // cuda_rff_features_bindings.cpp — PyTorch-extension bindings for CUDA RFF features
 
 #include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 #include "cuda_rff_features.hpp"
 
@@ -168,5 +169,24 @@ PYBIND11_MODULE(cuda_rff_features, m) {
         py::arg("weights"),
         py::arg("chunk_size") = 64,
         "Compute local elemental RFF force predictions on GPU."
+    );
+
+    m.def(
+        "rff_predict_force_elemental_cached_topology",
+        &kf::rff_cuda::rff_predict_force_elemental_cached_topology_cuda,
+        py::arg("X"),
+        py::arg("dX"),
+        py::arg("Q"),
+        py::arg("N"),
+        py::arg("W"),
+        py::arg("b"),
+        py::arg("weights"),
+        py::arg("offsets"),
+        py::arg("atom_maps"),
+        py::arg("row_meta"),
+        py::arg("total_rows_host"),
+        py::arg("total_grads"),
+        py::arg("chunk_size") = 64,
+        "Compute local elemental RFF force predictions on GPU with cached topology."
     );
 }

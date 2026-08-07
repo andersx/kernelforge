@@ -153,3 +153,21 @@ def rff_predict_force_elemental(
 ) -> torch.Tensor:
     """Compute local elemental RFF force predictions on GPU."""
     ...
+
+def rff_predict_force_elemental_cached_topology(
+    X: torch.Tensor,
+    dX: torch.Tensor,
+    Q: torch.Tensor,
+    N: torch.Tensor,
+    W: torch.Tensor,
+    b: torch.Tensor,
+    weights: torch.Tensor,
+    offsets: torch.Tensor,
+    atom_maps: list[torch.Tensor],
+    row_meta: list[torch.Tensor],
+    total_rows_host: list[int],
+    total_grads: int,
+    chunk_size: int = 64,
+) -> torch.Tensor:
+    """Compute local elemental RFF force predictions on GPU with cached topology."""
+    ...

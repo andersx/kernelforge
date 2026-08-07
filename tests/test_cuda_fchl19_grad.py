@@ -131,6 +131,18 @@ def _gpu_rep_grad(
     ].cpu().numpy().astype(np.float64)
 
 
+def _gpu_rep_grad_md_single(
+    coords: NDArray[np.float64], z: NDArray[np.int32], elements: list[int], device: Any
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    coords_gpu, Q_gpu, N_gpu = _build_gpu_batch([coords], [z], elements, device)
+    rep, grad = cuda_fchl19_repr.generate_fchl_acsf_and_gradients_md_single(
+        coords_gpu, Q_gpu, N_gpu, nelements=len(elements), **_DEFAULTS
+    )
+    return rep[0].cpu().numpy().astype(np.float64), grad[
+        0, : len(z), :, : len(z), :
+    ].cpu().numpy().astype(np.float64)
+
+
 def test_grad_output_shape_single_molecule(gpu_device: Any) -> None:
     coords, z = _water_system()
     elements = [1, 8]
@@ -166,6 +178,28 @@ def test_grad_correctness_ethanol_like(gpu_device: Any) -> None:
 
     np.testing.assert_allclose(got_rep, ref_rep, rtol=1e-4, atol=1e-5)
     np.testing.assert_allclose(got_grad, ref_grad, rtol=1e-3, atol=1e-4)
+
+
+def test_md_single_path_matches_default_water(gpu_device: Any) -> None:
+    coords, z = _water_system()
+    elements = [1, 8]
+
+    ref_rep, ref_grad = _gpu_rep_grad(coords, z, elements, gpu_device)
+    got_rep, got_grad = _gpu_rep_grad_md_single(coords, z, elements, gpu_device)
+
+    np.testing.assert_allclose(got_rep, ref_rep, rtol=2e-5, atol=2e-6)
+    np.testing.assert_allclose(got_grad, ref_grad, rtol=2e-4, atol=2e-5)
+
+
+def test_md_single_path_matches_default_ethanol_like(gpu_device: Any) -> None:
+    coords, z = _ethanol_like()
+    elements = [1, 6, 8]
+
+    ref_rep, ref_grad = _gpu_rep_grad(coords, z, elements, gpu_device)
+    got_rep, got_grad = _gpu_rep_grad_md_single(coords, z, elements, gpu_device)
+
+    np.testing.assert_allclose(got_rep, ref_rep, rtol=2e-5, atol=2e-6)
+    np.testing.assert_allclose(got_grad, ref_grad, rtol=5e-4, atol=5e-5)
 
 
 def test_grad_padded_slots_zeroed(gpu_device: Any) -> None:

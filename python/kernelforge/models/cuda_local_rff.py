@@ -90,12 +90,52 @@ def _build_elem_indices(
     return [np.where(valid_mask & (Q_idx_np == ei)) for ei in range(nelements)]
 
 
+def _build_force_topology_cache(
+    Q_idx_np: NDArray[np.int32],
+    N_np: NDArray[np.int32],
+    nelements: int,
+) -> tuple[
+    NDArray[np.int32], list[NDArray[np.int32]], list[NDArray[np.int32]], NDArray[np.int32], int
+]:
+    offsets = np.zeros(len(N_np) + 1, dtype=np.int32)
+    offsets[1:] = np.cumsum(3 * N_np, dtype=np.int32)
+    atom_maps: list[NDArray[np.int32]] = []
+    row_meta: list[NDArray[np.int32]] = []
+    total_rows = np.zeros(nelements, dtype=np.int32)
+
+    for q_elem in range(nelements):
+        rows: list[list[int]] = []
+        row_meta_rows: list[list[int]] = []
+        row_offset = 0
+        ci = 0
+        for m_local, n_atoms in enumerate(N_np.tolist()):
+            for a in range(int(n_atoms)):
+                if int(Q_idx_np[m_local, a]) != q_elem:
+                    continue
+                n_grads_mol = int(n_atoms) * 3
+                rows.append([m_local, a, row_offset, n_grads_mol])
+                for coord_flat in range(n_grads_mol):
+                    row_meta_rows.append([ci, m_local, coord_flat])
+                row_offset += n_grads_mol
+                ci += 1
+        total_rows[q_elem] = row_offset
+        if rows:
+            atom_maps.append(np.asarray(rows, dtype=np.int32).reshape(-1))
+            row_meta.append(np.asarray(row_meta_rows, dtype=np.int32).reshape(-1))
+        else:
+            atom_maps.append(np.zeros((0,), dtype=np.int32))
+            row_meta.append(np.zeros((0,), dtype=np.int32))
+
+    return offsets, atom_maps, row_meta, total_rows, int(offsets[-1])
+
+
 def _compute_fchl19_cuda_rff(
     coords_list: list[NDArray[np.float64]],
     z_list: list[NDArray[np.int32]],
     elements: list[int],
     with_gradients: bool,
     repr_params: dict[str, Any],
+    deterministic: bool = True,
 ) -> tuple[Any, Any, Any, NDArray[np.int32], NDArray[np.int32]]:
     _require_cuda_fchl19()
     import torch
@@ -121,13 +161,28 @@ def _compute_fchl19_cuda_rff(
     N_cuda = torch.from_numpy(np.ascontiguousarray(N_np)).cuda()
 
     if with_gradients:
-        X_cuda, dX5_cuda = _cuda_fchl19.generate_fchl_acsf_and_gradients(
-            coords_cuda, Q_idx_cuda, N_cuda, nelements=len(elements), **repr_params
+        fchl19_grad_fn = (
+            _cuda_fchl19.generate_fchl_acsf_and_gradients_md_single
+            if nm == 1 and not deterministic
+            else _cuda_fchl19.generate_fchl_acsf_and_gradients
+        )
+        X_cuda, dX5_cuda = fchl19_grad_fn(
+            coords_cuda,
+            Q_idx_cuda,
+            N_cuda,
+            nelements=len(elements),
+            deterministic=deterministic,
+            **repr_params,
         )
         dX_cuda = dX5_cuda.reshape(nm, max_atoms, X_cuda.shape[2], max_atoms * 3).contiguous()
     else:
         X_cuda = _cuda_fchl19.generate_fchl_acsf(
-            coords_cuda, Q_idx_cuda, N_cuda, nelements=len(elements), **repr_params
+            coords_cuda,
+            Q_idx_cuda,
+            N_cuda,
+            nelements=len(elements),
+            deterministic=deterministic,
+            **repr_params,
         )
         dX_cuda = None
 
@@ -178,6 +233,47 @@ class CudaLocalRFFModel(BaseModel):
         self.pca_center = pca_center
         self.pca_whiten = pca_whiten
         self.is_fitted_ = False
+        self._cached_force_topology: dict[str, Any] | None = None
+
+    def _reset_cached_force_topology(self) -> None:
+        self._cached_force_topology = None
+
+    def _get_or_create_force_topology_cache(
+        self,
+        Q_idx_np: NDArray[np.int32],
+        N_np: NDArray[np.int32],
+    ) -> dict[str, Any]:
+        import torch
+
+        key = (
+            tuple(int(x) for x in N_np.tolist()),
+            tuple(int(x) for x in Q_idx_np.ravel().tolist()),
+        )
+        cached = self._cached_force_topology
+        if cached is not None and cached["key"] == key:
+            return cached
+
+        offsets_np, atom_maps_np, row_meta_np, total_rows_np, total_grads = (
+            _build_force_topology_cache(
+                Q_idx_np,
+                N_np,
+                len(self.elements),
+            )
+        )
+        state = {
+            "key": key,
+            "offsets": torch.from_numpy(offsets_np).to(device="cuda", dtype=torch.int32),
+            "atom_maps": [
+                torch.from_numpy(arr).to(device="cuda", dtype=torch.int32) for arr in atom_maps_np
+            ],
+            "row_meta": [
+                torch.from_numpy(arr).to(device="cuda", dtype=torch.int32) for arr in row_meta_np
+            ],
+            "total_rows_host": total_rows_np.tolist(),
+            "total_grads": total_grads,
+        }
+        self._cached_force_topology = state
+        return state
 
     def _fit_pca(
         self,
@@ -387,6 +483,7 @@ class CudaLocalRFFModel(BaseModel):
             self.elements,
             with_gradients=need_gradients,
             repr_params=self.repr_params,
+            deterministic=False,
         )
         t0 = _t(
             f"Step 1  compute_fchl19 (GPU, {'f32+grad' if need_gradients else 'f32'})",
@@ -611,6 +708,7 @@ class CudaLocalRFFModel(BaseModel):
         self._W_cuda = W_cuda
         self._b_cuda = b_cuda
         self._weights_cuda = weights_cuda
+        self._reset_cached_force_topology()
         self._Q_train_np = Q_idx_np.astype(np.int32)
         self._N_train_np = N_np.astype(np.int32)
         self._y_train = energies
@@ -633,6 +731,7 @@ class CudaLocalRFFModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         _require_cuda()
         import time as _time
@@ -653,6 +752,7 @@ class CudaLocalRFFModel(BaseModel):
             self.elements,
             with_gradients=need_gradients,
             repr_params=self.repr_params,
+            deterministic=False,
         )
         t0 = _tp(f"compute_fchl19 (GPU, {'grad' if need_gradients else 'no grad'})", t0)
         N_cuda = _to_cuda_i32(N_np)
@@ -661,17 +761,20 @@ class CudaLocalRFFModel(BaseModel):
             if dX_cuda is not None:
                 dX_cuda = self._apply_pca_dX(dX_cuda, _Q_idx_np, N_np)
             t0 = _tp(f"apply PCA  (n_pca={self.n_pca})", t0)
-        E_cuda = _rff_ext.rff_predict_energy_elemental(  # type: ignore[union-attr]
-            X_cuda,
-            Q_idx_cuda,
-            N_cuda,
-            self._W_cuda,
-            self._b_cuda,
-            self._weights_cuda,
-            int(self.chunk_size),
-        )
-        t0 = _tp("rff_predict_energy_elemental (GPU)", t0)
-        E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
+        if compute_energy:
+            E_cuda = _rff_ext.rff_predict_energy_elemental(  # type: ignore[union-attr]
+                X_cuda,
+                Q_idx_cuda,
+                N_cuda,
+                self._W_cuda,
+                self._b_cuda,
+                self._weights_cuda,
+                int(self.chunk_size),
+            )
+            t0 = _tp("rff_predict_energy_elemental (GPU)", t0)
+            E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
+        else:
+            E_pred = np.zeros(len(coords_list), dtype=np.float64)
         if self.training_mode_ == "energy_and_force":
             if dX_cuda is None:
                 msg = "dX_cuda is None in energy_and_force predict — internal error"
@@ -681,7 +784,8 @@ class CudaLocalRFFModel(BaseModel):
             dX5_cuda = dX_cuda.reshape(
                 len(coords_list), max_atoms, rep_size, max_atoms, 3
             ).contiguous()
-            F_cuda = _rff_ext.rff_predict_force_elemental(  # type: ignore[union-attr]
+            force_topology = self._get_or_create_force_topology_cache(_Q_idx_np, N_np)
+            F_cuda = _rff_ext.rff_predict_force_elemental_cached_topology(  # type: ignore[union-attr]
                 X_cuda,
                 dX5_cuda,
                 Q_idx_cuda,
@@ -689,6 +793,11 @@ class CudaLocalRFFModel(BaseModel):
                 self._W_cuda,
                 self._b_cuda,
                 self._weights_cuda,
+                force_topology["offsets"],
+                force_topology["atom_maps"],
+                force_topology["row_meta"],
+                force_topology["total_rows_host"],
+                int(force_topology["total_grads"]),
                 int(self.chunk_size),
             )
             t0 = _tp("rff_predict_force_elemental (GPU)", t0)
@@ -772,6 +881,7 @@ class CudaLocalRFFModel(BaseModel):
         self._W_cuda = _to_cuda_f32(self._W_np)
         self._b_cuda = _to_cuda_f32(self._b_np)
         self._weights_cuda = _to_cuda_f32(self._weights_np)
+        self._reset_cached_force_topology()
         if self.n_pca is not None:
             self._pca_matrix_cuda = _to_cuda_f32(data["pca_matrix"].astype(np.float32))
             self._pca_mean_cuda = _to_cuda_f32(data["pca_mean"].astype(np.float32))
