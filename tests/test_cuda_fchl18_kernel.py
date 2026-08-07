@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from typing import TypedDict
 
 import numpy as np
 import pytest
@@ -71,7 +72,21 @@ METHANE_Z = np.array([6, 1, 1, 1, 1], dtype=np.int32)
 HF_COORDS = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.917]], dtype=np.float64)
 HF_Z = np.array([1, 9], dtype=np.int32)
 
-KERNEL_ARGS = {
+
+class _KernelArgs(TypedDict):
+    two_body_scaling: float
+    two_body_width: float
+    two_body_power: float
+    three_body_scaling: float
+    three_body_width: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
+
+KERNEL_ARGS: _KernelArgs = {
     "two_body_scaling": 2.0,
     "two_body_width": 0.1,
     "two_body_power": 6.0,
