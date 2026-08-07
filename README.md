@@ -218,6 +218,7 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Complete rewrite of FCHL18 analytical scalar kernel in C++
   - [x] Stretch goal 1: Add new analytical FCHL18 kernel Jacobian
   - [x] Stretch goal 2: Add new analytical FCHL18 kernel Hessian (+GPR/GDML-style)
+  - [x] CUDA FCHL18 kernels + ``CudaFCHL18KRRModel`` (scalar / Jacobian / Hessian / full + RFP)
   - [ ] Stretch goal 3: Attempt to optimize hyperparameters and cut-off functions
 - Add standard solvers:
   - [x] Cholesky in-place solver

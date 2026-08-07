@@ -45,6 +45,7 @@ from numpy.typing import NDArray
 
 from kernelforge.cli import load_qm7b_raw_data
 from kernelforge.models import (
+    CudaFCHL18KRRModel,
     CudaGlobalKRRModel,
     CudaGlobalRFFModel,
     CudaLocalKRRModel,
@@ -359,6 +360,7 @@ def _build_model(
     | CudaGlobalRFFModel
     | CudaLocalKRRModel
     | CudaLocalRFFModel
+    | CudaFCHL18KRRModel
 ):
     """Construct and return the appropriate model instance."""
     repr_params = repr_params or {}
@@ -390,6 +392,10 @@ def _build_model(
 
     if representation == "fchl18":
         # repr_params override kernel_params for FCHL18
+        if cuda:
+            return CudaFCHL18KRRModel(
+                sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
+            )
         return FCHL18KRRModel(
             sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
         )
@@ -691,7 +697,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "Use GPU-accelerated model (cuBLAS + cuSOLVER via PyTorch). "
             "With --representation invdist uses CudaGlobalKRRModel for KRR or "
             "CudaGlobalRFFModel for energy-only RFF; "
-            "with --representation fchl19 uses CudaLocalKRRModel. "
+            "with --representation fchl19 uses CudaLocalKRRModel; "
+            "with --representation fchl18 uses CudaFCHL18KRRModel. "
             "Requires a CUDA-enabled build of kernelforge."
         ),
     )
@@ -755,21 +762,44 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                         "compiler, CUDAToolkit, and PyTorch:\n    make install-linux-mkl-ilp64"
                     )
             try:
-                from kernelforge import cuda_fchl19_repr as _  # noqa: F401
+                from kernelforge import cuda_fchl19_repr as _
             except ImportError:
                 parser.error(
                     "--cuda with --representation fchl19 requires cuda_fchl19_repr "
                     "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
                     "and PyTorch:\n    make install-linux-mkl-ilp64"
                 )
+        elif args.representation == "fchl18":
+            try:
+                from kernelforge import cuda_fchl18_kernel as _
+            except ImportError:
+                parser.error(
+                    "--cuda with --representation fchl18 requires cuda_fchl18_kernel "
+                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
+                    "and PyTorch:\n    make install-linux-mkl-ilp64"
+                )
+            try:
+                from kernelforge import cuda_fchl18_repr as _  # noqa: F401
+            except ImportError:
+                parser.error(
+                    "--cuda with --representation fchl18 requires cuda_fchl18_repr "
+                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
+                    "and PyTorch:\n    make install-linux-mkl-ilp64"
+                )
         else:
             parser.error(
-                f"--cuda requires --representation invdist or fchl19 "
+                f"--cuda requires --representation invdist, fchl19, or fchl18 "
                 f"(got --representation {args.representation})."
             )
-        if args.mode not in ("energy_only", "energy_and_force"):
+        if args.mode not in ("energy_only", "energy_and_force", "force_only"):
             parser.error(
-                f"--cuda supports energy_only and energy_and_force modes (got --mode {args.mode})."
+                f"--cuda supports energy_only, force_only, and energy_and_force "
+                f"(got --mode {args.mode})."
+            )
+        if args.mode == "force_only" and args.representation != "fchl18":
+            parser.error(
+                "--cuda --mode force_only is currently supported only with "
+                "--representation fchl18."
             )
         if args.regressor == "rff" and (
             args.representation not in ("invdist", "fchl19")

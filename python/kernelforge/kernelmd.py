@@ -26,6 +26,7 @@ _MODEL_CLASS_MAP: dict[str, str] = {
     "CudaLocalRFFModel": "kernelforge.models.cuda_local_rff.CudaLocalRFFModel",
     "CudaGlobalKRRModel": "kernelforge.models.cuda_global_krr.CudaGlobalKRRModel",
     "CudaGlobalRFFModel": "kernelforge.models.cuda_global_rff.CudaGlobalRFFModel",
+    "CudaFCHL18KRRModel": "kernelforge.models.cuda_fchl18_krr.CudaFCHL18KRRModel",
 }
 
 _CLI_CLASS_MAP: dict[str, str] = {
@@ -33,6 +34,7 @@ _CLI_CLASS_MAP: dict[str, str] = {
     "cuda-local-rff": "CudaLocalRFFModel",
     "cuda-global-krr": "CudaGlobalKRRModel",
     "cuda-global-rff": "CudaGlobalRFFModel",
+    "cuda-fchl18-krr": "CudaFCHL18KRRModel",
 }
 
 
@@ -169,7 +171,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Model class to load.  'auto' reads the 'model_class' field from the npz. "
             "Explicit options: cuda-local-krr, cuda-local-rff, "
-            "cuda-global-krr, cuda-global-rff."
+            "cuda-global-krr, cuda-global-rff, cuda-fchl18-krr."
         ),
     )
     p.add_argument("--seed", type=int, default=42, help="Random seed for velocity initialisation.")

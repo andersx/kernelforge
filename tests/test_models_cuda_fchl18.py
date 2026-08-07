@@ -12,7 +12,7 @@ pytest.importorskip("torch")
 pytest.importorskip("kernelforge.cuda_fchl18_kernel")
 pytest.importorskip("kernelforge.cuda_fchl18_repr")
 
-from kernelforge.models import CudaFCHL18KRRModel  # noqa: E402
+from kernelforge.models import CudaFCHL18KRRModel
 
 _nvidia_smi = shutil.which("nvidia-smi")
 try:
@@ -107,3 +107,26 @@ class TestCudaFCHL18KRRModelEnergyAndForce:
         assert E_pred.shape == (4,)
         assert F_pred.shape == (4 * N_ATOMS * 3,)
         assert model.training_mode_ == "energy_and_force"
+
+    def test_ase_calculator_smoke(self, dataset: tuple) -> None:
+        pytest.importorskip("ase")
+        from ase import Atoms
+
+        from kernelforge.ase_calculator import KernelForgeCalculator
+
+        coords_list, z_list, energies, forces = dataset
+        model = CudaFCHL18KRRModel(sigma=5.0, l2=1e-6, max_size=MAX_SIZE)
+        model.fit(
+            coords_list[:8],
+            z_list[:8],
+            energies=energies[:8],
+            forces=forces[:8],
+        )
+
+        atoms = Atoms(numbers=z_list[8], positions=coords_list[8])
+        atoms.calc = KernelForgeCalculator(model, units="eV")
+        energy = atoms.get_potential_energy()
+        forces_ase = atoms.get_forces()
+        assert np.isfinite(energy)
+        assert forces_ase.shape == (N_ATOMS, 3)
+        assert np.all(np.isfinite(forces_ase))
