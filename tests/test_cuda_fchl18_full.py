@@ -145,20 +145,26 @@ def _prep_side(coords_list, z_list, dtype):
 def _gpu_full(coords_A, z_A, coords_B, z_B, dtype):
     x1, n1, nn1, c1, z1, d_a = _prep_side(coords_A, z_A, dtype)
     x2, n2, nn2, c2, z2, d_b = _prep_side(coords_B, z_B, dtype)
-    return cuda_fchl18_kernel.kernel_gaussian_full(
-        x1,
-        x2,
-        n1,
-        n2,
-        nn1,
-        nn2,
-        c1,
-        z1,
-        c2,
-        z2,
-        sigma=SIGMA,
-        **KERNEL_ARGS,
-    ), len(coords_A), len(coords_B), d_a, d_b
+    return (
+        cuda_fchl18_kernel.kernel_gaussian_full(
+            x1,
+            x2,
+            n1,
+            n2,
+            nn1,
+            nn2,
+            c1,
+            z1,
+            c2,
+            z2,
+            sigma=SIGMA,
+            **KERNEL_ARGS,
+        ),
+        len(coords_A),
+        len(coords_B),
+        d_a,
+        d_b,
+    )
 
 
 def test_full_matches_cpu_f64() -> None:
@@ -188,18 +194,32 @@ def test_full_blocks_match_standalone() -> None:
     x1, n1, nn1, c1, z1, _ = _prep_side(coords_A, z_A, torch.float64)
     x2, n2, nn2, c2, z2, _ = _prep_side(coords_B, z_B, torch.float64)
 
-    EE = cuda_fchl18_kernel.kernel_gaussian(
-        x1, x2, n1, n2, nn1, nn2, sigma=SIGMA, **KERNEL_ARGS
-    ).cpu().numpy()
-    FE = cuda_fchl18_kernel.kernel_gaussian_jacobian(
-        x1, x2, n1, n2, nn1, nn2, c1, z1, sigma=SIGMA, **KERNEL_ARGS
-    ).cpu().numpy()
-    EF = cuda_fchl18_kernel.kernel_gaussian_jacobian_t(
-        x2, x1, n2, n1, nn2, nn1, c2, z2, sigma=SIGMA, **KERNEL_ARGS
-    ).cpu().numpy()
-    FF = cuda_fchl18_kernel.kernel_gaussian_hessian(
-        x1, x2, n1, n2, nn1, nn2, c1, z1, c2, z2, sigma=SIGMA, **KERNEL_ARGS
-    ).cpu().numpy()
+    EE = (
+        cuda_fchl18_kernel.kernel_gaussian(x1, x2, n1, n2, nn1, nn2, sigma=SIGMA, **KERNEL_ARGS)
+        .cpu()
+        .numpy()
+    )
+    FE = (
+        cuda_fchl18_kernel.kernel_gaussian_jacobian(
+            x1, x2, n1, n2, nn1, nn2, c1, z1, sigma=SIGMA, **KERNEL_ARGS
+        )
+        .cpu()
+        .numpy()
+    )
+    EF = (
+        cuda_fchl18_kernel.kernel_gaussian_jacobian_t(
+            x2, x1, n2, n1, nn2, nn1, c2, z2, sigma=SIGMA, **KERNEL_ARGS
+        )
+        .cpu()
+        .numpy()
+    )
+    FF = (
+        cuda_fchl18_kernel.kernel_gaussian_hessian(
+            x1, x2, n1, n2, nn1, nn2, c1, z1, c2, z2, sigma=SIGMA, **KERNEL_ARGS
+        )
+        .cpu()
+        .numpy()
+    )
 
     np.testing.assert_allclose(K[:n_a, :n_b], EE, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(K[:n_a, n_b:], EF, rtol=0.0, atol=0.0)
@@ -217,9 +237,11 @@ def test_full_symm_matches_cpu_and_asym() -> None:
     x, n, nn, c, z, D = _prep_side(coords, zs, torch.float64)
     nm = len(coords)
 
-    K_symm = cuda_fchl18_kernel.kernel_gaussian_full_symm(
-        x, n, nn, c, z, sigma=SIGMA, **KERNEL_ARGS
-    ).cpu().numpy()
+    K_symm = (
+        cuda_fchl18_kernel.kernel_gaussian_full_symm(x, n, nn, c, z, sigma=SIGMA, **KERNEL_ARGS)
+        .cpu()
+        .numpy()
+    )
     K_asym, _, _, _, _ = _gpu_full(coords, zs, coords, zs, torch.float64)
     K_cpu = cpu_kernel.kernel_gaussian_full_symm(coords, zs, sigma=SIGMA, **KERNEL_ARGS)
 
@@ -237,12 +259,16 @@ def test_full_symm_rfp_unpacks() -> None:
     nm = len(coords)
     BIG = nm + D
 
-    K_symm = cuda_fchl18_kernel.kernel_gaussian_full_symm(
-        x, n, nn, c, z, sigma=SIGMA, **KERNEL_ARGS
-    ).cpu().numpy()
-    rfp = cuda_fchl18_kernel.kernel_gaussian_full_symm_rfp(
-        x, n, nn, c, z, sigma=SIGMA, **KERNEL_ARGS
-    ).cpu().numpy()
+    K_symm = (
+        cuda_fchl18_kernel.kernel_gaussian_full_symm(x, n, nn, c, z, sigma=SIGMA, **KERNEL_ARGS)
+        .cpu()
+        .numpy()
+    )
+    rfp = (
+        cuda_fchl18_kernel.kernel_gaussian_full_symm_rfp(x, n, nn, c, z, sigma=SIGMA, **KERNEL_ARGS)
+        .cpu()
+        .numpy()
+    )
 
     assert rfp.shape == (BIG * (BIG + 1) // 2,)
     K_unpacked = kernelmath.rfp_to_full(rfp.astype(np.float64), BIG, uplo="L", transr="N")
@@ -258,6 +284,4 @@ def test_full_fp32_close() -> None:
     K32, _, _, _, _ = _gpu_full(coords_A, z_A, coords_B, z_B, torch.float32)
     K64, _, _, _, _ = _gpu_full(coords_A, z_A, coords_B, z_B, torch.float64)
 
-    np.testing.assert_allclose(
-        K32.cpu().numpy(), K64.cpu().numpy(), rtol=1e-4, atol=1e-5
-    )
+    np.testing.assert_allclose(K32.cpu().numpy(), K64.cpu().numpy(), rtol=1e-4, atol=1e-5)

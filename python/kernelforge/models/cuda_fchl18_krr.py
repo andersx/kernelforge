@@ -86,7 +86,7 @@ def _pad_coords_z(
     z = np.zeros((nm, max_size), dtype=np.int32)
     n = np.zeros(nm, dtype=np.int32)
     for i, (c, zi) in enumerate(zip(coords_list, z_list, strict=True)):
-        na = int(len(zi))
+        na = len(zi)
         if na > max_size:
             msg = f"molecule {i} has {na} atoms > max_size={max_size}"
             raise ValueError(msg)
@@ -190,9 +190,7 @@ class CudaFCHL18KRRModel(BaseModel):
             if energies is None:
                 raise ValueError("energies must be provided for energy_only mode")
             if self.use_rfp:
-                K_rfp = _cuda_kernel.kernel_gaussian_symm_rfp(
-                    x, n, nn, sigma=self.sigma, **kp
-                )
+                K_rfp = _cuda_kernel.kernel_gaussian_symm_rfp(x, n, nn, sigma=self.sigma, **kp)
                 self._y_train = np.asarray(energies, dtype=np.float64)
                 self._alpha = kernelmath.cho_solve_rfp(
                     K_rfp.detach().cpu().numpy(), self._y_train, l2=self.l2
@@ -212,9 +210,7 @@ class CudaFCHL18KRRModel(BaseModel):
                 x, n, nn, coords, z, sigma=self.sigma, **kp
             )
             self._y_train = F_flat
-            self._alpha = kernelmath.cho_solve_rfp(
-                K_rfp.detach().cpu().numpy(), F_flat, l2=self.l2
-            )
+            self._alpha = kernelmath.cho_solve_rfp(K_rfp.detach().cpu().numpy(), F_flat, l2=self.l2)
 
         else:  # energy_and_force
             if energies is None:
@@ -259,7 +255,7 @@ class CudaFCHL18KRRModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
-        compute_energy: bool = True,  # noqa: ARG002
+        compute_energy: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         import torch
 
@@ -268,9 +264,7 @@ class CudaFCHL18KRRModel(BaseModel):
         cut_distance = float(kp.get("cut_distance", 5.0))
         n_test = len(coords_list)
 
-        x_te, n_te, nn_te, coords_te, z_te = self._generate_repr(
-            coords_list, z_list, cut_distance
-        )
+        x_te, n_te, nn_te, coords_te, z_te = self._generate_repr(coords_list, z_list, cut_distance)
         alpha_t = torch.from_numpy(np.ascontiguousarray(self._alpha, dtype=np.float64)).cuda()
 
         if mode == "energy_only":

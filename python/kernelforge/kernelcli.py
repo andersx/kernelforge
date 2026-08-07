@@ -790,8 +790,7 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
             )
         if args.mode == "force_only" and args.representation != "fchl18":
             parser.error(
-                "--cuda --mode force_only is currently supported only with "
-                "--representation fchl18."
+                "--cuda --mode force_only is currently supported only with --representation fchl18."
             )
         if args.regressor == "rff" and (
             args.representation not in ("invdist", "fchl19")

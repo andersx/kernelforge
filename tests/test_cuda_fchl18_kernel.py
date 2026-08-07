@@ -27,7 +27,7 @@ _nvidia_smi = shutil.which("nvidia-smi")
 try:
     _gpu_ok = (
         _nvidia_smi is not None
-        and subprocess.run(
+        and subprocess.run(  # noqa: S603
             [_nvidia_smi, "--query-gpu=name", "--format=csv,noheader"],
             capture_output=True,
             timeout=5,
