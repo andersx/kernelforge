@@ -4,16 +4,12 @@
 //   Shape (D_A, N_B) where D_A = sum_i n_atoms_i * 3.
 //
 //   Takes raw coords+charges for query molecules A + pre-computed repr for B.
-//   Loops over A molecules and calls kernel_gaussian_gradient for each,
-//   scattering results into the output matrix.
+//   Delegates to kf::fchl18::kernel_gaussian_jacobian which hoists B-side
+//   precompute across all A molecules.
 
 #include <cstring>
 #include <stdexcept>
 #include <vector>
-
-#ifdef _OPENMP
-    #include <omp.h>
-#endif
 
 #include "fchl18_kernel.hpp"
 #include "fchl18_kernel_common.hpp"
@@ -91,74 +87,45 @@ py::array_t<double> kernel_gaussian_jacobian_py(
     if (N_A == 0) throw std::invalid_argument("kernel_gaussian_jacobian: empty query set");
 
     // Parse A molecules
-    std::vector<kf::fchl18::MolData> mols_A(N_A);
-    for (int i = 0; i < N_A; ++i)
-        mols_A[i] = kf::fchl18::parse_mol(coords_A_list[i], z_A_list[i]);
+    std::vector<std::vector<double>> coords_A(static_cast<std::size_t>(N_A));
+    std::vector<std::vector<int>> z_A(static_cast<std::size_t>(N_A));
+    int D_A = 0;
+    for (int i = 0; i < N_A; ++i) {
+        kf::fchl18::MolData mi = kf::fchl18::parse_mol(coords_A_list[i], z_A_list[i]);
+        D_A += mi.n_atoms * 3;
+        coords_A[static_cast<std::size_t>(i)] = std::move(mi.coords);
+        z_A[static_cast<std::size_t>(i)] = std::move(mi.z);
+    }
 
-    // Compute row offsets and total D_A
-    std::vector<int> row_offset(N_A + 1, 0);
-    for (int i = 0; i < N_A; ++i)
-        row_offset[i + 1] = row_offset[i] + mols_A[i].n_atoms * 3;
-    const int D_A = row_offset[N_A];
-
-    // Flatten training repr
     auto x2_v = double_array_to_vec(x2);
     auto n2_v = int_array_1d_to_vec(n2);
     auto nn2_v = int_array_2d_to_vec(nn2);
 
-    // Allocate output (D_A, N_B), zero-initialised
     py::array_t<double> J({(py::ssize_t)D_A, (py::ssize_t)N_B});
-    std::memset(J.mutable_data(), 0, sizeof(double) * D_A * N_B);
 
     {
         py::gil_scoped_release release;
-
-// Parallelise over query molecules A_i.
-// Each i writes to disjoint rows [row_offset[i], row_offset[i+1]).
-#pragma omp parallel for schedule(dynamic)
-        for (int i = 0; i < N_A; ++i) {
-            const kf::fchl18::MolData &mi = mols_A[i];
-            const int na_i = mi.n_atoms;
-
-            // grad[alpha, mu, b] = dK(A_i, B_b) / dR_{A_i}[alpha, mu]
-            // shape (na_i, 3, N_B)
-            std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * N_B, 0.0);
-
-            kf::fchl18::kernel_gaussian_gradient(
-                mi.coords,
-                mi.z,
-                x2_v,
-                n2_v,
-                nn2_v,
-                na_i,
-                N_B,
-                max_size2,
-                sigma,
-                two_body_scaling,
-                two_body_width,
-                two_body_power,
-                three_body_scaling,
-                three_body_width,
-                three_body_power,
-                cut_start,
-                cut_distance,
-                fourier_order,
-                use_atm,
-                grad.data()
-            );
-
-            // Scatter: J[row_offset[i] + alpha*3 + mu, b] = grad[alpha, mu, b]
-            double *J_ptr = J.mutable_data();
-            for (int alpha = 0; alpha < na_i; ++alpha) {
-                for (int mu = 0; mu < 3; ++mu) {
-                    const int row = row_offset[i] + alpha * 3 + mu;
-                    for (int b = 0; b < N_B; ++b) {
-                        J_ptr[static_cast<std::ptrdiff_t>(row) * N_B + b] =
-                            grad[static_cast<std::size_t>(alpha) * 3 * N_B + mu * N_B + b];
-                    }
-                }
-            }
-        }
+        kf::fchl18::kernel_gaussian_jacobian(
+            coords_A,
+            z_A,
+            x2_v,
+            n2_v,
+            nn2_v,
+            N_B,
+            max_size2,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            J.mutable_data()
+        );
     }
 
     return J;

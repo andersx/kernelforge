@@ -165,15 +165,71 @@ def test_full_scalar_block_matches_kernel_gaussian():
     )
 
 
-def test_full_jac_block_matches_jacobian():
-    """Lower-left block K[N_A:, 0:N_B] == kernel_gaussian_jacobian(A, repr_B)."""
-    coords_A = [WATER_COORDS]
-    z_A = [WATER_Z]
+def test_full_jact_block_matches_jacobian_t():
+    """Upper-right block K[0:N_A, N_B:] == kernel_gaussian_jacobian_t(B, repr_A)."""
+    coords_A = [WATER_COORDS, HF_COORDS]
+    z_A = [WATER_Z, HF_Z]
     coords_B = [AMMONIA_COORDS, METHANE_COORDS]
     z_B = [AMMONIA_Z, METHANE_Z]
-    N_A = 1
-    D_A = 3 * 3  # water
-    N_B = 2
+    N_A, N_B = 2, 2
+    D_B = (4 + 5) * 3
+
+    K_full = kernel_mod.kernel_gaussian_full(
+        coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS
+    )
+
+    x_A, n_A, nn_A = _make_repr(coords_A, z_A)
+    # Differentiate B against A representations → (N_A, D_B)
+    Jt = kernel_mod.kernel_gaussian_jacobian_t(
+        coords_B, z_B, x_A, n_A, nn_A, sigma=SIGMA, **KERNEL_ARGS
+    )
+
+    np.testing.assert_allclose(
+        K_full[:N_A, N_B : N_B + D_B],
+        Jt,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="Jac_t block of full kernel != kernel_gaussian_jacobian_t",
+    )
+
+
+def test_full_jac_block_matches_gradient():
+    """Lower-left jac block rows for mol 0 match kernel_gaussian_gradient reshape."""
+    coords_A = [WATER_COORDS, HF_COORDS]
+    z_A = [WATER_Z, HF_Z]
+    coords_B = [AMMONIA_COORDS, METHANE_COORDS]
+    z_B = [AMMONIA_Z, METHANE_Z]
+    N_A, N_B = 2, 2
+    D_water = 3 * 3
+
+    K_full = kernel_mod.kernel_gaussian_full(
+        coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS
+    )
+
+    x_B, n_B, nn_B = _make_repr(coords_B, z_B)
+    G = kernel_mod.kernel_gaussian_gradient(
+        WATER_COORDS, WATER_Z, x_B, n_B, nn_B, sigma=SIGMA, **KERNEL_ARGS
+    )
+    # G[alpha, mu, b] → rows of jac block for water
+    G_flat = G.reshape(D_water, N_B)
+
+    np.testing.assert_allclose(
+        K_full[N_A : N_A + D_water, :N_B],
+        G_flat,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="Jac block (mol 0) != kernel_gaussian_gradient reshaped",
+    )
+
+
+def test_full_jac_block_matches_jacobian():
+    """Lower-left block K[N_A:, 0:N_B] == kernel_gaussian_jacobian(A, repr_B)."""
+    coords_A = [WATER_COORDS, HF_COORDS]
+    z_A = [WATER_Z, HF_Z]
+    coords_B = [AMMONIA_COORDS, METHANE_COORDS]
+    z_B = [AMMONIA_Z, METHANE_Z]
+    N_A, N_B = 2, 2
+    D_A = (3 + 2) * 3
 
     K_full = kernel_mod.kernel_gaussian_full(
         coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS
@@ -193,14 +249,13 @@ def test_full_jac_block_matches_jacobian():
     )
 
 
-def test_full_jact_block_matches_jacobian_t():
+def test_full_jact_block_matches_gradient():
     """Upper-right block K[0:N_A, N_B:] == kernel_gaussian_jacobian_t (via gradient)."""
     coords_A = [WATER_COORDS]
     z_A = [WATER_Z]
     coords_B = [AMMONIA_COORDS]
     z_B = [AMMONIA_Z]
     N_A = 1
-    D_A = 3 * 3
     N_B = 1
     D_B = 4 * 3
 
@@ -421,7 +476,17 @@ def test_full_use_atm_block_consistency():
         err_msg="use_atm: FE block != kernel_gaussian_jacobian",
     )
 
-    # EF block == kernel_gaussian_jacobian_t (via gradient reshape)
+    # EF block == kernel_gaussian_jacobian_t(B, repr_A)
+    Jt = kernel_mod.kernel_gaussian_jacobian_t(coords_B, z_B, x_A, n_A, nn_A, sigma=SIGMA, **args)
+    np.testing.assert_allclose(
+        K_full[:N_A, N_B:],
+        Jt,
+        rtol=1e-12,
+        atol=1e-14,
+        err_msg="use_atm: EF block != kernel_gaussian_jacobian_t",
+    )
+
+    # Also EF == gradient(B, repr_A) reshaped
     G = kernel_mod.kernel_gaussian_gradient(
         AMMONIA_COORDS, AMMONIA_Z, x_A, n_A, nn_A, sigma=SIGMA, **args
     )
@@ -431,7 +496,7 @@ def test_full_use_atm_block_consistency():
         jac_t_ref,
         rtol=1e-12,
         atol=1e-14,
-        err_msg="use_atm: EF block != expected jacobian_t",
+        err_msg="use_atm: EF block != expected jacobian_t via gradient",
     )
 
     # FF block == kernel_gaussian_hessian
