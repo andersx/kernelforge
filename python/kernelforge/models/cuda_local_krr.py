@@ -735,8 +735,10 @@ class CudaLocalKRRModel(BaseModel):
         self._cached_graph_state = None
 
     def _build_query_group_tensors(
-        self, Q_q: Any, N_q: NDArray[np.int32]
-    ) -> tuple[list[Any], list[int]]:  # noqa: ANN401
+        self,
+        Q_q: Any,  # noqa: ANN401
+        N_q: NDArray[np.int32],
+    ) -> tuple[list[Any], list[int]]:
         import torch
 
         Q_q_flat = Q_q.reshape(-1)
@@ -752,7 +754,6 @@ class CudaLocalKRRModel(BaseModel):
         query_counts: list[int] = []
         labels: list[int] = []
         nm_t = int(self._Q_train_np.shape[0])
-        max_atoms_t = int(self._Q_train_np.shape[1])
         for m in range(nm_t):
             for i in range(int(self._N_train_np[m])):
                 label = int(self._Q_train_np[m, i])
