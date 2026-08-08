@@ -45,7 +45,10 @@ jobs:
         env:
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-* cp315-*"
           CIBW_SKIP: "pp* *-musllinux_* cp*-manylinux_i686 cp31?t-*"
-          CIBW_TEST_COMMAND: "pytest -q {project}/tests -k 'not slow' -x"
+          # examples/ is not shipped in the wheel; point tests at the checkout.
+          CIBW_TEST_COMMAND: >-
+            env KERNELFORGE_EXAMPLES_DIR={project}/examples
+            pytest -q {project}/tests -k 'not slow' -x
           CIBW_TEST_EXTRAS: "test"
           CIBW_ENVIRONMENT: >
             OMP_NUM_THREADS=1
@@ -68,7 +71,7 @@ jobs:
             OPENBLAS_NUM_THREADS
             OMP_NUM_THREADS
           CIBW_ENVIRONMENT_MACOS: >
-            MACOSX_DEPLOYMENT_TARGET=15.0
+            MACOSX_DEPLOYMENT_TARGET=26.0
             CMAKE_ARGS="-DKF_WITH_CUDA=OFF -DBLAS_VENDOR=Apple
               -DCMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include
               -DCMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include
@@ -126,6 +129,11 @@ jobs:
           CIBW_TEST_SKIP: "*"
           CIBW_BEFORE_ALL_LINUX: |
             yum -y install openblas-devel || dnf -y install openblas-devel
+            # manylinux_cuda images ship nvcc; ensure math-lib devel packages
+            # exist so FindCUDAToolkit can create CUDA::cublas / CUDA::cusolver.
+            yum -y install libcusolver-devel libcublas-devel \
+              || dnf -y install libcusolver-devel libcublas-devel \
+              || true
           CIBW_BEFORE_BUILD_LINUX: |
             python -m pip install --upgrade pip
             # Same CUDA major as the manylinux_cuda image (13.x → cu130).
@@ -133,6 +141,7 @@ jobs:
           CIBW_ENVIRONMENT_LINUX: >
             OMP_NUM_THREADS=1
             OPENBLAS_NUM_THREADS=1
+            CUDA_HOME=/usr/local/cuda
             TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0;10.0;12.0"
             CPPFLAGS="-I/usr/include/openblas"
             CFLAGS="-I/usr/include/openblas"
@@ -141,6 +150,7 @@ jobs:
           CIBW_ENVIRONMENT_PASS_LINUX: >
             OMP_NUM_THREADS
             OPENBLAS_NUM_THREADS
+            CUDA_HOME
             TORCH_CUDA_ARCH_LIST
             CPPFLAGS
             CFLAGS

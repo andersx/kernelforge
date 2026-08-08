@@ -34,6 +34,7 @@ Entry point registered as ``kernelcli`` in pyproject.toml.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import urllib.request
@@ -79,10 +80,33 @@ RMD17_BASE_URL = "https://raw.githubusercontent.com/andersx/rmd17-npz/master/rmd
 
 CACHE_DIR = Path.home() / ".kernelforge" / "datasets"
 
-# Path to the bundled small_mols_mini files (installed alongside the package)
-_THIS_DIR = Path(__file__).parent
-_EXAMPLES_DIR = _THIS_DIR.parent.parent / "examples"
+def _resolve_examples_dir() -> Path:
+    """Locate ``examples/`` containing the bundled small_mols_mini NPZ files.
 
+    Order: ``KERNELFORGE_EXAMPLES_DIR`` (cibuildwheel sets this to
+    ``{project}/examples``), then the source-tree layout
+    (``python/kernelforge`` → repo root), then any ``examples/`` found by
+    walking parents / ``cwd``.
+    """
+    env = os.environ.get("KERNELFORGE_EXAMPLES_DIR")
+    if env:
+        return Path(env)
+
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here.parent.parent / "examples",  # source: python/kernelforge → repo
+        Path.cwd() / "examples",
+    ]
+    candidates.extend(parent / "examples" for parent in here.parents)
+
+    marker = "small_mols_mini_train.npz"
+    for cand in candidates:
+        if (cand / marker).exists():
+            return cand
+    return candidates[0]
+
+
+_EXAMPLES_DIR = _resolve_examples_dir()
 SMALL_MOLS_TRAIN_NPZ = _EXAMPLES_DIR / "small_mols_mini_train.npz"
 SMALL_MOLS_TEST_NPZ = _EXAMPLES_DIR / "small_mols_mini_test.npz"
 
