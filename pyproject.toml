@@ -45,6 +45,8 @@ ase = [
 ]
 # Linux-only: pulls a CUDA-capable torch wheel plus the companion package that
 # drops cuda_*.so into site-packages/kernelforge/. No-op on macOS/Windows.
+# The companion is resolved from packaging/kernelforge-cuda via tool.uv.sources
+# until it is published to PyPI (PR5).
 cuda = [
     "torch>=2.2; sys_platform == 'linux'",
     "kernelforge-cuda>=0.3.0; sys_platform == 'linux'",
@@ -59,8 +61,10 @@ kernelmd = "kernelforge.kernelmd:main"
 Homepage = "https://github.com/andersx/kernelforge"
 Issues = "https://github.com/andersx/kernelforge/issues"
 
-# Monorepo-only: let `uv` resolve the [cuda] extra from the companion package
-# path before kernelforge-cuda is on PyPI. Does not affect published metadata.
+# Resolve [cuda] → kernelforge-cuda from the monorepo path so `uv sync` can
+# satisfy the optional extra before the companion is on PyPI. Published
+# package metadata is unchanged (still Depends-on kernelforge-cuda).
+# Companion must NOT depend on `kernelforge` or this becomes a resolve cycle.
 [tool.uv.sources]
 kernelforge-cuda = { path = "packaging/kernelforge-cuda" }
 

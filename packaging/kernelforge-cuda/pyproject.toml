@@ -29,10 +29,10 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
-# Same major.minor as the matching kernelforge release; loose lower bound so
-# local path installs and RCs resolve. Released wheels share a git tag version.
+# Intentionally does NOT depend on `kernelforge`: the [cuda] extra installs
+# both packages, and a hard dep would create a uv resolve cycle with the
+# monorepo path source. Install CPU `kernelforge` first (or via [cuda]).
 dependencies = [
-    "kernelforge>=0.3.0",
     "torch>=2.2",
     "numpy>=2.00",
 ]
