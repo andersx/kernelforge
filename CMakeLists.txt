@@ -313,16 +313,17 @@ if(KF_WITH_CUDA)
   unset(CUDA_cusolver_LIBRARY CACHE)
   unset(CUDA_cublas_LIBRARY CACHE)
   unset(CUDA_cudart_LIBRARY CACHE)
+  unset(CUDA_nvrtc_LIBRARY CACHE)
   if(DEFINED ENV{CUDA_HOME} AND NOT "$ENV{CUDA_HOME}" STREQUAL "")
     set(CUDAToolkit_ROOT "$ENV{CUDA_HOME}")
   elseif(EXISTS "/usr/local/cuda")
     set(CUDAToolkit_ROOT "/usr/local/cuda")
   endif()
-  find_package(CUDAToolkit REQUIRED COMPONENTS cudart cublas cusolver)
+  find_package(CUDAToolkit REQUIRED COMPONENTS cudart cublas cusolver nvrtc)
   if(NOT TARGET CUDA::cusolver)
     message(FATAL_ERROR
       "find_package(CUDAToolkit) succeeded but CUDA::cusolver is missing. "
-      "Install libcusolver / libcusolver-devel for this CUDA toolkit.")
+      "Install cuda-libraries-devel for this CUDA toolkit.")
   endif()
 
   message(STATUS
