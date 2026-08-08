@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"   # host Python, cibuildwheel makes all others
+          python-version: "3.14"   # host Python, cibuildwheel makes all others
 
       - name: Clean wheelhouse and build artifacts
         run: |

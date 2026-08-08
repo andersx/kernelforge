@@ -27,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Install code quality tools
         run: uv pip install --system ruff==0.16.1 ty==0.0.69 "numpy==2.4.4" pytest
