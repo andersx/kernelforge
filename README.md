@@ -64,6 +64,18 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 
 **Note**: The `-DKF_USE_NATIVE=ON` flag enables `-march=native`/`-mcpu=native` optimizations for maximum performance on your specific CPU.
 
+### Linux with CUDA (development)
+
+PyPI wheels are CPU-only. To also build the optional CUDA extensions locally
+(requires CUDA toolkit + PyTorch):
+
+```bash
+source /opt/intel/oneapi/setvars.sh
+make install-linux-mkl-ilp64-cuda
+```
+
+A future ``kernelforge[cuda]`` extra / companion wheel is planned for PyPI installs.
+
 ## Advanced: Custom BLAS/LAPACK Libraries
 
 ### Intel MKL (Linux)
