@@ -80,6 +80,7 @@ RMD17_BASE_URL = "https://raw.githubusercontent.com/andersx/rmd17-npz/master/rmd
 
 CACHE_DIR = Path.home() / ".kernelforge" / "datasets"
 
+
 def _resolve_examples_dir() -> Path:
     """Locate ``examples/`` containing the bundled small_mols_mini NPZ files.
 
