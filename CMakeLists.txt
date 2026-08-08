@@ -1,19 +1,26 @@
 cmake_minimum_required(VERSION 3.18)
 project(kernelforge LANGUAGES C CXX)
 
-# Optional CUDA language — enabled below if the compiler is found
-include(CheckLanguage)
-check_language(CUDA)
-if(CMAKE_CUDA_COMPILER)
-  enable_language(CUDA)
-endif()
-
 # C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(KF_BLAS_ILP64 "Use 64-bit integers for BLAS/LAPACK (ILP64)" OFF)
+# CUDA/Torch extensions are opt-in. Default OFF so CPU wheels and plain
+# `make install-*` never accidentally pull in nvcc/torch.
+option(KF_WITH_CUDA "Build CUDA + Torch extensions" OFF)
+
+if(KF_WITH_CUDA)
+  include(CheckLanguage)
+  check_language(CUDA)
+  if(NOT CMAKE_CUDA_COMPILER)
+    message(FATAL_ERROR
+      "KF_WITH_CUDA=ON but no CUDA compiler was found. "
+      "Install a CUDA toolkit / set CMAKE_CUDA_COMPILER, or build with -DKF_WITH_CUDA=OFF.")
+  endif()
+  enable_language(CUDA)
+endif()
 
 if(APPLE)
 
@@ -241,62 +248,62 @@ kf_add_cpp_module(fchl18_kernel
            src/fchl18_full_kernels.cpp
   BINDINGS src/fchl18_kernel_bindings.cpp)
 
-# ---- Optional CUDA + PyTorch extension: cuda_global_kernels -----------------
-if(CMAKE_CUDA_COMPILER)
-  find_package(CUDAToolkit QUIET)
+# ---- Optional CUDA + PyTorch extensions (KF_WITH_CUDA) ----------------------
+if(KF_WITH_CUDA)
+  find_package(CUDAToolkit REQUIRED)
 
-    if(CUDAToolkit_FOUND)
-    # Try to locate PyTorch CMake config.  The scikit-build-core build process
-    # uses an isolated temporary Python (which may not have torch).  Fall back
-    # to VIRTUAL_ENV/bin/python (the project venv, which does have torch).
-    # Locate PyTorch CMake config.  scikit-build-core builds use an isolated
-    # Python that may lack torch.  Try the project venv (.venv) first, then
-    # the build Python, then common conda/venv locations.
-    set(_TORCH_CMAKE_PREFIX "")
-    foreach(_py_candidate
-        "${CMAKE_SOURCE_DIR}/.venv/bin/python"
-        "${Python_EXECUTABLE}"
-        "$ENV{VIRTUAL_ENV}/bin/python"
-        "$ENV{CONDA_PREFIX}/bin/python")
-      if(EXISTS "${_py_candidate}" AND NOT _TORCH_CMAKE_PREFIX)
-        execute_process(
-          COMMAND "${_py_candidate}" -c
-                  "import torch; print(torch.utils.cmake_prefix_path)"
-          OUTPUT_VARIABLE _TORCH_CMAKE_PREFIX
-          OUTPUT_STRIP_TRAILING_WHITESPACE
-          RESULT_VARIABLE _TORCH_RESULT
-          ERROR_QUIET)
-        if(NOT _TORCH_RESULT EQUAL 0)
-          set(_TORCH_CMAKE_PREFIX "")
-        endif()
+  # Locate PyTorch CMake config.  scikit-build-core builds use an isolated
+  # Python that may lack torch.  Try the project venv (.venv) first, then
+  # the build Python, then common conda/venv locations.
+  set(_TORCH_CMAKE_PREFIX "")
+  foreach(_py_candidate
+      "${CMAKE_SOURCE_DIR}/.venv/bin/python"
+      "${Python_EXECUTABLE}"
+      "$ENV{VIRTUAL_ENV}/bin/python"
+      "$ENV{CONDA_PREFIX}/bin/python")
+    if(EXISTS "${_py_candidate}" AND NOT _TORCH_CMAKE_PREFIX)
+      execute_process(
+        COMMAND "${_py_candidate}" -c
+                "import torch; print(torch.utils.cmake_prefix_path)"
+        OUTPUT_VARIABLE _TORCH_CMAKE_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _TORCH_RESULT
+        ERROR_QUIET)
+      if(NOT _TORCH_RESULT EQUAL 0)
+        set(_TORCH_CMAKE_PREFIX "")
       endif()
-    endforeach()
-
-    if(_TORCH_CMAKE_PREFIX)
-      list(PREPEND CMAKE_PREFIX_PATH "${_TORCH_CMAKE_PREFIX}")
-      find_package(Torch QUIET)
     endif()
+  endforeach()
 
-    if(Torch_FOUND)
-      message(STATUS
-        "CUDA ${CMAKE_CUDA_COMPILER_VERSION} + Torch ${Torch_VERSION} — "
-        "building CUDA kernel extensions")
+  if(_TORCH_CMAKE_PREFIX)
+    list(PREPEND CMAKE_PREFIX_PATH "${_TORCH_CMAKE_PREFIX}")
+    find_package(Torch REQUIRED)
+  else()
+    message(FATAL_ERROR
+      "KF_WITH_CUDA=ON but PyTorch was not found. "
+      "Install torch in the project venv (or set CMAKE_PREFIX_PATH), "
+      "or build with -DKF_WITH_CUDA=OFF.")
+  endif()
 
-      # libtorch_python.so provides the pybind11 type_caster<at::Tensor>
-      # specialisations; without it the modules fail to load at runtime.
-      find_library(_LIBTORCH_PYTHON torch_python
-        PATHS "${TORCH_INSTALL_PREFIX}/lib"
-        NO_DEFAULT_PATH)
+  message(STATUS
+    "CUDA ${CMAKE_CUDA_COMPILER_VERSION} + Torch ${Torch_VERSION} — "
+    "building CUDA kernel extensions")
 
-      # ---- cuda_global_kernels ----
-      pybind11_add_module(cuda_global_kernels MODULE
-        src/cuda_global_kernels.cu
-        src/cuda_global_kernels_bindings.cpp
-        src/curfp_handle.cpp
-        src/curfp_ssfrk.cpp
-        src/curfp_ssfr2.cpp
-        src/curfp_spftrf.cpp
-        src/curfp_spftrs.cpp)
+  # libtorch_python.so provides the pybind11 type_caster<at::Tensor>
+  # specialisations; without it the modules fail to load at runtime.
+  find_library(_LIBTORCH_PYTHON torch_python
+    PATHS "${TORCH_INSTALL_PREFIX}/lib"
+    NO_DEFAULT_PATH)
+
+  # ---- cuda_global_kernels ----
+  pybind11_add_module(cuda_global_kernels MODULE
+    src/cuda_global_kernels.cu
+    src/cuda_global_kernels_bindings.cpp
+    src/curfp_handle.cpp
+    src/curfp_ssfrk.cpp
+    src/curfp_ssfr2.cpp
+    src/curfp_spftrf.cpp
+    src/curfp_spftrs.cpp)
 
       # Torch include dirs must precede the standalone pybind11 headers so that
       # torch/extension.h's bundled pybind11 wins the header-guard race.
@@ -499,15 +506,8 @@ if(CMAKE_CUDA_COMPILER)
 
       list(APPEND _KF_ALL_MODULES cuda_solvers)
 
-    else()
-      message(STATUS
-        "CUDA found but Torch not found — skipping optional CUDA kernel extensions")
-    endif()
-  else()
-    message(STATUS "CUDAToolkit not found — skipping optional CUDA kernel extensions")
-  endif()
 else()
-  message(STATUS "No CUDA compiler found — skipping optional CUDA kernel extensions")
+  message(STATUS "KF_WITH_CUDA=OFF — skipping CUDA kernel extensions")
 endif()
 
 # ---- Install ----------------------------------------------------------------

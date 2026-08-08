@@ -67,7 +67,7 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 ### Linux with CUDA (development)
 
 PyPI wheels are CPU-only. To also build the optional CUDA extensions locally
-(requires CUDA toolkit + PyTorch):
+(requires CUDA toolkit + PyTorch; the Makefile sets ``-DKF_WITH_CUDA=ON``):
 
 ```bash
 source /opt/intel/oneapi/setvars.sh

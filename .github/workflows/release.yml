@@ -57,7 +57,7 @@ jobs:
             CPPFLAGS="-I/usr/include/openblas"
             CFLAGS="-I/usr/include/openblas"
             LD_LIBRARY_PATH="/usr/lib64:$LD_LIBRARY_PATH"
-            CMAKE_ARGS="-DBLAS_LIBRARIES=/usr/lib64/libopenblas.so -DBLAS_INCLUDE_DIR=/usr/include/openblas -DCMAKE_CXX_FLAGS=-I/usr/include/openblas -DCMAKE_C_FLAGS=-I/usr/include/openblas"
+            CMAKE_ARGS="-DKF_WITH_CUDA=OFF -DBLAS_LIBRARIES=/usr/lib64/libopenblas.so -DBLAS_INCLUDE_DIR=/usr/include/openblas -DCMAKE_CXX_FLAGS=-I/usr/include/openblas -DCMAKE_C_FLAGS=-I/usr/include/openblas"
             OPENBLAS_NUM_THREADS=1
             OMP_NUM_THREADS=1
           CIBW_ENVIRONMENT_PASS_LINUX: >
@@ -69,7 +69,7 @@ jobs:
             OMP_NUM_THREADS
           CIBW_ENVIRONMENT_MACOS: >
             MACOSX_DEPLOYMENT_TARGET=15.0
-            CMAKE_ARGS="-DBLAS_VENDOR=Apple
+            CMAKE_ARGS="-DKF_WITH_CUDA=OFF -DBLAS_VENDOR=Apple
               -DCMAKE_CXX_FLAGS=-I/opt/homebrew/opt/libomp/include
               -DCMAKE_C_FLAGS=-I/opt/homebrew/opt/libomp/include
               -DCMAKE_SHARED_LINKER_FLAGS=-L/opt/homebrew/opt/libomp/lib
