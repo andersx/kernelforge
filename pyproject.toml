@@ -43,10 +43,11 @@ dev = [
 ase = [
     "ase>=3.28.0",
 ]
-# Linux-only: pulls a CUDA-capable torch wheel plus the companion package that
-# drops cuda_*.so into site-packages/kernelforge/. No-op on macOS/Windows.
-# The companion is resolved from packaging/kernelforge-cuda via tool.uv.sources
-# until it is published to PyPI (PR5).
+# Linux-only optional deps for CUDA workflows. Pulls torch + the companion
+# package that drops cuda_*.so into site-packages/kernelforge/. No-op on
+# macOS/Windows. A default-index torch install may be CPU-only; install a CUDA
+# build of PyTorch separately if you need GPU execution. Until the companion
+# is on PyPI, monorepo users resolve it via tool.uv.sources below.
 cuda = [
     "torch>=2.2; sys_platform == 'linux'",
     "kernelforge-cuda>=0.3.0; sys_platform == 'linux'",

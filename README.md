@@ -66,29 +66,32 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 
 ### Linux with CUDA (development)
 
-PyPI ships a **CPU** ``kernelforge`` wheel plus an optional Linux companion
-``kernelforge-cuda`` that drops ``cuda_*.so`` into ``site-packages/kernelforge/``:
+Planned PyPI layout: a **CPU** ``kernelforge`` wheel plus a Linux companion
+``kernelforge-cuda`` that drops ``cuda_*.so`` into ``site-packages/kernelforge/``.
+The companion is **not published yet**; until then use a local monorepo build or
+build both wheels yourself:
+
+```bash
+# Day-to-day monorepo (one editable tree with CPU+CUDA):
+source /opt/intel/oneapi/setvars.sh
+make install-linux-mkl-ilp64-cuda   # passes -DKF_WITH_CUDA=ON
+
+# Or build the split wheels and smoke-test imports in a fresh venv:
+make demo-cuda-wheels
+```
+
+Once the companion is on PyPI, Linux users will be able to install with:
 
 ```bash
 uv pip install kernelforge                 # CPU
-uv pip install 'kernelforge[cuda]'         # Linux: + torch + kernelforge-cuda
+uv pip install 'kernelforge[cuda]'         # + torch + kernelforge-cuda
 ```
 
-Until the companion is on PyPI, build both wheels locally and try them:
+Note: ``pip``/``uv`` install ``torch`` from the default index may be CPU-only;
+install a CUDA build of PyTorch (e.g. from the PyTorch CUDA wheel index) if you
+need GPU execution. Also requires an NVIDIA driver compatible with that build.
 
-```bash
-make demo-cuda-wheels   # builds dist/*.whl and smoke-tests imports in a fresh venv
-```
-
-For day-to-day monorepo work (one editable tree with CPU+CUDA), keep using:
-
-```bash
-source /opt/intel/oneapi/setvars.sh
-make install-linux-mkl-ilp64-cuda   # passes -DKF_WITH_CUDA=ON
-```
-
-Requires a CUDA toolkit + PyTorch for local builds, and an NVIDIA driver
-compatible with the torch CUDA build for runtime.
+Requires a CUDA toolkit + PyTorch for local builds.
 
 ## Advanced: Custom BLAS/LAPACK Libraries
 

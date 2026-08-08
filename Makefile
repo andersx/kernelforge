@@ -49,9 +49,11 @@ wheel-cuda:
 	uv build --wheel --no-build-isolation -o ../../dist
 
 # Fresh-venv smoke: CPU wheel + companion wheel → import cuda_* modules.
+# Override with e.g. DEMO_PYTHON=3.12 if needed; default is the active interpreter.
+DEMO_PYTHON ?=
 demo-cuda-wheels: wheel-cpu wheel-cuda
 	rm -rf /tmp/kf-cuda-demo-venv
-	uv venv /tmp/kf-cuda-demo-venv --python 3.14
+	uv venv /tmp/kf-cuda-demo-venv $(if $(DEMO_PYTHON),--python $(DEMO_PYTHON),)
 	uv pip install --python /tmp/kf-cuda-demo-venv $$(ls -1 dist/kernelforge-*.whl | grep -v kernelforge_cuda | grep -v kernelforge-cuda | tail -1)
 	uv pip install --python /tmp/kf-cuda-demo-venv --find-links dist 'kernelforge-cuda'
 	/tmp/kf-cuda-demo-venv/bin/python packaging/kernelforge-cuda/smoke_imports.py
