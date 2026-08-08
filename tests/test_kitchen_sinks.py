@@ -112,7 +112,7 @@ class TestRffFeatures:
             (1, 100, 500),
             (500, 1, 1),
             (10, 10, 10),
-            (1000, 200, 4000),
+            pytest.param(1000, 200, 4000, marks=pytest.mark.slow),
         ],
     )
     def test_various_sizes(self, N: int, rep_size: int, D: int) -> None:
