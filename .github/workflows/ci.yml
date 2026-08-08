@@ -66,6 +66,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          python-version: ${{ matrix.python-version }}
 
       - name: Build & install (macOS only)
         if: runner.os == 'macOS'
@@ -73,23 +74,26 @@ jobs:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp
+          CMAKE_ARGS: >-
+            -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang
+            -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
         run: |
-          uv sync --dev --all-extras
-          uv pip install scikit-build-core pybind11 setuptools-scm
-          CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
-                      -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++" \
-            uv pip install -e .[test] --no-build-isolation
+          # Install deps only — avoid compiling the extension twice (uv sync + editable).
+          uv sync --dev --all-extras --no-install-project
+          uv pip install scikit-build-core pybind11 setuptools-scm setuptools wheel
+          uv pip install -e . --no-build-isolation --no-deps
 
       - name: Build & install (Linux only)
-        if: runner.os == 'linux'
+        if: runner.os == 'Linux'
         env:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
+          CMAKE_ARGS: "-DKF_BLAS_ILP64=ON"
         run: |
-          uv sync --dev --all-extras
-          uv pip install scikit-build-core pybind11 setuptools-scm
-          CMAKE_ARGS="-DKF_BLAS_ILP64=ON" \
-            uv pip install -e .[test] --no-build-isolation
+          # Install deps only — avoid compiling the extension twice (uv sync + editable).
+          uv sync --dev --all-extras --no-install-project
+          uv pip install scikit-build-core pybind11 setuptools-scm setuptools wheel
+          uv pip install -e . --no-build-isolation --no-deps
 
 
       - name: Run pytest
