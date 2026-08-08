@@ -88,8 +88,96 @@ jobs:
         with:
           name: wheels-${{ runner.os }}
           path: wheelhouse/*
+
+  # Linux-only companion wheels (cuda_*.so). Hosted runners have no GPU;
+  # nvcc cross-compiles for TORCH_CUDA_ARCH_LIST. Do not run GPU tests here.
+  build-wheels-cuda:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Clean wheelhouse
+        run: rm -rf wheelhouse-cuda/
+
+      - name: Install cibuildwheel
+        run: python -m pip install cibuildwheel==4.2.0
+
+      - name: Build kernelforge-cuda wheels
+        env:
+          # Match CUDA major across: manylinux image, torch wheel index, runtime.
+          CIBW_MANYLINUX_X86_64_IMAGE: >-
+            quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda13_1:latest
+          CIBW_BUILD: >-
+            cp310-manylinux_x86_64
+            cp311-manylinux_x86_64
+            cp312-manylinux_x86_64
+            cp313-manylinux_x86_64
+            cp314-manylinux_x86_64
+            cp315-manylinux_x86_64
+          CIBW_SKIP: "pp* *-musllinux_* *i686* cp31?t-*"
+          CIBW_ARCHS_LINUX: x86_64
+          # Companion has no in-tree tests; skip GPU pytest on hosted runners.
+          CIBW_TEST_SKIP: "*"
+          CIBW_BEFORE_ALL_LINUX: |
+            yum -y install openblas-devel || dnf -y install openblas-devel
+          CIBW_BEFORE_BUILD_LINUX: |
+            python -m pip install --upgrade pip
+            # Same CUDA major as the manylinux_cuda image (13.x → cu130).
+            python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+          CIBW_ENVIRONMENT_LINUX: >
+            OMP_NUM_THREADS=1
+            OPENBLAS_NUM_THREADS=1
+            TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0;10.0;12.0"
+            CPPFLAGS="-I/usr/include/openblas"
+            CFLAGS="-I/usr/include/openblas"
+            LD_LIBRARY_PATH="/usr/lib64:$LD_LIBRARY_PATH"
+            CMAKE_ARGS="-DKF_WITH_CUDA=ON -DKF_CUDA_ONLY=ON -DKF_BLAS_VENDOR=OpenBLAS -DBLAS_LIBRARIES=/usr/lib64/libopenblas.so -DBLAS_INCLUDE_DIR=/usr/include/openblas -DCMAKE_CXX_FLAGS=-I/usr/include/openblas -DCMAKE_C_FLAGS=-I/usr/include/openblas"
+          CIBW_ENVIRONMENT_PASS_LINUX: >
+            OMP_NUM_THREADS
+            OPENBLAS_NUM_THREADS
+            TORCH_CUDA_ARCH_LIST
+            CPPFLAGS
+            CFLAGS
+            LD_LIBRARY_PATH
+            CMAKE_ARGS
+          # Do not vendor CUDA/Torch shared libs; users provide them via torch + driver.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            auditwheel repair -w {dest_dir} {wheel}
+            --exclude libcuda.so.1
+            --exclude libnvidia-ml.so.1
+            --exclude libcudart.so.12
+            --exclude libcudart.so.13
+            --exclude libcudart.so.*
+            --exclude libcublas.so.*
+            --exclude libcublasLt.so.*
+            --exclude libcusolver.so.*
+            --exclude libcusparse.so.*
+            --exclude libnvJitLink.so.*
+            --exclude libnvrtc.so.*
+            --exclude libcupti.so.*
+            --exclude libc10.so
+            --exclude libc10_cuda.so
+            --exclude libtorch.so
+            --exclude libtorch_cpu.so
+            --exclude libtorch_cuda.so
+            --exclude libtorch_python.so
+            --exclude libgomp.so.1
+        run: python -m cibuildwheel packaging/kernelforge-cuda --output-dir wheelhouse-cuda
+
+      - name: Upload CUDA artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-cuda-Linux
+          path: wheelhouse-cuda/*
+
   publish:
-    needs: build-wheels
+    needs: [build-wheels, build-wheels-cuda]
     runs-on: ubuntu-26.04
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     permissions:
@@ -105,11 +193,18 @@ jobs:
           name: wheels-macOS
           path: dist
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheels-cuda-Linux
+          path: dist
+
       - name: Flatten artifacts
         run: |
           mkdir -p dist/flat
           find dist -name '*.whl' -exec cp {} dist/flat/ \;
           find dist -name '*.tar.gz' -exec cp {} dist/flat/ \;
+          echo "Publishing packages:"
+          ls -la dist/flat
 
       - uses: pypa/gh-action-pypi-publish@v1.14.2
         with:
