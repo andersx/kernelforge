@@ -138,6 +138,13 @@ jobs:
             python -m pip install --upgrade pip
             # Same CUDA major as the manylinux_cuda image (13.x → cu130).
             python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+            # Build isolation cannot resolve torch for cp315 from PyPI alone
+            # (cu130 wheels live on download.pytorch.org). Install build-system
+            # deps into the build env and disable isolation.
+            python -m pip install "scikit-build-core>=0.9" "setuptools-scm>=8.0" \
+              pybind11 setuptools wheel
+          # Use the torch installed above; avoid isolated pip hitting PyPI-only.
+          CIBW_BUILD_FRONTEND: "build; args: --no-isolation"
           CIBW_ENVIRONMENT_LINUX: >
             OMP_NUM_THREADS=1
             OPENBLAS_NUM_THREADS=1
