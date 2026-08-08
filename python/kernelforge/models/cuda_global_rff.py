@@ -47,9 +47,11 @@ def _require_cuda() -> None:
         msg = "PyTorch is required for CudaGlobalRFFModel."
         raise ImportError(msg)
     if not (_CUDA_RFF_AVAILABLE and _CUDA_KERNELS_AVAILABLE):
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
         msg = (
             "cuda_rff_features and cuda_global_kernels are required for "
-            "CudaGlobalRFFModel. Re-build kernelforge with CUDA, CUDAToolkit, and PyTorch."
+            f"CudaGlobalRFFModel.\n{CUDA_EXT_HINT}"
         )
         raise ImportError(msg)
 

@@ -1,0 +1,65 @@
+[build-system]
+requires = [
+    "scikit-build-core>=0.9",
+    "setuptools-scm>=8.0",
+    "pybind11",
+    "setuptools",
+    "wheel",
+    # Needed so isolated builds can run find_package(Torch). Prefer
+    # --no-build-isolation when a local torch is already installed.
+    "torch>=2.2",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "kernelforge-cuda"
+dynamic = ["version"]
+description = "CUDA extensions for KernelForge (Linux)"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Anders Christensen"}]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+# Same major.minor as the matching kernelforge release; loose lower bound so
+# local path installs and RCs resolve. Released wheels share a git tag version.
+dependencies = [
+    "kernelforge>=0.3.0",
+    "torch>=2.2",
+    "numpy>=2.00",
+]
+
+[project.urls]
+Homepage = "https://github.com/andersx/kernelforge"
+Issues = "https://github.com/andersx/kernelforge/issues"
+
+[tool.scikit-build]
+# Build against the monorepo root CMakeLists / src tree.
+cmake.source-dir = "../.."
+wheel.packages = []
+cmake.build-type = "Release"
+build.verbose = true
+
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.setuptools_scm"
+
+[tool.scikit-build.cmake.define]
+CMAKE_VERBOSE_MAKEFILE = "ON"
+CMAKE_BUILD_TYPE = "Release"
+KF_WITH_CUDA = "ON"
+KF_CUDA_ONLY = "ON"
+
+[tool.setuptools_scm]
+root = "../.."
+version_scheme = "python-simplified-semver"
+local_scheme = "no-local-version"
+tag_regex = "^v?(?P<version>[0-9.]+)$"
+fallback_version = "0.0.0.dev0"

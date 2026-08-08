@@ -36,6 +36,26 @@ install-linux-openblas-ilp64:
 install-linux-mkl-ilp64-cuda:
 	TORCH_CUDA_ARCH_LIST="$${TORCH_CUDA_ARCH_LIST:-$(if $(TORCH_CUDA_ARCH_LIST),$(TORCH_CUDA_ARCH_LIST),12.0)}" CMAKE_BUILD_PARALLEL_LEVEL="$(NPROC)" CMAKE_ARGS="$(CUDA_LOCAL_FAST_CMAKE_ARGS)" uv pip install -e .[test,dev] --verbose
 
+# Build CPU + companion CUDA wheels into dist/ (split PyPI layout).
+wheel-cpu:
+	CMAKE_ARGS="-DKF_WITH_CUDA=OFF" uv build --wheel -o dist
+
+wheel-cuda:
+	uv pip install 'setuptools-scm>=8' scikit-build-core pybind11 setuptools wheel
+	cd packaging/kernelforge-cuda && \
+	TORCH_CUDA_ARCH_LIST="$${TORCH_CUDA_ARCH_LIST:-$(if $(TORCH_CUDA_ARCH_LIST),$(TORCH_CUDA_ARCH_LIST),12.0)}" \
+	CMAKE_BUILD_PARALLEL_LEVEL="$(NPROC)" \
+	CMAKE_ARGS="$(CUDA_LOCAL_FAST_CMAKE_ARGS) -DKF_CUDA_ONLY=ON" \
+	uv build --wheel --no-build-isolation -o ../../dist
+
+# Fresh-venv smoke: CPU wheel + companion wheel → import cuda_* modules.
+demo-cuda-wheels: wheel-cpu wheel-cuda
+	rm -rf /tmp/kf-cuda-demo-venv
+	uv venv /tmp/kf-cuda-demo-venv --python 3.14
+	uv pip install --python /tmp/kf-cuda-demo-venv $$(ls -1 dist/kernelforge-*.whl | grep -v kernelforge_cuda | grep -v kernelforge-cuda | tail -1)
+	uv pip install --python /tmp/kf-cuda-demo-venv --find-links dist 'kernelforge-cuda'
+	/tmp/kf-cuda-demo-venv/bin/python packaging/kernelforge-cuda/smoke_imports.py
+
 install-macos:
 	CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ -DKF_USE_NATIVE=ON " uv pip install -e .[test,dev] --verbose
 

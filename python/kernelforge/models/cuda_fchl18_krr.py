@@ -60,19 +60,17 @@ def _require_torch() -> None:
 
 def _require_cuda_kernel() -> None:
     if not _CUDA_KERNEL_AVAILABLE:
-        msg = (
-            "cuda_fchl18_kernel is not available. Re-build kernelforge with CUDA and PyTorch:\n"
-            "    make install-linux-mkl-ilp64"
-        )
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
+        msg = f"cuda_fchl18_kernel is not available.\n{CUDA_EXT_HINT}"
         raise ImportError(msg)
 
 
 def _require_cuda_repr() -> None:
     if not _CUDA_REPR_AVAILABLE:
-        msg = (
-            "cuda_fchl18_repr is not available. Re-build kernelforge with CUDA and PyTorch:\n"
-            "    make install-linux-mkl-ilp64"
-        )
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
+        msg = f"cuda_fchl18_repr is not available.\n{CUDA_EXT_HINT}"
         raise ImportError(msg)
 
 

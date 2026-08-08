@@ -726,58 +726,31 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
     if args.cuda:
         import importlib.util
 
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
+        def _need(mod: str, why: str) -> None:
+            if importlib.util.find_spec(f"kernelforge.{mod}") is None:
+                parser.error(f"{why} requires {mod} (not built).\n{CUDA_EXT_HINT}")
+
         # Check that the appropriate CUDA extension is built
         if args.representation == "invdist":
-            if importlib.util.find_spec("kernelforge.cuda_global_kernels") is None:
-                parser.error(
-                    "--cuda with --representation invdist requires cuda_global_kernels "
-                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
-                    "and PyTorch:\n    make install-linux-mkl-ilp64"
-                )
-            if (
-                args.regressor == "rff"
-                and importlib.util.find_spec("kernelforge.cuda_rff_features") is None
-            ):
-                parser.error(
-                    "--cuda --regressor rff with --representation invdist requires "
-                    "cuda_rff_features (not built). Re-build kernelforge with a CUDA "
-                    "compiler, CUDAToolkit, and PyTorch:\n    make install-linux-mkl-ilp64"
+            _need("cuda_global_kernels", "--cuda with --representation invdist")
+            if args.regressor == "rff":
+                _need(
+                    "cuda_rff_features",
+                    "--cuda --regressor rff with --representation invdist",
                 )
         elif args.representation == "fchl19":
-            if importlib.util.find_spec("kernelforge.cuda_local_kernels") is None:
-                parser.error(
-                    "--cuda with --representation fchl19 requires cuda_local_kernels "
-                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
-                    "and PyTorch:\n    make install-linux-mkl-ilp64"
-                )
-            if (
-                args.regressor == "rff"
-                and importlib.util.find_spec("kernelforge.cuda_rff_features") is None
-            ):
-                parser.error(
-                    "--cuda --regressor rff with --representation fchl19 requires "
-                    "cuda_rff_features (not built). Re-build kernelforge with a CUDA "
-                    "compiler, CUDAToolkit, and PyTorch:\n    make install-linux-mkl-ilp64"
-                )
-            if importlib.util.find_spec("kernelforge.cuda_fchl19_repr") is None:
-                parser.error(
-                    "--cuda with --representation fchl19 requires cuda_fchl19_repr "
-                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
-                    "and PyTorch:\n    make install-linux-mkl-ilp64"
+            _need("cuda_local_kernels", "--cuda with --representation fchl19")
+            _need("cuda_fchl19_repr", "--cuda with --representation fchl19")
+            if args.regressor == "rff":
+                _need(
+                    "cuda_rff_features",
+                    "--cuda --regressor rff with --representation fchl19",
                 )
         elif args.representation == "fchl18":
-            if importlib.util.find_spec("kernelforge.cuda_fchl18_kernel") is None:
-                parser.error(
-                    "--cuda with --representation fchl18 requires cuda_fchl18_kernel "
-                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
-                    "and PyTorch:\n    make install-linux-mkl-ilp64"
-                )
-            if importlib.util.find_spec("kernelforge.cuda_fchl18_repr") is None:
-                parser.error(
-                    "--cuda with --representation fchl18 requires cuda_fchl18_repr "
-                    "(not built). Re-build kernelforge with a CUDA compiler, CUDAToolkit, "
-                    "and PyTorch:\n    make install-linux-mkl-ilp64"
-                )
+            _need("cuda_fchl18_kernel", "--cuda with --representation fchl18")
+            _need("cuda_fchl18_repr", "--cuda with --representation fchl18")
         else:
             parser.error(
                 f"--cuda requires --representation invdist, fchl19, or fchl18 "

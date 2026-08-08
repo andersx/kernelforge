@@ -10,6 +10,13 @@ option(KF_BLAS_ILP64 "Use 64-bit integers for BLAS/LAPACK (ILP64)" OFF)
 # CUDA/Torch extensions are opt-in. Default OFF so CPU wheels and plain
 # `make install-*` never accidentally pull in nvcc/torch.
 option(KF_WITH_CUDA "Build CUDA + Torch extensions" OFF)
+# Companion-package mode: build/install only CUDA extension modules (no CPU
+# kernels, no Python package files). Used by packaging/kernelforge-cuda.
+option(KF_CUDA_ONLY "Build only CUDA companion extensions" OFF)
+
+if(KF_CUDA_ONLY AND NOT KF_WITH_CUDA)
+  message(FATAL_ERROR "KF_CUDA_ONLY=ON requires KF_WITH_CUDA=ON")
+endif()
 
 if(KF_WITH_CUDA)
   include(CheckLanguage)
@@ -208,45 +215,53 @@ function(kf_add_cpp_module name)
 endfunction()
 
 # ---- C++ modules -------------------------------------------------------------
-kf_add_cpp_module(global_kernels
-  SOURCES  src/global_kernels.cpp
-  BINDINGS src/global_kernels_bindings.cpp)
+if(NOT KF_CUDA_ONLY)
+  kf_add_cpp_module(global_kernels
+    SOURCES  src/global_kernels.cpp
+    BINDINGS src/global_kernels_bindings.cpp)
 
-kf_add_cpp_module(local_kernels
-  SOURCES  src/local_kernels.cpp
-  BINDINGS src/local_kernels_bindings.cpp)
+  kf_add_cpp_module(local_kernels
+    SOURCES  src/local_kernels.cpp
+    BINDINGS src/local_kernels_bindings.cpp)
 
-kf_add_cpp_module(fchl19_repr
-  SOURCES  src/fchl19_repr.cpp
-  BINDINGS src/fchl19_repr_bindings.cpp)
+  kf_add_cpp_module(fchl19_repr
+    SOURCES  src/fchl19_repr.cpp
+    BINDINGS src/fchl19_repr_bindings.cpp)
 
-kf_add_cpp_module(fchl19v2_repr
-  SOURCES  src/fchl19v2_repr.cpp
-  BINDINGS src/fchl19v2_repr_bindings.cpp)
+  kf_add_cpp_module(fchl19v2_repr
+    SOURCES  src/fchl19v2_repr.cpp
+    BINDINGS src/fchl19v2_repr_bindings.cpp)
 
-kf_add_cpp_module(invdist_repr
-  SOURCES  src/invdist_repr.cpp
-  BINDINGS src/invdist_repr_bindings.cpp)
+  kf_add_cpp_module(invdist_repr
+    SOURCES  src/invdist_repr.cpp
+    BINDINGS src/invdist_repr_bindings.cpp)
 
-kf_add_cpp_module(kernelmath
-  SOURCES  src/math.cpp
-  BINDINGS src/math_bindings.cpp)
+  kf_add_cpp_module(kernelmath
+    SOURCES  src/math.cpp
+    BINDINGS src/math_bindings.cpp)
 
-kf_add_cpp_module(kitchen_sinks
-  SOURCES  src/rff_features.cpp src/rff_elemental.cpp
-  BINDINGS src/rff_features_bindings.cpp src/rff_elemental_bindings.cpp)
+  kf_add_cpp_module(kitchen_sinks
+    SOURCES  src/rff_features.cpp src/rff_elemental.cpp
+    BINDINGS src/rff_features_bindings.cpp src/rff_elemental_bindings.cpp)
 
-kf_add_cpp_module(fchl18_repr
-  SOURCES  src/fchl18_repr.cpp
-  BINDINGS src/fchl18_repr_bindings.cpp)
+  kf_add_cpp_module(fchl18_repr
+    SOURCES  src/fchl18_repr.cpp
+    BINDINGS src/fchl18_repr_bindings.cpp)
 
-kf_add_cpp_module(fchl18_kernel
-  SOURCES  src/fchl18_kernel.cpp src/fchl18_repr.cpp
-           src/fchl18_scalar_kernels.cpp
-           src/fchl18_jacobian_kernels.cpp
-           src/fchl18_hessian_kernels.cpp
-           src/fchl18_full_kernels.cpp
-  BINDINGS src/fchl18_kernel_bindings.cpp)
+  kf_add_cpp_module(fchl18_kernel
+    SOURCES  src/fchl18_kernel.cpp src/fchl18_repr.cpp
+             src/fchl18_scalar_kernels.cpp
+             src/fchl18_jacobian_kernels.cpp
+             src/fchl18_hessian_kernels.cpp
+             src/fchl18_full_kernels.cpp
+    BINDINGS src/fchl18_kernel_bindings.cpp)
+elseif(KF_WITH_CUDA)
+  # cuda_local_kernels links $<TARGET_OBJECTS:kf_local_kernels>. Build the
+  # object library only (no CPU Python module) for the companion package.
+  add_library(kf_local_kernels OBJECT src/local_kernels.cpp)
+  target_link_libraries(kf_local_kernels PRIVATE kf_common kf_blas OpenMP::OpenMP_CXX)
+  kf_apply_cxx_flags(kf_local_kernels)
+endif()
 
 # ---- Optional CUDA + PyTorch extensions (KF_WITH_CUDA) ----------------------
 if(KF_WITH_CUDA)
@@ -511,8 +526,25 @@ else()
 endif()
 
 # ---- Install ----------------------------------------------------------------
+if(NOT _KF_ALL_MODULES)
+  message(FATAL_ERROR "No extension modules were configured to build")
+endif()
+
 install(TARGETS ${_KF_ALL_MODULES}
   LIBRARY DESTINATION kernelforge   # Linux/macOS
   RUNTIME DESTINATION kernelforge   # Windows (.pyd)
 )
-install(FILES python/kernelforge/__init__.py DESTINATION kernelforge)
+
+if(KF_WITH_CUDA)
+  file(GLOB _KF_CUDA_STUBS CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/python/kernelforge/cuda_*.pyi")
+  if(_KF_CUDA_STUBS)
+    install(FILES ${_KF_CUDA_STUBS} DESTINATION kernelforge)
+  endif()
+endif()
+
+# Full package installs the Python package via wheel.packages; companion mode
+# only drops CUDA extension modules into an existing kernelforge/ install.
+if(NOT KF_CUDA_ONLY)
+  install(FILES python/kernelforge/__init__.py DESTINATION kernelforge)
+endif()

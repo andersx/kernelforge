@@ -43,6 +43,12 @@ dev = [
 ase = [
     "ase>=3.28.0",
 ]
+# Linux-only: pulls a CUDA-capable torch wheel plus the companion package that
+# drops cuda_*.so into site-packages/kernelforge/. No-op on macOS/Windows.
+cuda = [
+    "torch>=2.2; sys_platform == 'linux'",
+    "kernelforge-cuda>=0.3.0; sys_platform == 'linux'",
+]
 
 [project.scripts]
 kernelbench = "kernelforge.cli:main"
@@ -52,6 +58,11 @@ kernelmd = "kernelforge.kernelmd:main"
 [project.urls]
 Homepage = "https://github.com/andersx/kernelforge"
 Issues = "https://github.com/andersx/kernelforge/issues"
+
+# Monorepo-only: let `uv` resolve the [cuda] extra from the companion package
+# path before kernelforge-cuda is on PyPI. Does not affect published metadata.
+[tool.uv.sources]
+kernelforge-cuda = { path = "packaging/kernelforge-cuda" }
 
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = true

@@ -85,7 +85,8 @@ jobs:
             -DOpenMP_CXX_LIB_NAMES=omp \
             -DOpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib"
           # Install deps only — avoid compiling the extension twice (uv sync + editable).
-          uv sync --dev --all-extras --no-install-project
+          # Do not include the [cuda] extra here (builds the companion / needs nvcc).
+          uv sync --dev --extra test --extra ase --no-install-project
           uv pip install scikit-build-core pybind11 setuptools-scm setuptools wheel
           uv pip install -e . --no-build-isolation --no-deps
 
@@ -97,7 +98,8 @@ jobs:
           CMAKE_ARGS: "-DKF_WITH_CUDA=OFF -DKF_BLAS_ILP64=ON"
         run: |
           # Install deps only — avoid compiling the extension twice (uv sync + editable).
-          uv sync --dev --all-extras --no-install-project
+          # Do not include the [cuda] extra here (builds the companion / needs nvcc).
+          uv sync --dev --extra test --extra ase --no-install-project
           uv pip install scikit-build-core pybind11 setuptools-scm setuptools wheel
           uv pip install -e . --no-build-isolation --no-deps
 
