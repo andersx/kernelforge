@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-26.04, macos-26]
 
     steps:
       - uses: actions/checkout@v6
@@ -90,7 +90,7 @@ jobs:
           path: wheelhouse/*
   publish:
     needs: build-wheels
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     permissions:
       id-token: write
