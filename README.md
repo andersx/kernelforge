@@ -143,7 +143,7 @@ The goal is to remove pain-points of existing QML libraries
 
 - [x] Finish the inverse-distance kernel and its Jacobian
 - [x] Make Pybind11 interface
-  - [ ] Finalize the C++ interface
+  - [x] Finalize the C++ interface
 - [x] Finish the Gaussian kernel
 - [x] Notebook with rMD17 example
 - [x] Finish the Jacobian and Hessian kernels
@@ -165,6 +165,12 @@ The goal is to remove pain-points of existing QML libraries
   - [x] RFF kernel Jacobian for global descriptors
   - [x] RFF kernel Jacobian for local descriptors (FCHL19)
 - [ ] Notebook with rMD17 random Fourier features examples
+- High-level model API + ASE:
+  - [x] Local/global KRR and RFF models (CPU)
+  - [x] CUDA local/global KRR and RFF models
+  - [x] CUDA FCHL18 kernels + ``CudaFCHL18KRRModel``
+  - [x] ASE interface (`KernelForgeCalculator`, `run_md()`, `kernelmd` CLI)
+  - [ ] Optional ``kernelforge[cuda]`` PyPI packaging (companion CUDA wheel)
 
 - Science:
   - Benchmark full kernel vs RFF on rMD17 and QM7b and QM9
@@ -180,7 +186,8 @@ The goal is to remove pain-points of existing QML libraries
   - [x] Test MacOS build matrices
   - [ ] ~~Test Windows build matrices~~ No.
   - [x] Add build for all Python version >=3.10
-  - [ ] Plan structure for saving models for inference as `.npz` files
+  - [x] Model save/load via ``.npz`` (``BaseModel.save`` / ``load``)
+  - [ ] Add mkdocs documentation site
 - Ensure correct linking with optimized BLAS/LAPACK libraries:
   - [x] OpenBLAS (Linux) <- also used in wheels
   - [x] MKL (Linux)

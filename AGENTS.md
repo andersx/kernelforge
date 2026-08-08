@@ -71,6 +71,10 @@ CI gates: `make check` (code-quality workflow) and `make test` (ci workflow) mus
 - Before creating a branch, pull the latest `master`: `git pull origin master`
 - Open a PR for all changes. CI must pass before merging.
 - Pre-commit hooks must pass. Run `make check` and `make test` locally before pushing.
+- **Never add AI / agent co-author trailers** (or equivalent attribution) to commits or
+  PRs. This includes Cursor, Claude, Copilot, ChatGPT, and similar tools — no
+  `Co-authored-by: …`, commit trailers, PR body credits, or other agent branding in
+  git history or GitHub metadata. Commits and PRs are authored by the human only.
 
 ---
 
@@ -124,7 +128,8 @@ Each module requires three files plus a CMakeLists.txt entry:
 - **Type annotations**: Required on all functions (ruff `ANN` rules enforced). Use `numpy.ndarray`
   for arrays; follow existing `.pyi` stubs for dtype conventions.
 - **Type checker**: `ty` (Astral). Not mypy. Run with `make typecheck`.
-- **Formatter/linter**: `ruff` (v0.15.5). Run `make format` to auto-fix, `make lint` to check.
+- **Formatter/linter**: `ruff` (see `pyproject.toml` pin). Run `make format` to auto-fix,
+  `make lint` to check.
 - **Path handling**: Use `pathlib.Path`, not `os.path` (ruff `PTH` rule enforced).
 - **Uppercase variable names** (`X`, `K`, `Q`, `N`) are intentional in scientific code — ruff rules
   N802/N803/N806 are suppressed.
