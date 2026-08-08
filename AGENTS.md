@@ -13,6 +13,18 @@ make install-linux-mkl-ilp64
 
 Other Linux targets: `install-linux-openblas-ilp64`, `install-linux-ilp64`, `install-linux`
 
+### Linux with CUDA (optional)
+
+Requires a CUDA toolkit, a GPU driver, and PyTorch discoverable by CMake:
+
+```bash
+source /opt/intel/oneapi/setvars.sh
+make install-linux-mkl-ilp64-cuda
+```
+
+PyPI wheels are CPU-only today. CUDA extensions are built only when the toolchain
+and Torch are present (or via a future `kernelforge[cuda]` companion wheel).
+
 ### macOS (recommended: ILP64)
 
 Requires Homebrew LLVM and OpenMP:
@@ -71,6 +83,10 @@ CI gates: `make check` (code-quality workflow) and `make test` (ci workflow) mus
 - Before creating a branch, pull the latest `master`: `git pull origin master`
 - Open a PR for all changes. CI must pass before merging.
 - Pre-commit hooks must pass. Run `make check` and `make test` locally before pushing.
+- **Never add AI / agent co-author trailers** (or equivalent attribution) to commits or
+  PRs. This includes Cursor, Claude, Copilot, ChatGPT, and similar tools — no
+  `Co-authored-by: …`, commit trailers, PR body credits, or other agent branding in
+  git history or GitHub metadata. Commits and PRs are authored by the human only.
 
 ---
 
@@ -89,9 +105,12 @@ Pybind11 + scikit-build-core.
 | Representations | `fchl18_repr.*`, `fchl19_repr.*`, `invdist_repr.*` | `fchl18_repr`, `fchl19_repr`, `invdist_repr` | Molecular descriptor generators + Jacobians |
 | RFF / kitchen sinks | `rff_features.*`, `rff_elemental.*` | `kitchen_sinks` | Random Fourier Feature approximations to all kernels |
 | Math / solvers | `math.{cpp,hpp}` | `kernelmath` | Cholesky, QR, SVD solvers; RFP format conversion; `get_blas_info()` |
+| CUDA extensions (optional) | `cuda_*.{cu,hpp,_bindings.cpp}` | `cuda_global_kernels`, `cuda_local_kernels`, `cuda_fchl18_*`, `cuda_fchl19_repr`, `cuda_rff_features`, `cuda_invdist_repr`, `cuda_solvers` | Torch-backed GPU kernels/reprs; required by `Cuda*Model` classes |
+| ASE / MD | Python only | `ase_calculator`, `md`, `kernelmd` | `KernelForgeCalculator`, `run_md()`, `kernelmd` CLI (`kernelforge[ase]`) |
 
 Python shim: `python/kernelforge/__init__.py` re-exports everything from the C++ extension modules.
 Type stubs: `python/kernelforge/*.pyi` — one per extension module.
+High-level models live under `python/kernelforge/models/` (CPU + optional CUDA).
 
 ---
 
@@ -124,7 +143,8 @@ Each module requires three files plus a CMakeLists.txt entry:
 - **Type annotations**: Required on all functions (ruff `ANN` rules enforced). Use `numpy.ndarray`
   for arrays; follow existing `.pyi` stubs for dtype conventions.
 - **Type checker**: `ty` (Astral). Not mypy. Run with `make typecheck`.
-- **Formatter/linter**: `ruff` (v0.15.5). Run `make format` to auto-fix, `make lint` to check.
+- **Formatter/linter**: `ruff` (see `pyproject.toml` pin). Run `make format` to auto-fix,
+  `make lint` to check.
 - **Path handling**: Use `pathlib.Path`, not `os.path` (ruff `PTH` rule enforced).
 - **Uppercase variable names** (`X`, `K`, `Q`, `N`) are intentional in scientific code — ruff rules
   N802/N803/N806 are suppressed.

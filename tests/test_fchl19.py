@@ -194,9 +194,27 @@ def test_three_body_zeroing_block_when_weight_zero() -> None:
 
 
 def test_defaults_match_manual_linspace_construction() -> None:
-    # Ensure the binding's internal linspace matches what we'd build in Python
-    # TODO: Implement test
-    pass
+    """Binding builds Rs2/Rs3/Ts as qmllib linspace grids (see fchl19_repr_bindings)."""
+    nRs2, nRs3, nFourier = 24, 20, 1
+    rcut, acut = 8.0, 8.0
+    elements = [1, 6, 7, 8, 16]
+
+    Rs2 = np.linspace(0.0, rcut, 1 + nRs2, dtype=np.float64)[1:]
+    Rs3 = np.linspace(0.0, acut, 1 + nRs3, dtype=np.float64)[1:]
+    Ts = np.linspace(0.0, np.pi, 2 * nFourier, dtype=np.float64)
+
+    np.testing.assert_allclose(Rs2, rcut * np.arange(1, nRs2 + 1) / nRs2)
+    np.testing.assert_allclose(Rs3, acut * np.arange(1, nRs3 + 1) / nRs3)
+    np.testing.assert_allclose(Ts, np.pi * np.arange(2 * nFourier) / max(2 * nFourier - 1, 1))
+
+    coords = np.array(
+        [[-0.9572, 0.0, 0.0], [0.0000, 0.0, 0.0], [0.9572, 0.0, 0.0]], dtype=np.float64
+    )
+    Z = np.array([1, 8, 1], dtype=np.int32)
+    rep = _call_generate(coords, Z)
+    expected_rep_size = _descr_size(len(elements), len(Rs2), len(Rs3), nFourier)
+    assert rep.shape == (coords.shape[0], expected_rep_size)
+    assert np.all(np.isfinite(rep))
 
 
 def test_rep_matches_between_functions() -> None:
