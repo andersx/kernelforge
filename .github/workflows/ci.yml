@@ -56,7 +56,8 @@ jobs:
 
       - name: Install OpenMP (macOS only)
         if: runner.os == 'macOS'
-        run: brew install libomp llvm
+        # libomp only — Apple Clang + Accelerate; skip Homebrew llvm (~2GB / ~40s).
+        run: brew install libomp
 
       - name: Install OpenBLAS ILP64 + LAPACKE (Linux only)
         if: runner.os == 'Linux'
@@ -74,10 +75,15 @@ jobs:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
           CMAKE_PREFIX_PATH: /opt/homebrew/opt/libomp
-          CMAKE_ARGS: >-
-            -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang
-            -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++
         run: |
+          # Apple Clang + Homebrew libomp + Accelerate (no Homebrew LLVM).
+          # OpenMP_* hints satisfy find_package(OpenMP) without changing CMakeLists.
+          export CMAKE_ARGS="-DOpenMP_ROOT=/opt/homebrew/opt/libomp \
+            -DOpenMP_C_FLAGS=\"-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include\" \
+            -DOpenMP_CXX_FLAGS=\"-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include\" \
+            -DOpenMP_C_LIB_NAMES=omp \
+            -DOpenMP_CXX_LIB_NAMES=omp \
+            -DOpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib"
           # Install deps only — avoid compiling the extension twice (uv sync + editable).
           uv sync --dev --all-extras --no-install-project
           uv pip install scikit-build-core pybind11 setuptools-scm setuptools wheel
