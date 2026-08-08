@@ -129,11 +129,10 @@ jobs:
           CIBW_TEST_SKIP: "*"
           CIBW_BEFORE_ALL_LINUX: |
             yum -y install openblas-devel || dnf -y install openblas-devel
-            # manylinux_cuda images ship nvcc; ensure math-lib devel packages
-            # exist so FindCUDAToolkit can create CUDA::cublas / CUDA::cusolver.
-            yum -y install libcusolver-devel libcublas-devel \
-              || dnf -y install libcusolver-devel libcublas-devel \
-              || true
+            # manylinux_cuda ships nvcc + cublas, but not cuSOLVER. Install the
+            # math-lib packages matching the image CUDA minor (13.1).
+            yum -y install libcusolver-13-1 libcusolver-devel-13-1 \
+              || dnf -y install libcusolver-13-1 libcusolver-devel-13-1
           CIBW_BEFORE_BUILD_LINUX: |
             python -m pip install --upgrade pip
             # Same CUDA major as the manylinux_cuda image (13.x → cu130).
