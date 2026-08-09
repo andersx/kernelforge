@@ -50,9 +50,11 @@ def _require_cuda() -> None:
         msg = "PyTorch is required for CudaLocalRFFModel."
         raise ImportError(msg)
     if not (_CUDA_RFF_AVAILABLE and _CUDA_KERNELS_AVAILABLE):
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
         msg = (
-            "cuda_rff_features and cuda_global_kernels are required for CudaLocalRFFModel. "
-            "Re-build kernelforge with CUDA, CUDAToolkit, and PyTorch."
+            "cuda_rff_features and cuda_global_kernels are required for "
+            f"CudaLocalRFFModel.\n{CUDA_EXT_HINT}"
         )
         raise ImportError(msg)
 
@@ -60,10 +62,9 @@ def _require_cuda() -> None:
 def _require_cuda_solvers() -> None:
     _require_cuda()
     if not _CUDA_SOLVERS_AVAILABLE:
-        msg = (
-            "cuda_solvers is required for solver='svd'/'qr'/'gels'. "
-            "Re-build kernelforge with CUDA, CUDAToolkit, and PyTorch."
-        )
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
+        msg = f"cuda_solvers is required for solver='svd'/'qr'/'gels'.\n{CUDA_EXT_HINT}"
         raise ImportError(msg)
 
 

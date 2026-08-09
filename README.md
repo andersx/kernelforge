@@ -66,15 +66,32 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 
 ### Linux with CUDA (development)
 
-PyPI wheels are CPU-only. To also build the optional CUDA extensions locally
-(requires CUDA toolkit + PyTorch; the Makefile sets ``-DKF_WITH_CUDA=ON``):
+Planned PyPI layout: a **CPU** ``kernelforge`` wheel plus a Linux companion
+``kernelforge-cuda`` that drops ``cuda_*.so`` into ``site-packages/kernelforge/``.
+The companion is **not published yet**; until then use a local monorepo build or
+build both wheels yourself:
 
 ```bash
+# Day-to-day monorepo (one editable tree with CPU+CUDA):
 source /opt/intel/oneapi/setvars.sh
-make install-linux-mkl-ilp64-cuda
+make install-linux-mkl-ilp64-cuda   # passes -DKF_WITH_CUDA=ON
+
+# Or build the split wheels and smoke-test imports in a fresh venv:
+make demo-cuda-wheels
 ```
 
-A future ``kernelforge[cuda]`` extra / companion wheel is planned for PyPI installs.
+Once the companion is on PyPI, Linux users will be able to install with:
+
+```bash
+uv pip install kernelforge                 # CPU
+uv pip install 'kernelforge[cuda]'         # + torch + kernelforge-cuda
+```
+
+Note: ``pip``/``uv`` install ``torch`` from the default index may be CPU-only;
+install a CUDA build of PyTorch (e.g. from the PyTorch CUDA wheel index) if you
+need GPU execution. Also requires an NVIDIA driver compatible with that build.
+
+Requires a CUDA toolkit + PyTorch for local builds.
 
 ## Advanced: Custom BLAS/LAPACK Libraries
 
@@ -182,7 +199,7 @@ The goal is to remove pain-points of existing QML libraries
   - [x] CUDA local/global KRR and RFF models
   - [x] CUDA FCHL18 kernels + ``CudaFCHL18KRRModel``
   - [x] ASE interface (`KernelForgeCalculator`, `run_md()`, `kernelmd` CLI)
-  - [ ] Optional ``kernelforge[cuda]`` PyPI packaging (companion CUDA wheel)
+  - [x] Optional ``kernelforge[cuda]`` PyPI packaging (companion CUDA wheel)
 
 - Science:
   - Benchmark full kernel vs RFF on rMD17 and QM7b and QM9

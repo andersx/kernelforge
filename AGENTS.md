@@ -23,8 +23,14 @@ source /opt/intel/oneapi/setvars.sh
 make install-linux-mkl-ilp64-cuda
 ```
 
-PyPI wheels are CPU-only today (`-DKF_WITH_CUDA=OFF`). A future `kernelforge[cuda]`
-companion wheel will ship the CUDA extensions separately.
+PyPI layout (planned; companion not published yet — see `make demo-cuda-wheels`):
+
+- `kernelforge` — CPU wheels (`-DKF_WITH_CUDA=OFF`)
+- `kernelforge-cuda` — Linux companion that installs `cuda_*.so` into `kernelforge/`
+- `pip install 'kernelforge[cuda]'` — pulls `torch` + `kernelforge-cuda` on Linux
+  (default-index torch may be CPU-only; install a CUDA torch build for GPU)
+
+Metadata lives in `packaging/kernelforge-cuda/pyproject.toml`.
 
 ### macOS (recommended: ILP64)
 

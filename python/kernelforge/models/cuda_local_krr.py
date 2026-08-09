@@ -72,21 +72,17 @@ except ImportError:
 
 def _require_cuda_ext() -> None:
     if not _CUDA_EXT_AVAILABLE:
-        msg = (
-            "cuda_local_kernels is not available.  "
-            "Re-build kernelforge with a CUDA compiler, CUDAToolkit, and PyTorch present:\n"
-            "    make install-linux-mkl-ilp64   (or another Makefile target)\n"
-            "Both CUDA and torch must be discoverable by CMake at build time."
-        )
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
+        msg = f"cuda_local_kernels is not available.\n{CUDA_EXT_HINT}"
         raise ImportError(msg)
 
 
 def _require_cuda_fchl19() -> None:
     if not _CUDA_FCHL19_AVAILABLE:
-        msg = (
-            "cuda_fchl19_repr is not available. Re-build kernelforge with CUDA and PyTorch "
-            "present:\n    make install-linux-mkl-ilp64   (or another Makefile target)"
-        )
+        from kernelforge._cuda_hints import CUDA_EXT_HINT
+
+        msg = f"cuda_fchl19_repr is not available.\n{CUDA_EXT_HINT}"
         raise ImportError(msg)
 
 
