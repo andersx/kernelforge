@@ -173,6 +173,7 @@ class TestCudaFCHL18KRRModelFP32:
         path = tmp_path / "cuda_fchl18_fp32.npz"
         model.save(path)
         loaded = CudaFCHL18KRRModel.load(path)
+        assert isinstance(loaded, CudaFCHL18KRRModel)
         assert loaded.dtype == "float32"
         E_load, F_load = loaded.predict(te, zte)
         np.testing.assert_allclose(E_load, E_orig, rtol=1e-4, atol=1e-4)
