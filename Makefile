@@ -5,7 +5,7 @@ CCACHE_BIN := $(shell command -v ccache 2>/dev/null)
 NINJA_BIN := $(shell command -v ninja 2>/dev/null)
 TORCH_CUDA_ARCH_LIST ?= $(shell uv run python -c "import torch; major, minor = torch.cuda.get_device_capability(0); print(f'{major}.{minor}')" 2>/dev/null)
 
-CUDA_LOCAL_FAST_CMAKE_ARGS := -DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL -DKF_BLAS_ILP64=ON -DCMAKE_CUDA_ARCHITECTURES=native
+CUDA_LOCAL_FAST_CMAKE_ARGS := -DKF_WITH_CUDA=ON -DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL -DKF_BLAS_ILP64=ON -DCMAKE_CUDA_ARCHITECTURES=native
 
 ifneq ($(CCACHE_BIN),)
 CUDA_LOCAL_FAST_CMAKE_ARGS += -DCMAKE_CXX_COMPILER_LAUNCHER=$(CCACHE_BIN) -DCMAKE_CUDA_COMPILER_LAUNCHER=$(CCACHE_BIN)

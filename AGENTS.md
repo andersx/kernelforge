@@ -15,15 +15,16 @@ Other Linux targets: `install-linux-openblas-ilp64`, `install-linux-ilp64`, `ins
 
 ### Linux with CUDA (optional)
 
-Requires a CUDA toolkit, a GPU driver, and PyTorch discoverable by CMake:
+Requires a CUDA toolkit, a GPU driver, and PyTorch discoverable by CMake.
+The Makefile passes `-DKF_WITH_CUDA=ON` (CUDA is off by default for CPU builds):
 
 ```bash
 source /opt/intel/oneapi/setvars.sh
 make install-linux-mkl-ilp64-cuda
 ```
 
-PyPI wheels are CPU-only today. CUDA extensions are built only when the toolchain
-and Torch are present (or via a future `kernelforge[cuda]` companion wheel).
+PyPI wheels are CPU-only today (`-DKF_WITH_CUDA=OFF`). A future `kernelforge[cuda]`
+companion wheel will ship the CUDA extensions separately.
 
 ### macOS (recommended: ILP64)
 

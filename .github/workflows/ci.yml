@@ -78,7 +78,7 @@ jobs:
         run: |
           # Apple Clang + Homebrew libomp + Accelerate (no Homebrew LLVM).
           # OpenMP_* hints satisfy find_package(OpenMP) without changing CMakeLists.
-          export CMAKE_ARGS="-DOpenMP_ROOT=/opt/homebrew/opt/libomp \
+          export CMAKE_ARGS="-DKF_WITH_CUDA=OFF -DOpenMP_ROOT=/opt/homebrew/opt/libomp \
             -DOpenMP_C_FLAGS=\"-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include\" \
             -DOpenMP_CXX_FLAGS=\"-Xclang -fopenmp -I/opt/homebrew/opt/libomp/include\" \
             -DOpenMP_C_LIB_NAMES=omp \
@@ -94,7 +94,7 @@ jobs:
         env:
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
-          CMAKE_ARGS: "-DKF_BLAS_ILP64=ON"
+          CMAKE_ARGS: "-DKF_WITH_CUDA=OFF -DKF_BLAS_ILP64=ON"
         run: |
           # Install deps only — avoid compiling the extension twice (uv sync + editable).
           uv sync --dev --all-extras --no-install-project
