@@ -453,8 +453,10 @@ class CudaLocalRFFModel(BaseModel):
 
         t0 = _time.perf_counter()
         mode = self.training_mode_
-        if mode not in ("energy_only", "energy_and_force"):
-            msg = "CudaLocalRFFModel currently supports energy_only and energy_and_force training."
+        if mode not in ("energy_only", "force_only", "energy_and_force"):
+            msg = (
+                "CudaLocalRFFModel supports energy_only, force_only, and energy_and_force training."
+            )
             raise NotImplementedError(msg)
         if self.solver not in ("cholesky", "svd", "qr", "gels", "svdr"):
             msg = (
@@ -470,14 +472,14 @@ class CudaLocalRFFModel(BaseModel):
             raise ValueError(msg)
         if self.solver in ("svd", "qr", "gels", "svdr"):
             _require_cuda_solvers()
-        if energies is None:
+        if mode in ("energy_only", "energy_and_force") and energies is None:
             msg = f"energies must be provided for {mode} mode"
             raise ValueError(msg)
-        if mode == "energy_and_force" and forces is None:
-            msg = "forces must be provided for energy_and_force mode"
+        if mode in ("force_only", "energy_and_force") and forces is None:
+            msg = f"forces must be provided for {mode} mode"
             raise ValueError(msg)
 
-        need_gradients = mode == "energy_and_force"
+        need_gradients = mode in ("force_only", "energy_and_force")
         X_cuda, dX_cuda, Q_idx_cuda, Q_idx_np, N_np = _compute_fchl19_cuda_rff(
             coords_list,
             z_list,
@@ -522,11 +524,42 @@ class CudaLocalRFFModel(BaseModel):
         )
         W_cuda = _to_cuda_f32(W_np)
         b_cuda = _to_cuda_f32(b_np)
-        Y_cuda = _to_cuda_f32(energies.astype(np.float32))
+        Y_cuda = _to_cuda_f32(energies.astype(np.float32)) if energies is not None else None
         t0 = _t("Step 2  generate/upload RFF params + targets", t0)
 
         self._f_train: NDArray[np.float64] = np.array([], dtype=np.float64)
         self._f_pred_train: NDArray[np.float64] = np.array([], dtype=np.float64)
+        F_cuda = None
+        dX5_cuda = None
+        F_flat64: NDArray[np.float64] | None = None
+
+        def _solve_direct(
+            feat_cuda: Any,  # noqa: ANN401
+            target_cuda: Any,  # noqa: ANN401
+            k_eff: int,
+        ) -> Any:  # noqa: ANN401
+            if self.solver == "svd":
+                return _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
+                    feat_cuda, target_cuda, float(self.rcond), True
+                ).cuda()
+            if self.solver == "svdr":
+                return _solvers_ext.cuda_solve_svdr(  # type: ignore[union-attr]
+                    feat_cuda,
+                    target_cuda,
+                    float(self.rcond),
+                    k_eff,
+                    self.svdr_p,
+                    self.svdr_niters,
+                    True,
+                ).cuda()
+            if self.solver == "gels":
+                return _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
+                    feat_cuda, target_cuda, True, self.gels_variant
+                ).cuda()
+            return _solvers_ext.cuda_solve_qr(  # type: ignore[union-attr]
+                feat_cuda, target_cuda, True
+            ).cuda()
+
         if self.solver in ("svd", "qr", "gels", "svdr"):
             if self.solver == "svdr":
                 # Clamp k so that k + p <= d_rff (constraint of cusolverDnXgesvdr).
@@ -538,9 +571,31 @@ class CudaLocalRFFModel(BaseModel):
                         "Reduce --svdr-p or increase --d-rff."
                     )
                     raise ValueError(msg)
-            if mode == "energy_and_force":
+            else:
+                k_eff = 0
+            if mode == "force_only":
                 if forces is None or dX_cuda is None:
-                    msg = "forces or dX_cuda missing in energy_and_force fit — internal error"
+                    msg = "forces or dX_cuda missing in force_only fit — internal error"
+                    raise RuntimeError(msg)
+                dX5_cuda = dX_cuda.reshape(nmol, max_atoms, rep_size, max_atoms, 3).contiguous()
+                F_flat64 = _compact_forces(forces, N_np)
+                F_cuda = _to_cuda_f32(F_flat64.astype(np.float32))
+                G_cuda = _rff_ext.rff_gradient_elemental_col_major(  # type: ignore[union-attr]
+                    X_cuda,
+                    dX5_cuda,
+                    Q_idx_cuda,
+                    N_cuda,
+                    W_cuda,
+                    b_cuda,
+                    int(self.chunk_size),
+                )
+                t0 = _t("Step 3  rff_gradient_elemental (G col-major)", t0)
+                weights_cuda = _solve_direct(G_cuda, F_cuda, k_eff)
+                t0 = _t(f"Step 4  cuda_solve_{self.solver} (force_only)", t0)
+                del G_cuda
+            elif mode == "energy_and_force":
+                if forces is None or dX_cuda is None or Y_cuda is None:
+                    msg = "forces/dX/Y missing in energy_and_force fit — internal error"
                     raise RuntimeError(msg)
                 dX5_cuda = dX_cuda.reshape(nmol, max_atoms, rep_size, max_atoms, 3).contiguous()
                 F_flat64 = _compact_forces(forces, N_np)
@@ -563,78 +618,49 @@ class CudaLocalRFFModel(BaseModel):
                 EF_cuda = torch.cat([Y_cuda, F_cuda], dim=0)
                 del Z_cuda, G_cuda
                 t0 = _t("Step 3c cat [Z;G] col-major and [E;F]", t0)
-                if self.solver == "svd":
-                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
-                        ZG_cuda, EF_cuda, float(self.rcond), True
-                    ).cuda()
-                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq, FP32)", t0)
-                elif self.solver == "svdr":
-                    weights_cuda = _solvers_ext.cuda_solve_svdr(  # type: ignore[union-attr]
-                        ZG_cuda,
-                        EF_cuda,
-                        float(self.rcond),
-                        k_eff,
-                        self.svdr_p,
-                        self.svdr_niters,
-                        True,
-                    ).cuda()
-                    t0 = _t(
-                        f"Step 4  cuda_solve_svdr (rSVD k={k_eff} p={self.svdr_p} "
-                        f"niters={self.svdr_niters})",
-                        t0,
-                    )
-                elif self.solver == "gels":
-                    weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
-                        ZG_cuda, EF_cuda, True, self.gels_variant
-                    ).cuda()
-                    t0 = _t(f"Step 4  cuda_solve_gels/{self.gels_variant} (IRS lstsq)", t0)
-                else:
-                    weights_cuda = _solvers_ext.cuda_solve_qr(  # type: ignore[union-attr]
-                        ZG_cuda, EF_cuda, True
-                    ).cuda()
-                    t0 = _t("Step 4  cuda_solve_qr (QR lstsq)", t0)
+                weights_cuda = _solve_direct(ZG_cuda, EF_cuda, k_eff)
+                t0 = _t(f"Step 4  cuda_solve_{self.solver} (E+F)", t0)
                 del ZG_cuda, EF_cuda
             else:
-                F_cuda = None
-                dX5_cuda = None
+                if Y_cuda is None:
+                    msg = "Y_cuda is None in energy_only fit — internal error"
+                    raise RuntimeError(msg)
                 Z_cuda = _rff_ext.rff_features_elemental_col_major(  # type: ignore[union-attr]
                     X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda
                 )
                 t0 = _t("Step 3  rff_features_elemental (materialize Z col-major)", t0)
-                if self.solver == "svd":
-                    weights_cuda = _solvers_ext.cuda_solve_svd(  # type: ignore[union-attr]
-                        Z_cuda, Y_cuda, float(self.rcond), True
-                    ).cuda()
-                    t0 = _t("Step 4  cuda_solve_svd (SVD lstsq, FP32)", t0)
-                elif self.solver == "svdr":
-                    weights_cuda = _solvers_ext.cuda_solve_svdr(  # type: ignore[union-attr]
-                        Z_cuda,
-                        Y_cuda,
-                        float(self.rcond),
-                        k_eff,
-                        self.svdr_p,
-                        self.svdr_niters,
-                        True,
-                    ).cuda()
-                    t0 = _t(
-                        f"Step 4  cuda_solve_svdr (rSVD k={k_eff} p={self.svdr_p} "
-                        f"niters={self.svdr_niters})",
-                        t0,
-                    )
-                elif self.solver == "gels":
-                    weights_cuda = _solvers_ext.cuda_solve_gels(  # type: ignore[union-attr]
-                        Z_cuda, Y_cuda, True, self.gels_variant
-                    ).cuda()
-                    t0 = _t(f"Step 4  cuda_solve_gels/{self.gels_variant} (IRS lstsq)", t0)
-                else:
-                    weights_cuda = _solvers_ext.cuda_solve_qr(  # type: ignore[union-attr]
-                        Z_cuda, Y_cuda, True
-                    ).cuda()
-                    t0 = _t("Step 4  cuda_solve_qr (QR lstsq)", t0)
+                weights_cuda = _solve_direct(Z_cuda, Y_cuda, k_eff)
+                t0 = _t(f"Step 4  cuda_solve_{self.solver} (energy_only)", t0)
                 del Z_cuda
-        elif mode == "energy_and_force":
+        elif mode == "force_only":
             if forces is None or dX_cuda is None:
-                msg = "forces or dX_cuda missing in energy_and_force fit — internal error"
+                msg = "forces or dX_cuda missing in force_only fit — internal error"
+                raise RuntimeError(msg)
+            dX5_cuda = dX_cuda.reshape(nmol, max_atoms, rep_size, max_atoms, 3).contiguous()
+            F_flat64 = _compact_forces(forces, N_np)
+            F_cuda = _to_cuda_f32(F_flat64.astype(np.float32))
+            # No CUDA gradient-gramian RFP yet: materialize G and form normal equations.
+            G_cuda = _rff_ext.rff_gradient_elemental_col_major(  # type: ignore[union-attr]
+                X_cuda,
+                dX5_cuda,
+                Q_idx_cuda,
+                N_cuda,
+                W_cuda,
+                b_cuda,
+                int(self.chunk_size),
+            )
+            t0 = _t("Step 3  rff_gradient_elemental (G col-major)", t0)
+            GtG = G_cuda @ G_cuda.mT
+            GtG.diagonal().add_(float(self.l2))
+            GtF = G_cuda @ F_cuda
+            del G_cuda
+            L = torch.linalg.cholesky(GtG)
+            weights_cuda = torch.cholesky_solve(GtF.unsqueeze(-1), L).squeeze(-1).contiguous()
+            del GtG, GtF, L
+            t0 = _t("Step 4  cholesky solve GtG (force_only, GPU)", t0)
+        elif mode == "energy_and_force":
+            if forces is None or dX_cuda is None or Y_cuda is None:
+                msg = "forces/dX/Y missing in energy_and_force fit — internal error"
                 raise RuntimeError(msg)
             dX5_cuda = dX_cuda.reshape(nmol, max_atoms, rep_size, max_atoms, 3).contiguous()
             F_flat64 = _compact_forces(forces, N_np)
@@ -666,8 +692,9 @@ class CudaLocalRFFModel(BaseModel):
             t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
             weights_cuda = rhs.squeeze(-1).contiguous()
         else:
-            F_cuda = None
-            dX5_cuda = None
+            if Y_cuda is None:
+                msg = "Y_cuda is None in energy_only fit — internal error"
+                raise RuntimeError(msg)
             ZtZ_rfp, ZtY = _rff_ext.rff_gramian_elemental_rfp(  # type: ignore[union-attr]
                 X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda, Y_cuda, int(self.chunk_size)
             )
@@ -684,11 +711,23 @@ class CudaLocalRFFModel(BaseModel):
             _kern_ext.rfp_potrs(ZtZ_rfp, rhs)  # type: ignore[union-attr]
             t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
             weights_cuda = rhs.squeeze(-1).contiguous()
-        y_pred_cuda = _rff_ext.rff_predict_energy_elemental(  # type: ignore[union-attr]
-            X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
-        )
-        t0 = _t("Step 5a train energy prediction (GPU)", t0)
-        if mode == "energy_and_force" and dX5_cuda is not None:
+
+        if mode == "force_only":
+            self._y_train = np.array([], dtype=np.float64)
+            self._y_pred_train = np.array([], dtype=np.float64)
+        else:
+            y_pred_cuda = _rff_ext.rff_predict_energy_elemental(  # type: ignore[union-attr]
+                X_cuda, Q_idx_cuda, N_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
+            )
+            t0 = _t("Step 5a train energy prediction (GPU)", t0)
+            assert energies is not None  # noqa: S101
+            self._y_train = energies
+            self._y_pred_train = y_pred_cuda.cpu().numpy().astype(np.float64)
+
+        if mode in ("force_only", "energy_and_force") and dX5_cuda is not None:
+            if F_flat64 is None:
+                msg = "F_flat64 is None in force training score — internal error"
+                raise RuntimeError(msg)
             f_pred_cuda = _rff_ext.rff_predict_force_elemental(  # type: ignore[union-attr]
                 X_cuda,
                 dX5_cuda,
@@ -712,8 +751,6 @@ class CudaLocalRFFModel(BaseModel):
         self._reset_cached_force_topology()
         self._Q_train_np = Q_idx_np.astype(np.int32)
         self._N_train_np = N_np.astype(np.int32)
-        self._y_train = energies
-        self._y_pred_train = y_pred_cuda.cpu().numpy().astype(np.float64)
         t0 = _t("Step 6  D2H train outputs + store state", t0)
 
         del X_cuda, dX_cuda, Q_idx_cuda, N_cuda, Y_cuda, F_cuda
@@ -721,6 +758,8 @@ class CudaLocalRFFModel(BaseModel):
     def _training_labels_and_predictions(
         self,
     ) -> dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]]:
+        if self.training_mode_ == "force_only":
+            return {"force": (self._f_train, self._f_pred_train)}
         if self.training_mode_ == "energy_and_force":
             return {
                 "energy": (self._y_train, self._y_pred_train),
@@ -746,7 +785,7 @@ class CudaLocalRFFModel(BaseModel):
             return _time.perf_counter()
 
         t0 = _time.perf_counter()
-        need_gradients = self.training_mode_ == "energy_and_force"
+        need_gradients = self.training_mode_ in ("force_only", "energy_and_force")
         X_cuda, dX_cuda, Q_idx_cuda, _Q_idx_np, N_np = _compute_fchl19_cuda_rff(
             coords_list,
             z_list,
@@ -776,9 +815,9 @@ class CudaLocalRFFModel(BaseModel):
             E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
         else:
             E_pred = np.zeros(len(coords_list), dtype=np.float64)
-        if self.training_mode_ == "energy_and_force":
+        if self.training_mode_ in ("force_only", "energy_and_force"):
             if dX_cuda is None:
-                msg = "dX_cuda is None in energy_and_force predict — internal error"
+                msg = "dX_cuda is None in force-capable predict — internal error"
                 raise RuntimeError(msg)
             max_atoms = int(X_cuda.shape[1])
             rep_size = int(X_cuda.shape[2])

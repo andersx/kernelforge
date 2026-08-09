@@ -786,17 +786,22 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 f"--cuda supports energy_only, force_only, and energy_and_force "
                 f"(got --mode {args.mode})."
             )
-        if args.mode == "force_only" and args.representation != "fchl18":
+        if args.mode == "force_only" and args.representation not in (
+            "fchl18",
+            "fchl19",
+            "invdist",
+        ):
             parser.error(
-                "--cuda --mode force_only is currently supported only with --representation fchl18."
+                "--cuda --mode force_only requires --representation fchl18, fchl19, or invdist."
             )
         if args.regressor == "rff" and (
             args.representation not in ("invdist", "fchl19")
-            or args.mode not in ("energy_only", "energy_and_force")
+            or args.mode not in ("energy_only", "force_only", "energy_and_force")
         ):
             parser.error(
                 "--cuda --regressor rff is currently supported only with "
-                "--representation invdist/fchl19 and --mode energy_only or energy_and_force."
+                "--representation invdist/fchl19 and --mode energy_only, "
+                "force_only, or energy_and_force."
             )
         if args.representation != "fchl19" and args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only configurable for --cuda --representation fchl19.")
