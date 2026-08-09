@@ -64,15 +64,39 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 
 **Note**: The `-DKF_USE_NATIVE=ON` flag enables `-march=native`/`-mcpu=native` optimizations for maximum performance on your specific CPU.
 
-### Linux with CUDA (development)
+### Linux with CUDA
 
-Planned PyPI layout: a **CPU** ``kernelforge`` wheel plus a Linux companion
+PyPI ships a **CPU** ``kernelforge`` wheel plus a Linux companion
 ``kernelforge-cuda`` that drops ``cuda_*.so`` into ``site-packages/kernelforge/``.
-Until the companion is published, use a local monorepo build or build both
-wheels yourself:
+
+**From PyPI (Linux):**
 
 ```bash
-# Day-to-day monorepo (one editable tree with CPU+CUDA):
+uv pip install kernelforge                 # CPU
+uv pip install 'kernelforge[cuda]'         # + torch + kernelforge-cuda
+```
+
+Or install the companion explicitly:
+
+```bash
+uv pip install kernelforge kernelforge-cuda
+```
+
+Notes:
+
+- Default-index ``torch`` may be CPU-only. For GPU runs, install a CUDA build
+  of PyTorch (e.g. from the PyTorch CUDA wheel index) and an NVIDIA driver
+  compatible with that build.
+- Release CUDA companion wheels are currently **CPython 3.14** manylinux only
+  (built on GHA ``build-wheels-cuda`` with ``manylinux_cuda``; no GPU needed
+  to *compile*).
+- FCHL18 CUDA KRR supports ``--dtype float32`` / ``float64`` via ``kernelcli``
+  (float32 uses GPU ``rfp_potrf`` end-to-end).
+
+**Local monorepo / wheel smoke (developers):**
+
+```bash
+# One editable tree with CPU+CUDA (needs CUDA toolkit + torch):
 source /opt/intel/oneapi/setvars.sh
 make install-linux-mkl-ilp64-cuda   # passes -DKF_WITH_CUDA=ON
 
@@ -80,22 +104,7 @@ make install-linux-mkl-ilp64-cuda   # passes -DKF_WITH_CUDA=ON
 make demo-cuda-wheels
 ```
 
-Once the companion is on PyPI (release workflow builds it on GHA with
-``manylinux_cuda``; no GPU needed to *compile*), Linux users can install with:
-
-```bash
-uv pip install kernelforge                 # CPU
-uv pip install 'kernelforge[cuda]'         # + torch + kernelforge-cuda
-```
-
-Note: ``pip``/``uv`` install ``torch`` from the default index may be CPU-only;
-install a CUDA build of PyTorch (e.g. from the PyTorch CUDA wheel index) if you
-need GPU execution. Also requires an NVIDIA driver compatible with that build.
-
-Requires a CUDA toolkit + PyTorch for local builds. Release CUDA wheels are
-cross-compiled on GitHub Actions (``build-wheels-cuda``, **CPython 3.14** for
-now); claim the ``kernelforge-cuda`` project on PyPI and add a Trusted Publisher
-matching the ``kernelforge`` release workflow before the first publish.
+Requires a CUDA toolkit + PyTorch for local CUDA builds.
 
 ## Advanced: Custom BLAS/LAPACK Libraries
 

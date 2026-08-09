@@ -26,15 +26,13 @@ make install-linux-mkl-ilp64-cuda
 PyPI layout (CUDA companion wheels built on GHA ``build-wheels-cuda``):
 
 - `kernelforge` — CPU wheels (`-DKF_WITH_CUDA=OFF`)
-- `kernelforge-cuda` — Linux companion that installs `cuda_*.so` into `kernelforge/`
+- `kernelforge-cuda` — Linux companion on PyPI that installs `cuda_*.so` into `kernelforge/`
+  (release wheels currently **CPython 3.14** manylinux only)
 - `pip install 'kernelforge[cuda]'` — pulls `torch` + `kernelforge-cuda` on Linux
   (default-index torch may be CPU-only; install a CUDA torch build for GPU)
 
-Claim `kernelforge-cuda` on PyPI and configure Trusted Publishing for the same
-release workflow before the first CUDA wheel upload. Local smoke:
-`make demo-cuda-wheels`.
-
-Metadata lives in `packaging/kernelforge-cuda/pyproject.toml`.
+Local smoke: `make demo-cuda-wheels`. Metadata lives in
+`packaging/kernelforge-cuda/pyproject.toml`.
 
 ### macOS (recommended: ILP64)
 
