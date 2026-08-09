@@ -27,7 +27,7 @@ PyPI layout (CUDA companion wheels built on GHA ``build-wheels-cuda``):
 
 - `kernelforge` — CPU wheels (`-DKF_WITH_CUDA=OFF`)
 - `kernelforge-cuda` — Linux companion on PyPI that installs `cuda_*.so` into `kernelforge/`
-  (release wheels currently **CPython 3.14** manylinux only)
+  (release wheels: **CPython 3.11–3.14** manylinux; CPU is 3.10–3.15)
 - `pip install 'kernelforge[cuda]'` — pulls `torch` + `kernelforge-cuda` on Linux
   (default-index torch may be CPU-only; install a CUDA torch build for GPU)
 

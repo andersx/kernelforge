@@ -11,7 +11,7 @@ license = {text = "MIT"}
 authors = [{name = "Anders Christensen"}]
 requires-python = ">=3.10"
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
@@ -45,13 +45,13 @@ ase = [
 ]
 # Linux-only optional deps for CUDA workflows. Pulls torch + the companion
 # package that drops cuda_*.so into site-packages/kernelforge/. No-op on
-# macOS/Windows. Companion wheels are currently CPython 3.14 only — the
+# macOS/Windows. Companion wheels ship for CPython 3.11–3.14; the
 # python_version marker avoids a failing source build on other Pythons.
 # A default-index torch install may be CPU-only; install a CUDA build of
 # PyTorch separately if you need GPU execution.
 cuda = [
     "torch>=2.2; sys_platform == 'linux'",
-    "kernelforge-cuda>=0.3.0; sys_platform == 'linux' and python_version == '3.14'",
+    "kernelforge-cuda>=1.0.0; sys_platform == 'linux' and python_version >= '3.11' and python_version < '3.15'",
 ]
 
 [project.scripts]
