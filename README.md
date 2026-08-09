@@ -93,9 +93,9 @@ install a CUDA build of PyTorch (e.g. from the PyTorch CUDA wheel index) if you
 need GPU execution. Also requires an NVIDIA driver compatible with that build.
 
 Requires a CUDA toolkit + PyTorch for local builds. Release CUDA wheels are
-cross-compiled on GitHub Actions (``build-wheels-cuda``); claim the
-``kernelforge-cuda`` project on PyPI and add a Trusted Publisher matching the
-``kernelforge`` release workflow before the first publish.
+cross-compiled on GitHub Actions (``build-wheels-cuda``, **CPython 3.14** for
+now); claim the ``kernelforge-cuda`` project on PyPI and add a Trusted Publisher
+matching the ``kernelforge`` release workflow before the first publish.
 
 ## Advanced: Custom BLAS/LAPACK Libraries
 

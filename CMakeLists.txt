@@ -31,7 +31,14 @@ endif()
 
 if(APPLE)
 
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "" FORCE)
+  # Homebrew libomp on macos-26 runners is built for macOS 26; keep the
+  # deployment target at least that high so delocate accepts the vendored dylib.
+  # Prefer an explicit env/cache value when present (cibuildwheel sets it).
+  if(DEFINED ENV{MACOSX_DEPLOYMENT_TARGET} AND NOT "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "$ENV{MACOSX_DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
+  elseif(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0" CACHE STRING "" FORCE)
+  endif()
   add_compile_definitions(ACCELERATE_NEW_LAPACK)
   set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
 
@@ -265,8 +272,6 @@ endif()
 
 # ---- Optional CUDA + PyTorch extensions (KF_WITH_CUDA) ----------------------
 if(KF_WITH_CUDA)
-  find_package(CUDAToolkit REQUIRED)
-
   # Locate PyTorch CMake config.  scikit-build-core builds use an isolated
   # Python that may lack torch.  Try the project venv (.venv) first, then
   # the build Python, then common conda/venv locations.
@@ -298,6 +303,27 @@ if(KF_WITH_CUDA)
       "KF_WITH_CUDA=ON but PyTorch was not found. "
       "Install torch in the project venv (or set CMAKE_PREFIX_PATH), "
       "or build with -DKF_WITH_CUDA=OFF.")
+  endif()
+
+  # Find CUDAToolkit *after* Torch. Torch's Caffe2 cuda.cmake re-runs
+  # FindCUDA / FindCUDAToolkit and can drop CUDA::cusolver (and friends) on
+  # CUDA 13 manylinux images. Clear the prior result and re-resolve with
+  # required components so CUDA::cublas / CUDA::cusolver exist for linking.
+  unset(CUDAToolkit_FOUND)
+  unset(CUDA_cusolver_LIBRARY CACHE)
+  unset(CUDA_cublas_LIBRARY CACHE)
+  unset(CUDA_cudart_LIBRARY CACHE)
+  unset(CUDA_nvrtc_LIBRARY CACHE)
+  if(DEFINED ENV{CUDA_HOME} AND NOT "$ENV{CUDA_HOME}" STREQUAL "")
+    set(CUDAToolkit_ROOT "$ENV{CUDA_HOME}")
+  elseif(EXISTS "/usr/local/cuda")
+    set(CUDAToolkit_ROOT "/usr/local/cuda")
+  endif()
+  find_package(CUDAToolkit REQUIRED COMPONENTS cudart cublas cusolver nvrtc)
+  if(NOT TARGET CUDA::cusolver)
+    message(FATAL_ERROR
+      "find_package(CUDAToolkit) succeeded but CUDA::cusolver is missing. "
+      "Install cuda-libraries-devel for this CUDA toolkit.")
   endif()
 
   message(STATUS
