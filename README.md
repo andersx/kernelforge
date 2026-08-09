@@ -69,7 +69,7 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 PyPI ships a **CPU** ``kernelforge`` wheel plus a Linux companion
 ``kernelforge-cuda`` that drops ``cuda_*.so`` into ``site-packages/kernelforge/``.
 
-**From PyPI (Linux):**
+**From PyPI (Linux, CPython 3.14):**
 
 ```bash
 uv pip install kernelforge                 # CPU
@@ -84,12 +84,15 @@ uv pip install kernelforge kernelforge-cuda
 
 Notes:
 
+- The ``kernelforge-cuda`` companion wheel is currently **CPython 3.14**
+  manylinux only. On other Python versions, ``'kernelforge[cuda]'`` will not
+  pull the companion (see the ``python_version`` marker in ``pyproject.toml``);
+  use a local monorepo CUDA build instead.
 - Default-index ``torch`` may be CPU-only. For GPU runs, install a CUDA build
   of PyTorch (e.g. from the PyTorch CUDA wheel index) and an NVIDIA driver
   compatible with that build.
-- Release CUDA companion wheels are currently **CPython 3.14** manylinux only
-  (built on GHA ``build-wheels-cuda`` with ``manylinux_cuda``; no GPU needed
-  to *compile*).
+- Release CUDA wheels are built on GHA ``build-wheels-cuda`` with
+  ``manylinux_cuda`` (no GPU needed to *compile*).
 - FCHL18 CUDA KRR supports ``--dtype float32`` / ``float64`` via ``kernelcli``
   (float32 uses GPU ``rfp_potrf`` end-to-end).
 
