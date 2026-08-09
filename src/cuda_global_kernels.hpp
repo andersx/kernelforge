@@ -115,21 +115,23 @@ void kernel_gaussian_symm_rfp_cu(
 // rfp_potrf_cu
 //
 // Adds l2 to the diagonal of a RFP matrix, then Cholesky-factorises in-place.
-// On exit d_K_rfp holds the lower Cholesky factor L in RFP format.
+// On exit d_K_rfp holds the Cholesky factor in the same RFP packing.
 // *info: 0 = success, >0 = matrix not positive definite (leading minor).
-// Convention: TRANSR=N, UPLO=L.
+// Convention: TRANSR=N; uplo_upper=false → UPLO=L, true → UPLO=U.
 // ---------------------------------------------------------------------------
-void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info);
+void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info, bool uplo_upper = false);
 
 
 // ---------------------------------------------------------------------------
 // rfp_potrs_cu
 //
 // Triangular solve with Cholesky factor from rfp_potrf_cu.
-// Solves (L * L^T) * X = B in-place, overwriting d_B.
-// d_B is (N, nrhs) col-major with leading dimension N.
-// Convention: TRANSR=N, UPLO=L.
+// UPLO=L: solves (L * L^T) * X = B; UPLO=U: solves (U^T * U) * X = B.
+// Overwrites d_B in-place. d_B is (N, nrhs) col-major with leading dimension N.
+// Convention: TRANSR=N; uplo_upper must match the factorisation.
 // ---------------------------------------------------------------------------
-void rfp_potrs_cu(const float *d_L_rfp, float *d_B, int N, int nrhs);
+void rfp_potrs_cu(
+    const float *d_L_rfp, float *d_B, int N, int nrhs, bool uplo_upper = false
+);
 
 }  // namespace kf

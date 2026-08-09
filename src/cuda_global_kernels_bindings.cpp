@@ -20,6 +20,8 @@
 //          F_pred : (N_q, D) float32 CUDA)
 
 #include <torch/extension.h>
+#include <string>
+
 #include "cuda_global_kernels.hpp"
 
 namespace py = pybind11;
@@ -210,15 +212,26 @@ torch::Tensor kernel_gaussian_symm_rfp(
 // rfp_potrf
 // ---------------------------------------------------------------------------
 
-int rfp_potrf(torch::Tensor K_rfp, int N, double l2)
+static bool parse_uplo_upper(const std::string &uplo)
+{
+    if (uplo == "L" || uplo == "l")
+        return false;
+    if (uplo == "U" || uplo == "u")
+        return true;
+    TORCH_CHECK(false, "uplo must be 'L' or 'U', got '", uplo, "'");
+    return false;
+}
+
+int rfp_potrf(torch::Tensor K_rfp, int N, double l2, const std::string &uplo)
 {
     check_cuda_float32(K_rfp, "K_rfp");
     TORCH_CHECK(K_rfp.dim() == 1, "K_rfp must be 1-D");
     TORCH_CHECK(K_rfp.size(0) == (long long)N * (N + 1) / 2,
                 "K_rfp.size(0) must equal N*(N+1)/2");
 
+    const bool uplo_upper = parse_uplo_upper(uplo);
     int info = 0;
-    kf::rfp_potrf_cu(K_rfp.data_ptr<float>(), N, (float)l2, &info);
+    kf::rfp_potrf_cu(K_rfp.data_ptr<float>(), N, (float)l2, &info, uplo_upper);
     return info;
 }
 
@@ -227,7 +240,7 @@ int rfp_potrf(torch::Tensor K_rfp, int N, double l2)
 // rfp_potrs
 // ---------------------------------------------------------------------------
 
-void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B)
+void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B, const std::string &uplo)
 {
     check_cuda_float32(L_rfp, "L_rfp");
     check_cuda_float32(B,     "B");
@@ -239,7 +252,9 @@ void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B)
     TORCH_CHECK(L_rfp.size(0) == (long long)N * (N + 1) / 2,
                 "L_rfp.size(0) must equal N*(N+1)/2");
 
-    kf::rfp_potrs_cu(L_rfp.data_ptr<float>(), B.data_ptr<float>(), N, nrhs);
+    const bool uplo_upper = parse_uplo_upper(uplo);
+    kf::rfp_potrs_cu(
+        L_rfp.data_ptr<float>(), B.data_ptr<float>(), N, nrhs, uplo_upper);
 }
 
 
@@ -397,14 +412,14 @@ K_rfp : torch.Tensor, shape (N*(N+1)//2,), float32, CUDA
           py::arg("K_rfp"),
           py::arg("N"),
           py::arg("l2") = 0.0,
+          py::arg("uplo") = "L",
           R"doc(
 Cholesky factorisation of an RFP-packed symmetric positive definite matrix.
 
 Optionally adds l2 to the diagonal before factorising (Tikhonov
-regularisation).  The input buffer is overwritten with the lower Cholesky
-factor L.
+regularisation).  The input buffer is overwritten with the Cholesky factor.
 
-Convention: TRANSR=N, UPLO=L.
+Convention: TRANSR=N; uplo selects UPLO=L (default) or UPLO=U.
 
 Parameters
 ----------
@@ -414,6 +429,8 @@ N : int
     Matrix dimension.
 l2 : float, default 0.0
     Diagonal regularisation added before factorisation.
+uplo : str, default "L"
+    Triangle stored in K_rfp: "L" or "U".
 
 Returns
 -------
@@ -426,17 +443,20 @@ info : int
           &rfp_potrs,
           py::arg("L_rfp"),
           py::arg("B"),
+          py::arg("uplo") = "L",
           R"doc(
 Triangular solve using a Cholesky factor produced by rfp_potrf.
 
-Solves (L * L^T) * X = B, overwriting B with the solution X.
-Convention: TRANSR=N, UPLO=L.
+UPLO=L: solves (L * L^T) * X = B; UPLO=U: solves (U^T * U) * X = B.
+Overwrites B with the solution X. Convention: TRANSR=N.
 
 Parameters
 ----------
 L_rfp : torch.Tensor, shape (N*(N+1)//2,), float32, CUDA
-    Lower Cholesky factor in RFP format (from rfp_potrf).
+    Cholesky factor in RFP format (from rfp_potrf).
 B : torch.Tensor, shape (N, nrhs), float32, CUDA
     Right-hand side matrix.  Modified in-place; on exit holds the solution.
+uplo : str, default "L"
+    Must match the uplo used in rfp_potrf.
 )doc");
 }

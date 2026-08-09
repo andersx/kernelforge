@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -51,6 +51,8 @@ _DEFAULT_KERNEL_PARAMS: dict[str, Any] = {
     "use_atm": True,
 }
 
+DtypeName = Literal["float32", "float64"]
+
 
 def _require_torch() -> None:
     if not _TORCH_AVAILABLE:
@@ -78,9 +80,10 @@ def _pad_coords_z(
     coords_list: list[NDArray[np.float64]],
     z_list: list[NDArray[np.int32]],
     max_size: int,
-) -> tuple[NDArray[np.float64], NDArray[np.int32], NDArray[np.int32]]:
+    np_dtype: type[np.floating[Any]],
+) -> tuple[NDArray[np.floating[Any]], NDArray[np.int32], NDArray[np.int32]]:
     nm = len(coords_list)
-    coords = np.zeros((nm, max_size, 3), dtype=np.float64)
+    coords = np.zeros((nm, max_size, 3), dtype=np_dtype)
     z = np.zeros((nm, max_size), dtype=np.int32)
     n = np.zeros(nm, dtype=np.int32)
     for i, (c, zi) in enumerate(zip(coords_list, z_list, strict=True)):
@@ -88,7 +91,7 @@ def _pad_coords_z(
         if na > max_size:
             msg = f"molecule {i} has {na} atoms > max_size={max_size}"
             raise ValueError(msg)
-        coords[i, :na, :] = np.asarray(c, dtype=np.float64)
+        coords[i, :na, :] = np.asarray(c, dtype=np_dtype)
         z[i, :na] = np.asarray(zi, dtype=np.int32)
         n[i] = na
     return coords, z, n
@@ -107,15 +110,16 @@ def _to_cuda_i32(arr: NDArray[np.int32]) -> Any:  # noqa: ANN401
 
 
 class CudaFCHL18KRRModel(BaseModel):
-    """GPU FCHL18 Kernel Ridge Regression (fp64 kernels by default).
+    """GPU FCHL18 Kernel Ridge Regression.
+
+    Default ``dtype="float64"`` uses FP64 CUDA kernels + CPU ``cho_solve_rfp``.
+    ``dtype="float32"`` keeps the full path on GPU float32 (repr, RFP kernels,
+    and ``rfp_potrf`` / ``rfp_potrs`` with FCHL18's UPLO=U packing).
 
     Mirrors ``FCHL18KRRModel`` training modes:
-      - ``energy_only``      — ``kernel_gaussian_symm``
-      - ``force_only``       — ``kernel_gaussian_hessian_symm_rfp`` + RFP Cholesky
-      - ``energy_and_force`` — ``kernel_gaussian_full_symm_rfp`` + RFP Cholesky
-
-    Representations are built with ``cuda_fchl18_repr.generate``. Alpha is solved
-    on CPU (``numpy`` / ``kernelmath.cho_solve_rfp``) for numerical stability.
+      - ``energy_only``      — ``kernel_gaussian_symm`` / ``_symm_rfp``
+      - ``force_only``       — ``kernel_gaussian_hessian_symm_rfp``
+      - ``energy_and_force`` — ``kernel_gaussian_full_symm_rfp``
     """
 
     def __init__(
@@ -125,18 +129,33 @@ class CudaFCHL18KRRModel(BaseModel):
         max_size: int = 23,
         kernel_params: dict[str, Any] | None = None,
         use_rfp: bool = True,
+        dtype: DtypeName = "float64",
     ) -> None:
         _require_torch()
         _require_cuda_kernel()
         _require_cuda_repr()
+        if dtype not in ("float32", "float64"):
+            msg = f"dtype must be 'float32' or 'float64', got {dtype!r}"
+            raise ValueError(msg)
         self.sigma = sigma
         self.l2 = l2
         self.max_size = max_size
         self.use_rfp = use_rfp
+        self.dtype: DtypeName = dtype
         self.kernel_params: dict[str, Any] = (
             kernel_params if kernel_params is not None else dict(_DEFAULT_KERNEL_PARAMS)
         )
         self.is_fitted_ = False
+
+    @property
+    def _np_dtype(self) -> type[np.floating[Any]]:
+        return np.float32 if self.dtype == "float32" else np.float64
+
+    @property
+    def _torch_dtype(self) -> Any:  # noqa: ANN401
+        import torch
+
+        return torch.float32 if self.dtype == "float32" else torch.float64
 
     def _generate_repr(
         self,
@@ -144,18 +163,40 @@ class CudaFCHL18KRRModel(BaseModel):
         z_list: list[NDArray[np.int32]],
         cut_distance: float,
     ) -> tuple[Any, Any, Any, Any, Any]:
-        """Return (x, n, nn, coords_pad, z_pad) as CUDA float64 / int32 tensors."""
-        import torch
-
-        coords_np, z_np, n_np = _pad_coords_z(coords_list, z_list, self.max_size)
-        coords_t = _to_cuda(coords_np, np.float64)
+        """Return (x, n, nn, coords_pad, z_pad) as CUDA tensors in ``self.dtype``."""
+        coords_np, z_np, n_np = _pad_coords_z(coords_list, z_list, self.max_size, self._np_dtype)
+        coords_t = _to_cuda(coords_np, self._np_dtype)
         z_t = _to_cuda_i32(z_np)
         n_t = _to_cuda_i32(n_np)
         x_t, nn_t = _cuda_repr.generate(coords_t, z_t, n_t, cut_distance=cut_distance)
-        if x_t.dtype != torch.float64:
-            x_t = x_t.double()
-            coords_t = coords_t.double()
+        if x_t.dtype != self._torch_dtype:
+            x_t = x_t.to(dtype=self._torch_dtype)
+            coords_t = coords_t.to(dtype=self._torch_dtype)
         return x_t, n_t, nn_t, coords_t, z_t
+
+    def _solve_rfp_fp32(self, K_rfp: Any, y: NDArray[np.float64], n: int) -> NDArray[np.float64]:  # noqa: ANN401
+        """GPU float32 RFP Cholesky solve (FCHL18 packing: TRANSR=N, UPLO=U)."""
+        import torch
+
+        from kernelforge import cuda_global_kernels as _gext
+
+        if K_rfp.dtype != torch.float32:
+            K_rfp = K_rfp.float()
+        rhs = (
+            torch.from_numpy(np.ascontiguousarray(y, dtype=np.float32))
+            .cuda()
+            .unsqueeze(-1)
+            .contiguous()
+        )
+        info = _gext.rfp_potrf(K_rfp, n, float(self.l2), uplo="U")
+        if info != 0:
+            msg = (
+                f"rfp_potrf (CudaFCHL18KRRModel, dtype=float32): "
+                f"Cholesky factorization failed (info={info})"
+            )
+            raise RuntimeError(msg)
+        _gext.rfp_potrs(K_rfp, rhs, uplo="U")
+        return rhs.squeeze(-1).detach().cpu().numpy().astype(np.float64)
 
     def _fit(
         self,
@@ -165,6 +206,10 @@ class CudaFCHL18KRRModel(BaseModel):
         forces: NDArray[np.float64] | None,
     ) -> None:
         mode = self.training_mode_
+
+        if self.dtype == "float32" and not self.use_rfp:
+            msg = "dtype='float32' requires use_rfp=True (GPU rfp_potrf path)"
+            raise ValueError(msg)
 
         kp = dict(self.kernel_params)
         if mode in ("force_only", "energy_and_force"):
@@ -184,31 +229,41 @@ class CudaFCHL18KRRModel(BaseModel):
         self._n_train = len(coords_list)
         self._kp_fit = kp
 
+        use_fp32_solve = self.dtype == "float32"
+
         if mode == "energy_only":
             if energies is None:
                 raise ValueError("energies must be provided for energy_only mode")
+            self._y_train = np.asarray(energies, dtype=np.float64)
             if self.use_rfp:
                 K_rfp = _cuda_kernel.kernel_gaussian_symm_rfp(x, n, nn, sigma=self.sigma, **kp)
-                self._y_train = np.asarray(energies, dtype=np.float64)
-                self._alpha = kernelmath.cho_solve_rfp(
-                    K_rfp.detach().cpu().numpy(), self._y_train, l2=self.l2
-                )
+                if use_fp32_solve:
+                    self._alpha = self._solve_rfp_fp32(K_rfp, self._y_train, self._n_train)
+                else:
+                    self._alpha = kernelmath.cho_solve_rfp(
+                        K_rfp.detach().cpu().numpy(), self._y_train, l2=self.l2
+                    )
             else:
                 K = _cuda_kernel.kernel_gaussian_symm(x, n, nn, sigma=self.sigma, **kp)
-                K_np = K.detach().cpu().numpy()
+                K_np = K.detach().cpu().numpy().astype(np.float64)
                 K_np[np.diag_indices_from(K_np)] += self.l2
-                self._y_train = np.asarray(energies, dtype=np.float64)
                 self._alpha = np.linalg.solve(K_np, self._y_train)
 
         elif mode == "force_only":
             if forces is None:
                 raise ValueError("forces must be provided for force_only mode")
             F_flat = np.asarray(forces, dtype=np.float64).ravel()
+            self._y_train = F_flat
             K_rfp = _cuda_kernel.kernel_gaussian_hessian_symm_rfp(
                 x, n, nn, coords, z, sigma=self.sigma, **kp
             )
-            self._y_train = F_flat
-            self._alpha = kernelmath.cho_solve_rfp(K_rfp.detach().cpu().numpy(), F_flat, l2=self.l2)
+            n_force = int(F_flat.shape[0])
+            if use_fp32_solve:
+                self._alpha = self._solve_rfp_fp32(K_rfp, F_flat, n_force)
+            else:
+                self._alpha = kernelmath.cho_solve_rfp(
+                    K_rfp.detach().cpu().numpy(), F_flat, l2=self.l2
+                )
 
         else:  # energy_and_force
             if energies is None:
@@ -217,21 +272,23 @@ class CudaFCHL18KRRModel(BaseModel):
                 raise ValueError("forces must be provided for energy_and_force mode")
             F_neg = -np.asarray(forces, dtype=np.float64)
             y_tr = np.concatenate([np.asarray(energies, dtype=np.float64), F_neg.ravel()])
+            self._y_train = y_tr
             if self.use_rfp:
                 K_rfp = _cuda_kernel.kernel_gaussian_full_symm_rfp(
                     x, n, nn, coords, z, sigma=self.sigma, **kp
                 )
-                self._y_train = y_tr
-                self._alpha = kernelmath.cho_solve_rfp(
-                    K_rfp.detach().cpu().numpy(), y_tr, l2=self.l2
-                )
+                if use_fp32_solve:
+                    self._alpha = self._solve_rfp_fp32(K_rfp, y_tr, int(y_tr.shape[0]))
+                else:
+                    self._alpha = kernelmath.cho_solve_rfp(
+                        K_rfp.detach().cpu().numpy(), y_tr, l2=self.l2
+                    )
             else:
                 K = _cuda_kernel.kernel_gaussian_full_symm(
                     x, n, nn, coords, z, sigma=self.sigma, **kp
                 )
-                K_np = K.detach().cpu().numpy()
+                K_np = K.detach().cpu().numpy().astype(np.float64)
                 K_np[np.diag_indices_from(K_np)] += self.l2
-                self._y_train = y_tr
                 self._alpha = np.linalg.solve(K_np, y_tr)
 
     def _training_labels_and_predictions(
@@ -263,7 +320,8 @@ class CudaFCHL18KRRModel(BaseModel):
         n_test = len(coords_list)
 
         x_te, n_te, nn_te, coords_te, z_te = self._generate_repr(coords_list, z_list, cut_distance)
-        alpha_t = torch.from_numpy(np.ascontiguousarray(self._alpha, dtype=np.float64)).cuda()
+        alpha_np = np.ascontiguousarray(self._alpha, dtype=self._np_dtype)
+        alpha_t = torch.from_numpy(alpha_np).cuda()
 
         if mode == "energy_only":
             K_e = _cuda_kernel.kernel_gaussian(
@@ -276,7 +334,7 @@ class CudaFCHL18KRRModel(BaseModel):
                 sigma=self.sigma,
                 **kp,
             )
-            E_pred = (K_e @ alpha_t).detach().cpu().numpy()
+            E_pred = (K_e @ alpha_t).detach().cpu().numpy().astype(np.float64)
 
             F_parts: list[NDArray[np.float64]] = []
             for i in range(n_test):
@@ -292,7 +350,7 @@ class CudaFCHL18KRRModel(BaseModel):
                     sigma=self.sigma,
                     **kp,
                 )
-                F_parts.append(-(G @ alpha_t).reshape(-1).detach().cpu().numpy())
+                F_parts.append(-(G @ alpha_t).reshape(-1).detach().cpu().numpy().astype(np.float64))
             F_pred = np.concatenate(F_parts)
 
         elif mode == "force_only":
@@ -310,7 +368,7 @@ class CudaFCHL18KRRModel(BaseModel):
                 sigma=self.sigma,
                 **kp,
             )
-            F_pred = (K_hess @ alpha_t).detach().cpu().numpy()
+            F_pred = (K_hess @ alpha_t).detach().cpu().numpy().astype(np.float64)
             K_jt = _cuda_kernel.kernel_gaussian_jacobian_t(
                 self._x_tr,
                 x_te,
@@ -326,7 +384,7 @@ class CudaFCHL18KRRModel(BaseModel):
             # jac_t query=train, fixed=test → shape (n_test, D_train); want E from force alpha.
             # CPU force_only uses jacobian_t(train_coords, test_repr) → (n_test, D_train).
             # Our CUDA jac_t differentiates x1/coords1; so query=train, fixed=test repr:
-            E_pred = (K_jt @ alpha_t).detach().cpu().numpy()
+            E_pred = (K_jt @ alpha_t).detach().cpu().numpy().astype(np.float64)
 
         else:  # energy_and_force
             K_full = _cuda_kernel.kernel_gaussian_full(
@@ -343,7 +401,7 @@ class CudaFCHL18KRRModel(BaseModel):
                 sigma=self.sigma,
                 **kp,
             )
-            y_pred = (K_full @ alpha_t).detach().cpu().numpy()
+            y_pred = (K_full @ alpha_t).detach().cpu().numpy().astype(np.float64)
             E_pred = y_pred[:n_test]
             F_pred = -y_pred[n_test:]
 
@@ -363,6 +421,7 @@ class CudaFCHL18KRRModel(BaseModel):
             "l2": self.l2,
             "max_size": self.max_size,
             "use_rfp": self.use_rfp,
+            "dtype": self.dtype,
             "kernel_params": json.dumps(self.kernel_params),
             "kp_fit": json.dumps(self._kp_fit),
             "baseline_elements": self.baseline_elements_,
@@ -388,13 +447,25 @@ class CudaFCHL18KRRModel(BaseModel):
         self.l2 = float(data["l2"])
         self.max_size = int(data["max_size"])
         self.use_rfp = bool(data["use_rfp"]) if "use_rfp" in data else True
+        raw_dtype = str(data["dtype"]) if "dtype" in data else "float64"
+        if raw_dtype == "float32":
+            self.dtype = "float32"
+        elif raw_dtype == "float64":
+            self.dtype = "float64"
+        else:
+            msg = f"unsupported saved dtype {raw_dtype!r}"
+            raise ValueError(msg)
         self.kernel_params = json.loads(str(data["kernel_params"]))
         self._kp_fit = json.loads(str(data["kp_fit"]))
         self.baseline_elements_ = data["baseline_elements"].astype(np.int32)
         self.element_energies_ = data["element_energies"].astype(np.float64)
         self.training_mode_: TrainingMode = cast(TrainingMode, str(data["training_mode"]))
-        self._alpha = data["alpha"]
-        self._y_train = data["y_train"] if "y_train" in data else np.array([], dtype=np.float64)
+        self._alpha = data["alpha"].astype(np.float64)
+        self._y_train = (
+            data["y_train"].astype(np.float64)
+            if "y_train" in data
+            else np.array([], dtype=np.float64)
+        )
         self._x_tr = torch.from_numpy(np.ascontiguousarray(data["x_tr"])).cuda()
         self._n_tr = torch.from_numpy(np.ascontiguousarray(data["n_tr"].astype(np.int32))).cuda()
         self._nn_tr = torch.from_numpy(np.ascontiguousarray(data["nn_tr"].astype(np.int32))).cuda()

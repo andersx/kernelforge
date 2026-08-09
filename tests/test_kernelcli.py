@@ -188,6 +188,57 @@ class TestValidation:
         with pytest.raises(SystemExit):
             _validate(args, parser)
 
+    def test_dtype_float32_requires_cuda_fchl18(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """--dtype float32 is only valid with --cuda --representation fchl18."""
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+        parser = _build_parser()
+        # without cuda
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "qm7b",
+                "--representation",
+                "fchl18",
+                "--mode",
+                "energy_only",
+                "--dtype",
+                "float32",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+        # cuda but wrong representation
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "rmd17_ethanol",
+                "--cuda",
+                "--representation",
+                "fchl19",
+                "--dtype",
+                "float32",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+        # valid
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "qm7b",
+                "--cuda",
+                "--representation",
+                "fchl18",
+                "--mode",
+                "energy_only",
+                "--dtype",
+                "float32",
+            ]
+        )
+        _validate(args, parser)
+
 
 # ---------------------------------------------------------------------------
 # Model factory
