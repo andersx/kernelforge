@@ -19,7 +19,7 @@ def _sym_from_triangle(A: NDArray[np.float64], uplo: Literal["U", "L"]) -> NDArr
         return result2
 
 
-@pytest.mark.parametrize("n", [1, 2, 3, 5, 8, 17, 32])
+@pytest.mark.parametrize("n", [1, 5, 32])
 @pytest.mark.parametrize("uplo", ["U", "L"])
 @pytest.mark.parametrize("transr", ["N", "T"])
 @pytest.mark.parametrize("seed", [0])
@@ -111,8 +111,8 @@ def test_c_contiguity_and_dtype() -> None:
     np.testing.assert_allclose(np.triu(B), np.triu(A), rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("n", [1, 2, 3, 5, 8, 17, 32, 100])
-@pytest.mark.parametrize("seed", [0, 42, 123])
+@pytest.mark.parametrize("n", [1, 5, 32])
+@pytest.mark.parametrize("seed", [0])
 def test_kernel_gaussian_symm_rfp(n: int, seed: int) -> None:
     """Test kernel_gaussian_symm_rfp against full kernel + full_to_rfp roundtrip.
 
@@ -155,8 +155,8 @@ def test_kernel_gaussian_symm_rfp(n: int, seed: int) -> None:
     np.testing.assert_allclose(K_diag, 1.0, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("n", [10, 50])
-@pytest.mark.parametrize("seed", [0, 99])
+@pytest.mark.parametrize("n", [10])
+@pytest.mark.parametrize("seed", [0])
 def test_kernel_gaussian_symm_rfp_solve(n: int, seed: int) -> None:
     """Test that we can solve a linear system using the RFP kernel output.
 

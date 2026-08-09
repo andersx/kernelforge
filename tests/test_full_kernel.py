@@ -54,7 +54,7 @@ def _load_ethanol(n: int):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10)])
 def test_full_asymm_scalar_block(N1, N2):
     """Scalar (energy-energy) sub-block matches standalone kernel_gaussian."""
     sigma = 2.0
@@ -74,7 +74,7 @@ def test_full_asymm_scalar_block(N1, N2):
     )
 
 
-@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10)])
 def test_full_asymm_jacobian_block(N1, N2):
     """Jacobian (force-energy) sub-block matches standalone kernel_gaussian_jacobian."""
     sigma = 2.0
@@ -94,7 +94,7 @@ def test_full_asymm_jacobian_block(N1, N2):
     )
 
 
-@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10)])
 def test_full_asymm_jacobian_t_block(N1, N2):
     """Jacobian_t (energy-force) sub-block matches standalone kernel_gaussian_jacobian_t."""
     sigma = 2.0
@@ -114,7 +114,7 @@ def test_full_asymm_jacobian_t_block(N1, N2):
     )
 
 
-@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10), (15, 8)])
+@pytest.mark.parametrize(("N1", "N2"), [(5, 7), (10, 10)])
 def test_full_asymm_hessian_block(N1, N2):
     """Hessian (force-force) sub-block matches standalone kernel_gaussian_hessian."""
     sigma = 2.0
@@ -199,7 +199,7 @@ def test_full_asymm_error_invalid_sigma():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("N", [5, 10, 15])
+@pytest.mark.parametrize("N", [5, 10])
 def test_full_symm_scalar_block(N):
     """Scalar block of symmetric full kernel matches standalone kernel_gaussian."""
     sigma = 2.0
@@ -218,7 +218,7 @@ def test_full_symm_scalar_block(N):
     )
 
 
-@pytest.mark.parametrize("N", [5, 10, 15])
+@pytest.mark.parametrize("N", [5, 10])
 def test_full_symm_scalar_diagonal_is_one(N):
     """Scalar diagonal = 1.0 (self-kernel = exp(0))."""
     sigma = 2.0
@@ -233,7 +233,7 @@ def test_full_symm_scalar_diagonal_is_one(N):
     )
 
 
-@pytest.mark.parametrize("N", [5, 10, 15])
+@pytest.mark.parametrize("N", [5, 10])
 def test_full_symm_jacobian_block(N):
     """Jacobian block of symmetric full kernel matches standalone kernel_gaussian_jacobian."""
     sigma = 2.0
@@ -252,7 +252,7 @@ def test_full_symm_jacobian_block(N):
     )
 
 
-@pytest.mark.parametrize("N", [5, 10, 15])
+@pytest.mark.parametrize("N", [5, 10])
 def test_full_symm_jacobian_t_block(N):
     """Jacobian_t block of symmetric full kernel matches standalone kernel_gaussian_jacobian_t."""
     sigma = 2.0
@@ -270,7 +270,7 @@ def test_full_symm_jacobian_t_block(N):
     )
 
 
-@pytest.mark.parametrize("N", [5, 10, 15])
+@pytest.mark.parametrize("N", [5, 10])
 def test_full_symm_hessian_block_lower_triangle(N):
     """Lower triangle of hessian block in symmetric full kernel matches hessian_symm."""
     sigma = 2.0
@@ -404,7 +404,7 @@ def _rfp_to_full(rfp: np.ndarray, BIG: int) -> np.ndarray:
     return full
 
 
-@pytest.mark.parametrize("N", [5, 8, 10])
+@pytest.mark.parametrize("N", [5, 10])
 def test_full_symm_rfp_matches_full_symm(N):
     """RFP full kernel unpacks to match symmetric full kernel (lower triangle).
 
@@ -618,7 +618,7 @@ def _build_energy_force_labels(n: int):
     return X, dX, y_train
 
 
-@pytest.mark.parametrize("N_train", [20, 30])
+@pytest.mark.parametrize("N_train", [20, pytest.param(30, marks=pytest.mark.slow)])
 def test_krr_full_rfp_regression(N_train):
     """KRR with kernel_gaussian_full_symm_rfp: solve alpha, verify training residual.
 

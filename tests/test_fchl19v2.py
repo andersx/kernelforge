@@ -12,8 +12,12 @@ Each combination is tested for:
 from typing import Any
 
 import numpy as np
+import pytest
 
 from kernelforge import fchl19v2_repr as _m
+
+# Research / experimental representation — keep out of default CI (`-k "not slow"`).
+pytestmark = pytest.mark.slow
 
 # ---------------------------------------------------------------------------
 # Helpers

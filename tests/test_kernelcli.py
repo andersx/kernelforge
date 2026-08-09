@@ -302,6 +302,7 @@ class TestBuildModel:
 
 
 class TestLoadSmallMolsMini:
+    @pytest.mark.slow
     def test_load_default(self):
         _coords_tr, _z_tr, E_tr, _F_tr, _coords_te, _z_te, E_te, _F_te = load_small_mols_mini(
             n_train=None, n_test=None
@@ -375,6 +376,7 @@ def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
     return argparse.Namespace(**defaults)
 
 
+@pytest.mark.slow
 class TestRunIntegration:
     def test_krr_fchl19_energy_and_force(self, capsys):
         run(_make_args())
@@ -486,6 +488,7 @@ class TestParseReprParams:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 class TestRunReprParam:
     def test_fchl19_repr_param_rcut(self, capsys):
         """FCHL19 with a custom rcut should run without error."""

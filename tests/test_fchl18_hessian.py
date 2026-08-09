@@ -18,6 +18,7 @@ import copy
 from typing import TypedDict
 
 import numpy as np
+import pytest
 
 import kernelforge.fchl18_kernel as kernel_mod
 import kernelforge.fchl18_repr as repr_mod
@@ -234,6 +235,7 @@ def test_hessian_ammonia_vs_ammonia():
     )
 
 
+@pytest.mark.slow
 def test_hessian_ammonia_vs_methane():
     """Ammonia vs methane: different heavy elements (N vs C)."""
     _check_hessian(AMMONIA_COORDS, AMMONIA_Z, METHANE_COORDS, METHANE_Z, KERNEL_ARGS, SIGMA)
@@ -271,6 +273,7 @@ def test_hessian_symmetry():
     )
 
 
+@pytest.mark.slow
 def test_hessian_use_atm_water_vs_water():
     """use_atm=True: analytical Hessian matches double-central-difference of scalar kernel."""
     args = copy.copy(KERNEL_ARGS)
@@ -278,6 +281,7 @@ def test_hessian_use_atm_water_vs_water():
     _check_hessian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, args, SIGMA, eps=1e-4)
 
 
+@pytest.mark.slow
 def test_hessian_use_atm_water_vs_ammonia():
     """use_atm=True, mixed pair: analytical Hessian matches numerical."""
     args = copy.copy(KERNEL_ARGS)
@@ -302,6 +306,7 @@ def test_hessian_use_atm_differs_from_no_atm():
     )
 
 
+@pytest.mark.slow
 def test_hessian_active_cutoff_matches_numerical():
     """Active cutoff (cut_start=0.5, cut_distance=2.0): analytical Hessian matches numerical.
 
@@ -334,6 +339,7 @@ def test_hessian_active_cutoff_differs_from_no_cutoff():
     )
 
 
+@pytest.mark.slow
 def test_hessian_use_atm_and_cutoff_matches_numerical():
     """Combination of use_atm=True and active cutoff: analytical Hessian matches numerical."""
     args = copy.copy(KERNEL_ARGS)
@@ -476,11 +482,13 @@ def _check_hessian_vs_jacobian(
     )
 
 
+@pytest.mark.slow
 def test_hessian_equals_jacobian_derivative_water_vs_water():
     """H[A,B] = d/dR_B(Jacobian): water vs water."""
     _check_hessian_vs_jacobian(WATER_COORDS, WATER_Z, WATER_COORDS, WATER_Z, KERNEL_ARGS, SIGMA)
 
 
+@pytest.mark.slow
 def test_hessian_equals_jacobian_derivative_water_vs_ammonia():
     """H[A,B] = d/dR_B(Jacobian): water vs ammonia (different sizes).
 
@@ -492,11 +500,13 @@ def test_hessian_equals_jacobian_derivative_water_vs_ammonia():
     )
 
 
+@pytest.mark.slow
 def test_hessian_equals_jacobian_derivative_hf_vs_water():
     """H[A,B] = d/dR_B(Jacobian): HF (diatomic) vs water."""
     _check_hessian_vs_jacobian(HF_COORDS, HF_Z, WATER_COORDS, WATER_Z, KERNEL_ARGS, SIGMA)
 
 
+@pytest.mark.slow
 def test_hessian_equals_jacobian_derivative_use_atm():
     """H[A,B] = d/dR_B(Jacobian): use_atm=True, water vs ammonia."""
     args = copy.copy(KERNEL_ARGS)
