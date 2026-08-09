@@ -106,8 +106,10 @@ def _compute_invdist_cuda(
 class CudaGlobalRFFModel(BaseModel):
     """GPU Random Fourier Features model for inverse-distance global descriptors.
 
-    Supports ``energy_only`` and ``energy_and_force`` training.  The normal
-    equations are accumulated on GPU in RFP packed format and solved in FP32.
+    Supports ``energy_only``, ``force_only``, and ``energy_and_force`` training.
+    Energy and E+F accumulate normal equations on GPU in RFP packed format.
+    Force-only uses the CPU gradient-gramian RFP path (no CUDA equivalent yet)
+    and GPU predictors for inference.
     """
 
     def __init__(
@@ -147,18 +149,21 @@ class CudaGlobalRFFModel(BaseModel):
 
         t0 = _time.perf_counter()
         mode = self.training_mode_
-        if mode not in ("energy_only", "energy_and_force"):
-            msg = "CudaGlobalRFFModel currently supports energy_only and energy_and_force training."
+        if mode not in ("energy_only", "force_only", "energy_and_force"):
+            msg = (
+                "CudaGlobalRFFModel supports energy_only, force_only, and "
+                "energy_and_force training."
+            )
             raise NotImplementedError(msg)
-        if energies is None:
+        if mode in ("energy_only", "energy_and_force") and energies is None:
             msg = f"energies must be provided for {mode} mode"
             raise ValueError(msg)
-        if mode == "energy_and_force" and forces is None:
-            msg = "forces must be provided for energy_and_force mode"
+        if mode in ("force_only", "energy_and_force") and forces is None:
+            msg = f"forces must be provided for {mode} mode"
             raise ValueError(msg)
         F_flat: NDArray[np.float64] | None = forces.ravel() if forces is not None else None
 
-        if mode == "energy_and_force":
+        if mode in ("force_only", "energy_and_force"):
             X_cuda, dX_cuda = _compute_invdist_cuda(coords_list, self.eps, with_gradients=True)
         else:
             X_cuda = _compute_invdist_cuda(coords_list, self.eps)
@@ -172,7 +177,7 @@ class CudaGlobalRFFModel(BaseModel):
         )
         step1 = (
             "Step 1  build invdist repr + jacobian (GPU)"
-            if mode == "energy_and_force"
+            if mode in ("force_only", "energy_and_force")
             else "Step 1  build invdist repr (GPU)"
         )
         t0 = _t(step1, t0)
@@ -185,12 +190,42 @@ class CudaGlobalRFFModel(BaseModel):
 
         W_cuda = _to_cuda(W_np)
         b_cuda = _to_cuda(b_np)
-        Y_cuda = _to_cuda(energies.astype(np.float32))
+        Y_cuda = _to_cuda(energies.astype(np.float32)) if energies is not None else None
         t0 = _t("Step 2  generate/upload RFF params + targets", t0)
 
-        if mode == "energy_and_force":
-            if F_flat is None:
-                msg = "F_flat is None in energy_and_force fit — internal error"
+        self._f_train: NDArray[np.float64] = np.array([], dtype=np.float64)
+        self._f_pred_train: NDArray[np.float64] = np.array([], dtype=np.float64)
+
+        if mode == "force_only":
+            if F_flat is None or dX_cuda is None:
+                msg = "F_flat/dX missing in force_only fit — internal error"
+                raise RuntimeError(msg)
+            from kernelforge import kernelmath, kitchen_sinks
+
+            X_np = X_cuda.cpu().numpy().astype(np.float64)
+            dX_np = dX_cuda.cpu().numpy().astype(np.float64)
+            GtG_rfp, GtF = kitchen_sinks.rff_gradient_gramian_symm_rfp(
+                X_np,
+                dX_np,
+                W_np.astype(np.float64),
+                b_np.astype(np.float64),
+                F_flat,
+            )
+            t0 = _t("Step 3  rff_gradient_gramian_symm_rfp (CPU)", t0)
+            weights_np = kernelmath.cho_solve_rfp(GtG_rfp, GtF, l2=self.l2).astype(np.float32)
+            weights_cuda = torch.from_numpy(weights_np).cuda().contiguous()
+            t0 = _t("Step 4  cho_solve_rfp (CPU) + H2D weights", t0)
+            self._y_train = np.array([], dtype=np.float64)
+            self._y_pred_train = np.array([], dtype=np.float64)
+            f_pred_cuda = _rff_ext.rff_predict_force(  # type: ignore[union-attr]
+                X_cuda, dX_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
+            )
+            self._f_train = F_flat
+            self._f_pred_train = f_pred_cuda.cpu().numpy().astype(np.float64)
+            t0 = _t("Step 5  train force prediction + D2H", t0)
+        elif mode == "energy_and_force":
+            if F_flat is None or Y_cuda is None:
+                msg = "F_flat/Y missing in energy_and_force fit — internal error"
                 raise RuntimeError(msg)
             F_cuda = _to_cuda(F_flat.astype(np.float32))
             ZtZ_rfp, ZtY = _rff_ext.rff_full_gramian_symm_rfp(  # type: ignore[union-attr]
@@ -203,46 +238,61 @@ class CudaGlobalRFFModel(BaseModel):
                 int(self.chunk_size),
                 int(self.chunk_size),
             )
-        else:
-            F_cuda = None
-            ZtZ_rfp, ZtY = _rff_ext.rff_gramian_symm_rfp(  # type: ignore[union-attr]
-                X_cuda, W_cuda, b_cuda, Y_cuda, int(self.chunk_size)
-            )
-        gram_label = (
-            "Step 3  rff_full_gramian_symm_rfp (GPU, RFP)"
-            if mode == "energy_and_force"
-            else "Step 3  rff_gramian_symm_rfp (GPU, RFP)"
-        )
-        t0 = _t(gram_label, t0)
-        rhs = ZtY.unsqueeze(-1)
-        t0 = _t("Step 4a build RHS view", t0)
-        info = _kern_ext.rfp_potrf(ZtZ_rfp, int(self.d_rff), float(self.l2))  # type: ignore[union-attr]
-        if info != 0:
-            msg = (
-                f"rfp_potrf (CudaGlobalRFFModel {mode}): Cholesky factorization failed "
-                f"(info={info}). Try increasing l2."
-            )
-            raise RuntimeError(msg)
-        _kern_ext.rfp_potrs(ZtZ_rfp, rhs)  # type: ignore[union-attr]
-        t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
-
-        weights_cuda = rhs.squeeze(-1).contiguous()
-        y_pred_cuda = _rff_ext.rff_predict_energy(  # type: ignore[union-attr]
-            X_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
-        )
-        t0 = _t("Step 5a train energy prediction (GPU)", t0)
-        self._f_train: NDArray[np.float64] = np.array([], dtype=np.float64)
-        self._f_pred_train: NDArray[np.float64] = np.array([], dtype=np.float64)
-        if mode == "energy_and_force":
-            if F_flat is None:
-                msg = "F_flat is None in energy_and_force fit — internal error"
+            t0 = _t("Step 3  rff_full_gramian_symm_rfp (GPU, RFP)", t0)
+            rhs = ZtY.unsqueeze(-1)
+            t0 = _t("Step 4a build RHS view", t0)
+            info = _kern_ext.rfp_potrf(ZtZ_rfp, int(self.d_rff), float(self.l2))  # type: ignore[union-attr]
+            if info != 0:
+                msg = (
+                    f"rfp_potrf (CudaGlobalRFFModel {mode}): Cholesky factorization failed "
+                    f"(info={info}). Try increasing l2."
+                )
                 raise RuntimeError(msg)
+            _kern_ext.rfp_potrs(ZtZ_rfp, rhs)  # type: ignore[union-attr]
+            t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
+            weights_cuda = rhs.squeeze(-1).contiguous()
+            y_pred_cuda = _rff_ext.rff_predict_energy(  # type: ignore[union-attr]
+                X_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
+            )
+            t0 = _t("Step 5a train energy prediction (GPU)", t0)
             f_pred_cuda = _rff_ext.rff_predict_force(  # type: ignore[union-attr]
                 X_cuda, dX_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
             )
             self._f_train = F_flat
             self._f_pred_train = f_pred_cuda.cpu().numpy().astype(np.float64)
             t0 = _t("Step 5b train force prediction + D2H", t0)
+            assert energies is not None  # noqa: S101
+            self._y_train = energies
+            self._y_pred_train = y_pred_cuda.cpu().numpy().astype(np.float64)
+            del F_cuda, ZtZ_rfp, ZtY, rhs
+        else:
+            if Y_cuda is None:
+                msg = "Y_cuda is None in energy_only fit — internal error"
+                raise RuntimeError(msg)
+            ZtZ_rfp, ZtY = _rff_ext.rff_gramian_symm_rfp(  # type: ignore[union-attr]
+                X_cuda, W_cuda, b_cuda, Y_cuda, int(self.chunk_size)
+            )
+            t0 = _t("Step 3  rff_gramian_symm_rfp (GPU, RFP)", t0)
+            rhs = ZtY.unsqueeze(-1)
+            t0 = _t("Step 4a build RHS view", t0)
+            info = _kern_ext.rfp_potrf(ZtZ_rfp, int(self.d_rff), float(self.l2))  # type: ignore[union-attr]
+            if info != 0:
+                msg = (
+                    f"rfp_potrf (CudaGlobalRFFModel {mode}): Cholesky factorization failed "
+                    f"(info={info}). Try increasing l2."
+                )
+                raise RuntimeError(msg)
+            _kern_ext.rfp_potrs(ZtZ_rfp, rhs)  # type: ignore[union-attr]
+            t0 = _t("Step 4b rfp_potrf + rfp_potrs (GPU)", t0)
+            weights_cuda = rhs.squeeze(-1).contiguous()
+            y_pred_cuda = _rff_ext.rff_predict_energy(  # type: ignore[union-attr]
+                X_cuda, W_cuda, b_cuda, weights_cuda, int(self.chunk_size)
+            )
+            t0 = _t("Step 5a train energy prediction (GPU)", t0)
+            assert energies is not None  # noqa: S101
+            self._y_train = energies
+            self._y_pred_train = y_pred_cuda.cpu().numpy().astype(np.float64)
+            del ZtZ_rfp, ZtY, rhs
 
         self._W_np = W_np
         self._b_np = b_np
@@ -250,17 +300,17 @@ class CudaGlobalRFFModel(BaseModel):
         self._W_cuda = W_cuda
         self._b_cuda = b_cuda
         self._weights_cuda = weights_cuda
-        self._y_train = energies
-        self._y_pred_train = y_pred_cuda.cpu().numpy().astype(np.float64)
         t0 = _t("Step 6  D2H train outputs + store state", t0)
 
         # Keep X only until training completes; prediction rebuilds descriptors.
-        del X_cuda, dX_cuda, Y_cuda, F_cuda, ZtZ_rfp, ZtY, rhs
+        del X_cuda, dX_cuda, Y_cuda
         torch.cuda.synchronize()
 
     def _training_labels_and_predictions(
         self,
     ) -> dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]]:
+        if self.training_mode_ == "force_only":
+            return {"force": (self._f_train, self._f_pred_train)}
         if self.training_mode_ == "energy_and_force":
             return {
                 "energy": (self._y_train, self._y_pred_train),
@@ -286,13 +336,14 @@ class CudaGlobalRFFModel(BaseModel):
             return _time.perf_counter()
 
         t0 = _time.perf_counter()
-        if self.training_mode_ not in ("energy_only", "energy_and_force"):
+        if self.training_mode_ not in ("energy_only", "force_only", "energy_and_force"):
             msg = (
-                "CudaGlobalRFFModel currently supports energy_only and energy_and_force prediction."
+                "CudaGlobalRFFModel supports energy_only, force_only, and "
+                "energy_and_force prediction."
             )
             raise NotImplementedError(msg)
 
-        if self.training_mode_ == "energy_and_force":
+        if self.training_mode_ in ("force_only", "energy_and_force"):
             X_cuda, dX_cuda = _compute_invdist_cuda(coords_list, self.eps, with_gradients=True)
             t0 = _tp("build invdist repr + jacobian (GPU)", t0)
         else:
@@ -304,7 +355,7 @@ class CudaGlobalRFFModel(BaseModel):
         )
         t0 = _tp("rff_predict_energy (GPU)", t0)
         E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
-        if self.training_mode_ == "energy_and_force":
+        if self.training_mode_ in ("force_only", "energy_and_force"):
             F_cuda = _rff_ext.rff_predict_force(  # type: ignore[union-attr]
                 X_cuda,
                 dX_cuda,

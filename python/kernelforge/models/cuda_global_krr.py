@@ -213,10 +213,10 @@ class CudaGlobalKRRModel(BaseModel):
 
         mode = self.training_mode_
 
-        if mode not in ("energy_only", "energy_and_force"):
+        if mode not in ("energy_only", "force_only", "energy_and_force"):
             msg = (
-                f"CudaGlobalKRRModel supports 'energy_only' and 'energy_and_force' training. "
-                f"Got '{mode}'. Use GlobalKRRModel for other modes."
+                f"CudaGlobalKRRModel supports 'energy_only', 'force_only', and "
+                f"'energy_and_force' training. Got '{mode}'."
             )
             raise NotImplementedError(msg)
 
@@ -287,6 +287,42 @@ class CudaGlobalKRRModel(BaseModel):
             self._X_tr: NDArray[np.float64] = X_cpu
             self._alpha: NDArray[np.float64] = alpha_np
             self._y_train: NDArray[np.float64] = energies
+            return
+
+        # ==================================================================
+        # force_only path (CPU Hessian kernels — no CUDA hessian_symm yet)
+        # ==================================================================
+        if mode == "force_only":
+            if forces is None:
+                msg = "forces must be provided for force_only mode"
+                raise ValueError(msg)
+            from kernelforge import global_kernels, kernelmath
+
+            X_cpu, dX_cpu = _build_repr(coords_list, self.eps, with_gradients=True)
+            if dX_cpu is None:
+                msg = "dX is None in force_only mode — internal error"
+                raise RuntimeError(msg)
+            N = len(coords_list)
+            M = int(X_cpu.shape[1])
+            D = int(dX_cpu.shape[1])
+            self._n_train = N
+            self._M = M
+            self._D = D
+            t0 = _t("Step 1  build invdist repr (CPU f64)", t0)
+
+            F_flat = forces.ravel()
+            K_rfp = global_kernels.kernel_gaussian_hessian_symm_rfp(X_cpu, dX_cpu, self.sigma)
+            alpha_np = kernelmath.cho_solve_rfp(K_rfp, F_flat, l2=self.l2)
+            alpha_desc = global_kernels.kernel_gaussian_compute_alpha_desc(
+                dX_cpu, alpha_np.reshape(N, D)
+            )
+            t0 = _t("Step 2  hessian_symm_rfp + cho_solve (CPU)", t0)
+
+            self._X_tr = X_cpu
+            self._dX_tr: NDArray[np.float64] | None = dX_cpu
+            self._alpha = alpha_np
+            self._alpha_desc: NDArray[np.float64] | None = alpha_desc
+            self._y_train = F_flat
             return
 
         # ==================================================================
@@ -373,7 +409,42 @@ class CudaGlobalKRRModel(BaseModel):
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         if self.training_mode_ == "energy_only":
             return self._predict_energy_only(coords_list, z_list)
+        if self.training_mode_ == "force_only":
+            return self._predict_force_only(coords_list, z_list)
         return self._predict_energy_and_force(coords_list, z_list)
+
+    def _predict_force_only(
+        self,
+        coords_list: list[NDArray[np.float64]],
+        z_list: list[NDArray[np.int32]],
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        """CPU inference matching GlobalKRRModel force_only (Hessian / J^T matvecs)."""
+        from kernelforge import global_kernels
+
+        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=True)
+        if dX_te is None:
+            msg = "dX_te is None in force_only predict — internal error"
+            raise RuntimeError(msg)
+        if self._alpha_desc is not None:
+            F_pred = global_kernels.kernel_gaussian_hessian_matvec(
+                X_te, dX_te, self._X_tr, self._alpha_desc, self.sigma
+            ).ravel()
+            E_pred = -global_kernels.kernel_gaussian_jacobian_t_matvec(
+                X_te, self._X_tr, self._alpha_desc, self.sigma
+            )
+        else:
+            if self._dX_tr is None:
+                msg = "dX_tr is None in force_only fallback — internal error"
+                raise RuntimeError(msg)
+            K_hess = global_kernels.kernel_gaussian_hessian(
+                X_te, dX_te, self._X_tr, self._dX_tr, self.sigma
+            )
+            F_pred = (K_hess @ self._alpha).ravel()
+            K_jt = global_kernels.kernel_gaussian_jacobian_t(
+                X_te, self._X_tr, self._dX_tr, self.sigma
+            )
+            E_pred = -(K_jt @ self._alpha)
+        return E_pred, F_pred
 
     def _predict_energy_only(
         self,
@@ -491,11 +562,12 @@ class CudaGlobalKRRModel(BaseModel):
     def _training_labels_and_predictions(
         self,
     ) -> dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]]:
-        # From (K + l2*I) @ alpha = y_train  ->  y_pred = y_train - l2 * alpha
         y_pred = self._y_train - self.l2 * self._alpha
         n = self._n_train
         if self.training_mode_ == "energy_only":
             return {"energy": (self._y_train, y_pred)}
+        if self.training_mode_ == "force_only":
+            return {"force": (self._y_train, y_pred)}
         # energy_and_force
         return {
             "energy": (self._y_train[:n], y_pred[:n]),
@@ -523,6 +595,11 @@ class CudaGlobalKRRModel(BaseModel):
         }
         if self.training_mode_ == "energy_only":
             base["X_tr"] = self._X_tr  # float64, used for CPU inference
+        elif self.training_mode_ == "force_only":
+            base["D"] = self._D
+            base["X_tr"] = self._X_tr
+            base["dX_tr"] = self._dX_tr
+            base["alpha_desc"] = self._alpha_desc
         else:
             # energy_and_force: store GPU inference state (float32 numpy copies)
             base["D"] = self._D
@@ -552,6 +629,13 @@ class CudaGlobalKRRModel(BaseModel):
 
         if self.training_mode_ == "energy_only":
             self._X_tr = data["X_tr"].astype(np.float64)
+        elif self.training_mode_ == "force_only":
+            self._D = int(data["D"])
+            self._X_tr = data["X_tr"].astype(np.float64)
+            self._dX_tr = data["dX_tr"].astype(np.float64) if "dX_tr" in data else None
+            self._alpha_desc = (
+                data["alpha_desc"].astype(np.float64) if "alpha_desc" in data else None
+            )
         else:
             # energy_and_force: reconstruct persistent CUDA tensors
             self._D = int(data["D"])
