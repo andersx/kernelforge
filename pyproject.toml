@@ -45,12 +45,13 @@ ase = [
 ]
 # Linux-only optional deps for CUDA workflows. Pulls torch + the companion
 # package that drops cuda_*.so into site-packages/kernelforge/. No-op on
-# macOS/Windows. A default-index torch install may be CPU-only; install a CUDA
-# build of PyTorch separately if you need GPU execution. Until the companion
-# is on PyPI, monorepo users resolve it via tool.uv.sources below.
+# macOS/Windows. Companion wheels are currently CPython 3.14 only — the
+# python_version marker avoids a failing source build on other Pythons.
+# A default-index torch install may be CPU-only; install a CUDA build of
+# PyTorch separately if you need GPU execution.
 cuda = [
     "torch>=2.2; sys_platform == 'linux'",
-    "kernelforge-cuda>=0.3.0; sys_platform == 'linux'",
+    "kernelforge-cuda>=0.3.0; sys_platform == 'linux' and python_version == '3.14'",
 ]
 
 [project.scripts]
@@ -61,13 +62,6 @@ kernelmd = "kernelforge.kernelmd:main"
 [project.urls]
 Homepage = "https://github.com/andersx/kernelforge"
 Issues = "https://github.com/andersx/kernelforge/issues"
-
-# Resolve [cuda] → kernelforge-cuda from the monorepo path so `uv sync` can
-# satisfy the optional extra before the companion is on PyPI. Published
-# package metadata is unchanged (still Depends-on kernelforge-cuda).
-# Companion must NOT depend on `kernelforge` or this becomes a resolve cycle.
-[tool.uv.sources]
-kernelforge-cuda = { path = "packaging/kernelforge-cuda" }
 
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = true
