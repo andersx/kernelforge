@@ -51,7 +51,7 @@ ase = [
 # PyTorch separately if you need GPU execution.
 cuda = [
     "torch>=2.2; sys_platform == 'linux'",
-    "kernelforge-cuda>=1.0.0; sys_platform == 'linux' and python_version >= '3.11' and python_version < '3.15'",
+    "kernelforge-cuda>=0.3.0; sys_platform == 'linux' and python_version >= '3.11' and python_version < '3.15'",
 ]
 
 [project.scripts]
