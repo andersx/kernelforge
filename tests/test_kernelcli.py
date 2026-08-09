@@ -105,6 +105,89 @@ class TestValidation:
         with pytest.raises(SystemExit):
             parser.parse_args(["--dataset", "rmd17_ethanol", "--split", "6"])
 
+    def test_cuda_force_only_allowed_representations(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """--cuda --mode force_only is valid for invdist/fchl19/fchl18 (+ RFF where allowed)."""
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+        parser = _build_parser()
+        cases = [
+            [
+                "--dataset",
+                "rmd17_ethanol",
+                "--cuda",
+                "--mode",
+                "force_only",
+                "--representation",
+                "invdist",
+            ],
+            [
+                "--dataset",
+                "rmd17_ethanol",
+                "--cuda",
+                "--mode",
+                "force_only",
+                "--representation",
+                "fchl19",
+            ],
+            [
+                "--dataset",
+                "rmd17_ethanol",
+                "--cuda",
+                "--mode",
+                "force_only",
+                "--representation",
+                "fchl18",
+            ],
+            [
+                "--dataset",
+                "rmd17_ethanol",
+                "--cuda",
+                "--mode",
+                "force_only",
+                "--representation",
+                "invdist",
+                "--regressor",
+                "rff",
+            ],
+            [
+                "--dataset",
+                "rmd17_ethanol",
+                "--cuda",
+                "--mode",
+                "force_only",
+                "--representation",
+                "fchl19",
+                "--regressor",
+                "rff",
+            ],
+        ]
+        for argv in cases:
+            args = parser.parse_args(argv)
+            _validate(args, parser)  # Should not raise
+
+    def test_cuda_force_only_rff_fchl18_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CUDA RFF + force_only is not supported with fchl18."""
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "rmd17_ethanol",
+                "--cuda",
+                "--mode",
+                "force_only",
+                "--representation",
+                "fchl18",
+                "--regressor",
+                "rff",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+
 
 # ---------------------------------------------------------------------------
 # Model factory
