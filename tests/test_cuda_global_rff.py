@@ -154,6 +154,28 @@ def test_force_only_agrees_with_cpu() -> None:
     np.testing.assert_allclose(F_gpu, F_cpu, rtol=5e-2, atol=5e-2)
 
 
+def test_force_only_save_load(tmp_path: Path) -> None:
+    """force_only save/load roundtrip must produce identical predictions."""
+    coords, z_list, _, forces = _load_ethanol(20)
+    tr, te = coords[:12], coords[12:]
+    ztr, zte = z_list[:12], z_list[12:]
+
+    model = CudaGlobalRFFModel(sigma=3.0, l2=1e-2, d_rff=64, seed=7, chunk_size=8)
+    model.fit(tr, ztr, forces=forces[:12])
+    assert model.training_mode_ == "force_only"
+    E_orig, F_orig = model.predict(te, zte)
+
+    path = tmp_path / "cuda_global_rff_force_only.npz"
+    model.save(path)
+    loaded = CudaGlobalRFFModel.load(path)
+    assert isinstance(loaded, CudaGlobalRFFModel)
+    assert loaded.training_mode_ == "force_only"
+
+    E_load, F_load = loaded.predict(te, zte)
+    np.testing.assert_allclose(E_load, E_orig, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(F_load, F_orig, rtol=1e-6, atol=1e-6)
+
+
 def test_variable_atom_count_raises() -> None:
     rng = np.random.default_rng(0)
     coords = [rng.standard_normal((5, 3)), rng.standard_normal((6, 3))]

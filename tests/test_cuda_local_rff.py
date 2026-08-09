@@ -188,6 +188,30 @@ def test_force_only_matches_cpu_small() -> None:
     np.testing.assert_allclose(F_gpu, F_cpu, rtol=8e-2, atol=8e-2)
 
 
+def test_force_only_save_load(tmp_path: Path) -> None:
+    """Non-PCA force_only save/load must produce identical predictions."""
+    coords, z_list, _, forces = _load_ethanol(20)
+    tr, te = coords[:15], coords[15:]
+    ztr, zte = z_list[:15], z_list[15:]
+
+    model = CudaLocalRFFModel(
+        sigma=20.0, l2=1e-1, d_rff=32, seed=11, elements=_ELEMENTS, chunk_size=5
+    )
+    model.fit(tr, ztr, forces=forces[:15])
+    assert model.training_mode_ == "force_only"
+    E_before, F_before = model.predict(te, zte)
+
+    save_path = tmp_path / "local_rff_force_only.npz"
+    model.save(save_path)
+    loaded = CudaLocalRFFModel.load(save_path)
+    assert loaded.training_mode_ == "force_only"
+    assert loaded.n_pca is None
+
+    E_after, F_after = loaded.predict(te, zte)
+    np.testing.assert_allclose(E_after, E_before, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(F_after, F_before, rtol=1e-5, atol=1e-5)
+
+
 # ---------------------------------------------------------------------------
 # SVD solver tests
 # ---------------------------------------------------------------------------

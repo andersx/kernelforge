@@ -1180,7 +1180,7 @@ class CudaLocalKRRModel(BaseModel):
             else self._y_train - self.l2 * self._alpha
         )
 
-        # Reconstruct persistent CUDA tensors from saved numpy arrays
+        # Reconstruct numpy training state (always needed for re-save / inspect).
         self._X_train_np = data["X_train"].astype(np.float32)
         self._dX_train_np = data["dX_train"].astype(np.float32)
         self._Q_train_np = data["Q_train"].astype(np.int32)
@@ -1188,20 +1188,25 @@ class CudaLocalKRRModel(BaseModel):
         self._alpha_E_np = data["alpha_E"].astype(np.float32)
         self._alpha_desc_F_np = data["alpha_desc_F"].astype(np.float32)
 
+        # force_only inference is CPU float64 only — skip GPU uploads.
+        if self.training_mode_ == "force_only":
+            self._X_tr_f64 = data["X_tr_f64"].astype(np.float64)
+            self._dX_tr_f64 = data["dX_tr_f64"].astype(np.float64)
+            self._alpha_desc_f64 = data["alpha_desc_f64"].astype(np.float64)
+            self._X_train_cuda = None
+            self._dX_train_cuda = None
+            self._Q_train_cuda = None
+            self._N_train_cuda = None
+            self._alpha_E_cuda = None
+            self._alpha_desc_F_cuda = None
+            return
+
         self._X_train_cuda = _to_cuda_f32(self._X_train_np)
         self._dX_train_cuda = _to_cuda_f32(self._dX_train_np)
         self._Q_train_cuda = _to_cuda_i32(self._Q_train_np)
         self._N_train_cuda = _to_cuda_i32(self._N_train_np)
         self._alpha_E_cuda = _to_cuda_f32(self._alpha_E_np)
         self._alpha_desc_F_cuda = _to_cuda_f32(self._alpha_desc_F_np)
-
-        if self.training_mode_ == "force_only":
-            self._X_tr_f64 = data["X_tr_f64"].astype(np.float64)
-            self._dX_tr_f64 = data["dX_tr_f64"].astype(np.float64)
-            self._alpha_desc_f64 = data["alpha_desc_f64"].astype(np.float64)
-            self._alpha_E_cuda = None
-            self._alpha_desc_F_cuda = None
-            return
 
         # Rebuild precomputed matvec cache (energy_and_force models only)
         self._precompute_matvec_cache()
