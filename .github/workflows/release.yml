@@ -116,9 +116,8 @@ jobs:
           # Match CUDA major across: manylinux image, torch wheel index, runtime.
           CIBW_MANYLINUX_X86_64_IMAGE: >-
             quay.io/manylinux_cuda/manylinux_2_28_x86_64_cuda13_1:latest
-          # Ship a single Python ABI for now; expand once torch+CUDA packaging
-          # is stable across 3.10–3.15.
-          CIBW_BUILD: cp314-manylinux_x86_64
+          # CUDA companion: CPython 3.11–3.14 manylinux (CPU wheels cover 3.10–3.15).
+          CIBW_BUILD: "cp311-manylinux_x86_64 cp312-manylinux_x86_64 cp313-manylinux_x86_64 cp314-manylinux_x86_64"
           CIBW_SKIP: "pp* *-musllinux_* *i686* cp31?t-*"
           CIBW_ARCHS_LINUX: x86_64
           # Companion has no in-tree tests; skip GPU pytest on hosted runners.

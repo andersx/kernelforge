@@ -4,8 +4,8 @@ Linux companion wheel that installs KernelForge CUDA extension modules
 (`cuda_*.so`) into `site-packages/kernelforge/`.
 
 **On PyPI.** Release wheels are built on GitHub Actions (`build-wheels-cuda`
-in the release workflow) using `manylinux_cuda` images and currently target
-**CPython 3.14** only.
+in the release workflow) using `manylinux_cuda` images for **CPython
+3.11–3.14**.
 
 ```bash
 pip install kernelforge
