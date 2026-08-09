@@ -128,11 +128,52 @@ def test_energy_and_force_matches_cpu_global_rff_small() -> None:
     np.testing.assert_allclose(F_gpu, F_cpu, rtol=3e-2, atol=3e-2)
 
 
-def test_force_only_not_implemented() -> None:
-    coords, z_list, _, forces = _load_ethanol(10)
-    model = CudaGlobalRFFModel(d_rff=32)
-    with pytest.raises(NotImplementedError, match="energy_only and energy_and_force"):
-        model.fit(coords, z_list, forces=forces)
+def test_force_only_shapes() -> None:
+    coords, z_list, _, forces = _load_ethanol(20)
+    model = CudaGlobalRFFModel(sigma=3.0, l2=1e-2, d_rff=64, seed=7, chunk_size=8)
+    model.fit(coords[:12], z_list[:12], forces=forces[:12])
+    assert model.training_mode_ == "force_only"
+    E_pred, F_pred = model.predict(coords[12:], z_list[12:])
+    assert E_pred.shape == (8,)
+    assert F_pred.size == forces[12:].size
+    assert np.all(np.isfinite(E_pred))
+    assert np.all(np.isfinite(F_pred))
+
+
+def test_force_only_agrees_with_cpu() -> None:
+    coords, z_list, _, forces = _load_ethanol(20)
+    tr, te = coords[:12], coords[12:]
+    ztr, zte = z_list[:12], z_list[12:]
+    cpu = GlobalRFFModel(sigma=3.0, l2=1e-2, d_rff=64, seed=7)
+    gpu = CudaGlobalRFFModel(sigma=3.0, l2=1e-2, d_rff=64, seed=7, chunk_size=8)
+    cpu.fit(tr, ztr, forces=forces[:12])
+    gpu.fit(tr, ztr, forces=forces[:12])
+    E_cpu, F_cpu = cpu.predict(te, zte)
+    E_gpu, F_gpu = gpu.predict(te, zte)
+    np.testing.assert_allclose(E_gpu, E_cpu, rtol=5e-2, atol=5e-2)
+    np.testing.assert_allclose(F_gpu, F_cpu, rtol=5e-2, atol=5e-2)
+
+
+def test_force_only_save_load(tmp_path: Path) -> None:
+    """force_only save/load roundtrip must produce identical predictions."""
+    coords, z_list, _, forces = _load_ethanol(20)
+    tr, te = coords[:12], coords[12:]
+    ztr, zte = z_list[:12], z_list[12:]
+
+    model = CudaGlobalRFFModel(sigma=3.0, l2=1e-2, d_rff=64, seed=7, chunk_size=8)
+    model.fit(tr, ztr, forces=forces[:12])
+    assert model.training_mode_ == "force_only"
+    E_orig, F_orig = model.predict(te, zte)
+
+    path = tmp_path / "cuda_global_rff_force_only.npz"
+    model.save(path)
+    loaded = CudaGlobalRFFModel.load(path)
+    assert isinstance(loaded, CudaGlobalRFFModel)
+    assert loaded.training_mode_ == "force_only"
+
+    E_load, F_load = loaded.predict(te, zte)
+    np.testing.assert_allclose(E_load, E_orig, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(F_load, F_orig, rtol=1e-6, atol=1e-6)
 
 
 def test_variable_atom_count_raises() -> None:

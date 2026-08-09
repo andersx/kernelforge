@@ -215,12 +215,60 @@ def test_predict_torch_raises_for_energy_only() -> None:
         model.predict_torch(dummy_X, dummy_dX)
 
 
-def test_force_only_raises() -> None:
-    """force_only mode must raise NotImplementedError."""
+def test_force_only_shapes() -> None:
+    """force_only fit/predict returns finite E and F with expected shapes."""
     coords, z, _, F = _load_ethanol()
     model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
-    with pytest.raises(NotImplementedError, match="energy_and_force"):
-        model.fit(coords, z, forces=F)
+    model.fit(coords[:_N_TRAIN], z[:_N_TRAIN], forces=F[:_N_TRAIN])
+    assert model.training_mode_ == "force_only"
+    E_pred, F_pred = model.predict(coords[_N_TRAIN:], z[_N_TRAIN:])
+    assert E_pred.shape == (len(coords) - _N_TRAIN,)
+    assert F_pred.size == F[_N_TRAIN:].size
+    assert np.all(np.isfinite(E_pred))
+    assert np.all(np.isfinite(F_pred))
+
+
+def test_force_only_agrees_with_cpu() -> None:
+    """CudaGlobalKRRModel force_only should match GlobalKRRModel (shared CPU Hessian)."""
+    coords, z, _, F = _load_ethanol()
+    tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
+    ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
+    sigma, l2 = 3.0, 1e-5
+
+    cpu = GlobalKRRModel(sigma=sigma, l2=l2)
+    cpu.fit(tr, ztr, forces=F[:_N_TRAIN])
+    E_cpu, F_cpu = cpu.predict(te, zte)
+
+    gpu = CudaGlobalKRRModel(sigma=sigma, l2=l2)
+    gpu.fit(tr, ztr, forces=F[:_N_TRAIN])
+    E_gpu, F_gpu = gpu.predict(te, zte)
+
+    np.testing.assert_allclose(E_gpu, E_cpu, rtol=1e-6, atol=1e-5)
+    np.testing.assert_allclose(F_gpu, F_cpu, rtol=1e-6, atol=1e-5)
+
+
+def test_force_only_save_load(tmp_path: Path) -> None:
+    """force_only save/load roundtrip must produce identical predictions."""
+    coords, z, _, F = _load_ethanol()
+    tr, te = coords[:_N_TRAIN], coords[_N_TRAIN:]
+    ztr, zte = z[:_N_TRAIN], z[_N_TRAIN:]
+
+    model = CudaGlobalKRRModel(sigma=3.0, l2=1e-5)
+    model.fit(tr, ztr, forces=F[:_N_TRAIN])
+    E_orig, F_orig = model.predict(te, zte)
+
+    path = tmp_path / "cuda_force_only.npz"
+    model.save(path)
+
+    loaded = CudaGlobalKRRModel.load(path)
+    assert isinstance(loaded, CudaGlobalKRRModel)
+    assert loaded.is_fitted_
+    assert loaded.training_mode_ == "force_only"
+    assert loaded.sigma == model.sigma
+
+    E_load, F_load = loaded.predict(te, zte)
+    np.testing.assert_allclose(E_orig, E_load, rtol=1e-6, atol=1e-5)
+    np.testing.assert_allclose(F_orig, F_load, rtol=1e-6, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------

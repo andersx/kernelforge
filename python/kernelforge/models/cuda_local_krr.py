@@ -522,17 +522,84 @@ class CudaLocalKRRModel(BaseModel):
             return time.perf_counter()
 
         mode = self.training_mode_
-        if mode not in ("energy_only", "energy_and_force"):
-            msg = f"CudaLocalKRRModel supports 'energy_only' and 'energy_and_force'. Got '{mode}'."
+        if mode not in ("energy_only", "force_only", "energy_and_force"):
+            msg = (
+                f"CudaLocalKRRModel supports 'energy_only', 'force_only', and "
+                f"'energy_and_force'. Got '{mode}'."
+            )
             raise NotImplementedError(msg)
-        if energies is None:
+        if mode in ("energy_only", "energy_and_force") and energies is None:
             msg = "energies must be provided"
             raise ValueError(msg)
-        if mode == "energy_and_force" and forces is None:
-            msg = "forces must be provided for energy_and_force mode"
+        if mode in ("force_only", "energy_and_force") and forces is None:
+            msg = f"forces must be provided for {mode} mode"
             raise ValueError(msg)
 
         t0 = time.perf_counter()
+
+        # force_only: CPU float64 FCHL19 + Hessian (no CUDA hessian_symm yet).
+        # Matches LocalKRRModel / CudaGlobalKRRModel force_only numerically.
+        if mode == "force_only":
+            from kernelforge import kernelmath
+            from kernelforge import local_kernels as _cpu_lk
+
+            from .representations import compute_fchl19
+
+            assert forces is not None  # noqa: S101
+            X_cpu, dX_cpu, Q_krr, _Q_rff, N = compute_fchl19(
+                coords_list,
+                z_list,
+                self.elements,
+                with_gradients=True,
+                repr_params=self.repr_params,
+            )
+            if dX_cpu is None:
+                msg = "dX is None in force_only mode — internal error"
+                raise RuntimeError(msg)
+            t0 = _t("Step 1  compute_fchl19 (CPU, f64 + grad)", t0)
+
+            nm = int(X_cpu.shape[0])
+            max_atoms = int(X_cpu.shape[1])
+            rep_size = int(X_cpu.shape[2])
+            naq = int(np.sum(N) * 3)
+            print(
+                f"  [CUDA]   nm={nm}  max_atoms={max_atoms}  rep={rep_size}  "
+                f"naq={naq}  BIG={nm + naq}"
+            )
+            self._n_train = nm
+            self._max_atoms = max_atoms
+            self._rep_size = rep_size
+            self._naq_train = naq
+
+            F_flat = forces.ravel()
+            K_rfp = _cpu_lk.kernel_gaussian_hessian_symm_rfp(
+                X_cpu, dX_cpu, Q_krr, N, float(self.sigma)
+            )
+            alpha_np = kernelmath.cho_solve_rfp(K_rfp, F_flat, l2=float(self.l2))
+            alpha_desc = _cpu_lk.kernel_gaussian_local_compute_alpha_desc(
+                dX_cpu, Q_krr, N, alpha_np
+            )
+            t0 = _t("Step 2  hessian_symm_rfp + cho_solve (CPU)", t0)
+
+            self._X_train_np = X_cpu.astype(np.float32)
+            self._dX_train_np = dX_cpu.astype(np.float32)
+            self._Q_train_np = Q_krr.astype(np.int32)
+            self._N_train_np = N.astype(np.int32)
+            self._X_tr_f64 = X_cpu
+            self._dX_tr_f64 = dX_cpu
+            self._alpha_desc_f64 = alpha_desc
+            self._alpha = alpha_np
+            self._y_train = F_flat
+            self._y_pred_train = F_flat - float(self.l2) * alpha_np
+            self._X_train_cuda = None
+            self._dX_train_cuda = None
+            self._Q_train_cuda = None
+            self._N_train_cuda = None
+            self._alpha_E_cuda = None
+            self._alpha_desc_F_cuda = None
+            self._alpha_E_np = np.zeros(nm, dtype=np.float32)
+            self._alpha_desc_F_np = alpha_desc.astype(np.float32)
+            return
 
         need_gradients = mode == "energy_and_force"
 
@@ -569,6 +636,7 @@ class CudaLocalKRRModel(BaseModel):
             # (K + l2*I) @ alpha = energies => K @ alpha = energies - l2*alpha.
             from kernelforge import cuda_global_kernels as _gext  # rfp_potrf / rfp_potrs
 
+            assert energies is not None  # noqa: S101
             K_rfp = _ext.kernel_gaussian_symm_rfp(  # type: ignore[union-attr]
                 X_cuda, Q_cuda, N_cuda, float(self.sigma)
             )
@@ -901,7 +969,47 @@ class CudaLocalKRRModel(BaseModel):
         t0 = _time.perf_counter()
 
         mode = self.training_mode_
-        need_gradients = mode == "energy_and_force"
+        need_gradients = mode in ("force_only", "energy_and_force")
+
+        if mode == "force_only":
+            from kernelforge import local_kernels as _cpu_lk
+
+            from .representations import compute_fchl19
+
+            X_te, dX_te, Q_te, _Q_rff, N_te = compute_fchl19(
+                coords_list,
+                z_list,
+                self.elements,
+                with_gradients=True,
+                repr_params=self.repr_params,
+            )
+            if dX_te is None:
+                msg = "dX_te is None in force_only predict — internal error"
+                raise RuntimeError(msg)
+            t0 = _tp("compute_fchl19 (CPU f64 + grad)", t0)
+            F_pred = _cpu_lk.kernel_gaussian_local_hessian_matvec(
+                X_te,
+                dX_te,
+                self._X_tr_f64,
+                self._alpha_desc_f64,
+                Q_te,
+                self._Q_train_np,
+                N_te,
+                self._N_train_np,
+                float(self.sigma),
+            )
+            E_pred = -_cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
+                X_te,
+                self._X_tr_f64,
+                self._alpha_desc_f64,
+                Q_te,
+                self._Q_train_np,
+                N_te,
+                self._N_train_np,
+                float(self.sigma),
+            )
+            t0 = _tp("hessian / jacobian_t matvec (CPU)", t0)
+            return E_pred, F_pred
 
         X_te_cuda, dX_te_cuda, Q_te_cuda, _Q_te, N_te = _compute_fchl19_cuda(
             coords_list,
@@ -929,7 +1037,7 @@ class CudaLocalKRRModel(BaseModel):
             E_cuda = K_EE_test @ self._alpha_E_cuda
             t0 = _tp("kernel_gaussian_rect + E = K@alpha (GPU)", t0)
 
-            E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
+            E_pred = E_cuda.cpu().numpy().astype(np.float64)
             # No forces predicted in energy_only fast path
             F_pred = np.zeros(int(np.sum(N_te) * 3), dtype=np.float64)
             return E_pred, F_pred
@@ -974,6 +1082,8 @@ class CudaLocalKRRModel(BaseModel):
         self,
     ) -> dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]]:
         n = self._n_train
+        if self.training_mode_ == "force_only":
+            return {"force": (self._y_train, self._y_pred_train)}
         result: dict[str, tuple[NDArray[np.float64], NDArray[np.float64]]] = {
             "energy": (self._y_train[:n], self._y_pred_train[:n]),
         }
@@ -986,7 +1096,7 @@ class CudaLocalKRRModel(BaseModel):
     # ------------------------------------------------------------------
 
     def _arrays_to_save(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "model_class": "CudaLocalKRRModel",
             "training_mode": self.training_mode_,
             "sigma": self.sigma,
@@ -1018,6 +1128,11 @@ class CudaLocalKRRModel(BaseModel):
             "alpha_E": self._alpha_E_np,
             "alpha_desc_F": self._alpha_desc_F_np,
         }
+        if self.training_mode_ == "force_only":
+            result["X_tr_f64"] = self._X_tr_f64
+            result["dX_tr_f64"] = self._dX_tr_f64
+            result["alpha_desc_f64"] = self._alpha_desc_f64
+        return result
 
     def _load_from_arrays(self, data: np.lib.npyio.NpzFile) -> None:
         _require_cuda_ext()
@@ -1065,13 +1180,26 @@ class CudaLocalKRRModel(BaseModel):
             else self._y_train - self.l2 * self._alpha
         )
 
-        # Reconstruct persistent CUDA tensors from saved numpy arrays
+        # Reconstruct numpy training state (always needed for re-save / inspect).
         self._X_train_np = data["X_train"].astype(np.float32)
         self._dX_train_np = data["dX_train"].astype(np.float32)
         self._Q_train_np = data["Q_train"].astype(np.int32)
         self._N_train_np = data["N_train"].astype(np.int32)
         self._alpha_E_np = data["alpha_E"].astype(np.float32)
         self._alpha_desc_F_np = data["alpha_desc_F"].astype(np.float32)
+
+        # force_only inference is CPU float64 only — skip GPU uploads.
+        if self.training_mode_ == "force_only":
+            self._X_tr_f64 = data["X_tr_f64"].astype(np.float64)
+            self._dX_tr_f64 = data["dX_tr_f64"].astype(np.float64)
+            self._alpha_desc_f64 = data["alpha_desc_f64"].astype(np.float64)
+            self._X_train_cuda = None
+            self._dX_train_cuda = None
+            self._Q_train_cuda = None
+            self._N_train_cuda = None
+            self._alpha_E_cuda = None
+            self._alpha_desc_F_cuda = None
+            return
 
         self._X_train_cuda = _to_cuda_f32(self._X_train_np)
         self._dX_train_cuda = _to_cuda_f32(self._dX_train_np)
