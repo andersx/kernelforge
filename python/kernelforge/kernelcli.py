@@ -375,6 +375,7 @@ def _build_model(
     n_pca: int | None = None,
     pca_center: bool = False,
     pca_whiten: bool = False,
+    dtype: str = "float64",
 ) -> (
     LocalKRRModel
     | LocalRFFModel
@@ -419,7 +420,11 @@ def _build_model(
         # repr_params override kernel_params for FCHL18
         if cuda:
             return CudaFCHL18KRRModel(
-                sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
+                sigma=sigma,
+                l2=l2,
+                max_size=max_size,
+                kernel_params=repr_params or None,
+                dtype=cast(Literal["float32", "float64"], dtype),
             )
         return FCHL18KRRModel(
             sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
@@ -728,6 +733,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--dtype",
+        type=str,
+        default="float64",
+        choices=["float32", "float64"],
+        help=(
+            "Floating-point precision for --cuda --representation fchl18 "
+            "(default: float64). float32 uses GPU rfp_potrf end-to-end."
+        ),
+    )
+    p.add_argument(
         "--repr-param",
         action="append",
         default=None,
@@ -803,6 +818,11 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 "--representation invdist/fchl19 and --mode energy_only, "
                 "force_only, or energy_and_force."
             )
+        if args.dtype != "float64" and args.representation != "fchl18":
+            parser.error(
+                "--dtype is only supported with --cuda --representation fchl18 "
+                f"(got --representation {args.representation})."
+            )
         if args.representation != "fchl19" and args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only configurable for --cuda --representation fchl19.")
         if (
@@ -850,6 +870,8 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
             if args.svdr_niters < 0:
                 parser.error("--svdr-niters must be >= 0.")
     else:
+        if args.dtype != "float64":
+            parser.error("--dtype is only supported with --cuda --representation fchl18.")
         if args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only supported with --cuda --representation fchl19.")
         if args.preprocessing != _DEFAULT_CUDA_LOCAL_PREPROCESSING:
@@ -964,6 +986,7 @@ def run(args: argparse.Namespace) -> None:
         n_pca=args.n_pca,
         pca_center=args.pca_center,
         pca_whiten=args.pca_whiten,
+        dtype=args.dtype,
     )
     print(f"\n[2] Model: {type(model).__name__}")
 

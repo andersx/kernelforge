@@ -457,6 +457,24 @@ __global__ static void add_l2_diag_rfp_kernel(float *K_rfp, float l2, int N)
 }
 
 
+// add_l2_diag_rfp_upper_kernel
+// TRANSR=N, UPLO=U diagonal indices (matches kf::rfp_index_upper_N / math.cpp).
+__global__ static void add_l2_diag_rfp_upper_kernel(float *K_rfp, float l2, int N)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= N) return;
+
+    const int k = N / 2;
+    const int stride = (N % 2 == 0) ? (N + 1) : N;
+    long arf_idx;
+    if (j >= k)
+        arf_idx = (long)(j - k) * stride + j;
+    else
+        arf_idx = (long)j * stride + (j + k + 1);
+    K_rfp[arf_idx] += l2;
+}
+
+
 // ============================================================================
 // build_kernel_gpu_symm_lower
 //
@@ -822,24 +840,31 @@ void kernel_gaussian_symm_rfp_cu(
 // Adds l2 to the diagonal of the RFP matrix (regularisation), then performs
 // Cholesky factorisation in-place.
 //
-// Convention fixed to TRANSR=N, UPLO=L.
-// On exit d_K_rfp contains the lower Cholesky factor L in RFP format.
+// Convention: TRANSR=N; uplo_upper selects UPLO=U vs UPLO=L.
+// On exit d_K_rfp contains the Cholesky factor in the same RFP packing.
 // *info: 0 = success, >0 = leading minor of order *info is not positive definite.
 // ---------------------------------------------------------------------------
-void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info)
+void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info, bool uplo_upper)
 {
     ensure_curfp();
 
     /* Add l2 to diagonal */
-    if (l2 != 0.0f)
-        add_l2_diag_rfp_kernel<<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+    if (l2 != 0.0f) {
+        if (uplo_upper)
+            add_l2_diag_rfp_upper_kernel<<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+        else
+            add_l2_diag_rfp_kernel<<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+    }
 
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    const curfpFillMode_t uplo =
+        uplo_upper ? CURFP_FILL_MODE_UPPER : CURFP_FILL_MODE_LOWER;
+
     /* Cholesky factorisation in-place */
     CURFP_CHECK(curfpSpftrf(s_curfp,
-        CURFP_OP_N,            /* transr = N */
-        CURFP_FILL_MODE_LOWER, /* uplo   = L */
+        CURFP_OP_N, /* transr = N */
+        uplo,
         N, d_K_rfp, info));
 }
 
@@ -848,17 +873,21 @@ void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info)
 // rfp_potrs_cu
 //
 // Triangular solve using the Cholesky factor produced by rfp_potrf_cu.
-// Solves (L * L^T) * X = B in-place, overwriting d_B with the solution.
+// UPLO=L: (L * L^T) * X = B; UPLO=U: (U^T * U) * X = B.
+// Overwrites d_B with the solution.
 //
 // d_B  : (N, nrhs) col-major device pointer, leading dimension N.
-// Convention fixed to TRANSR=N, UPLO=L.
+// Convention: TRANSR=N; uplo_upper must match rfp_potrf_cu.
 // ---------------------------------------------------------------------------
-void rfp_potrs_cu(const float *d_L_rfp, float *d_B, int N, int nrhs)
+void rfp_potrs_cu(
+    const float *d_L_rfp, float *d_B, int N, int nrhs, bool uplo_upper)
 {
     ensure_curfp();
+    const curfpFillMode_t uplo =
+        uplo_upper ? CURFP_FILL_MODE_UPPER : CURFP_FILL_MODE_LOWER;
     CURFP_CHECK(curfpSpftrs(s_curfp,
-        CURFP_OP_N,            /* transr = N */
-        CURFP_FILL_MODE_LOWER, /* uplo   = L */
+        CURFP_OP_N, /* transr = N */
+        uplo,
         N, nrhs, d_L_rfp, d_B, N));
     CUDA_CHECK(cudaDeviceSynchronize());
 }

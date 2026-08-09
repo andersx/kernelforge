@@ -130,3 +130,59 @@ class TestCudaFCHL18KRRModelEnergyAndForce:
         assert np.isfinite(energy)
         assert forces_ase.shape == (N_ATOMS, 3)
         assert np.all(np.isfinite(forces_ase))
+
+
+class TestCudaFCHL18KRRModelFP32:
+    def test_energy_only_fp32_shapes(self, dataset: tuple) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:8], coords_list[8:]
+        ztr, zte = z_list[:8], z_list[8:]
+
+        model = CudaFCHL18KRRModel(sigma=5.0, l2=1e-4, max_size=MAX_SIZE, dtype="float32")
+        model.fit(tr, ztr, energies=energies[:8])
+        assert model.dtype == "float32"
+        assert model._x_tr.dtype == __import__("torch").float32
+        E_pred, F_pred = model.predict(te, zte)
+        assert E_pred.shape == (4,)
+        assert F_pred.shape == (4 * N_ATOMS * 3,)
+        assert np.all(np.isfinite(E_pred))
+        assert np.all(np.isfinite(F_pred))
+
+    def test_energy_only_fp32_agrees_loosely_with_fp64(self, dataset: tuple) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:8], coords_list[8:]
+        ztr, zte = z_list[:8], z_list[8:]
+
+        m64 = CudaFCHL18KRRModel(sigma=5.0, l2=1e-4, max_size=MAX_SIZE, dtype="float64")
+        m32 = CudaFCHL18KRRModel(sigma=5.0, l2=1e-4, max_size=MAX_SIZE, dtype="float32")
+        m64.fit(tr, ztr, energies=energies[:8])
+        m32.fit(tr, ztr, energies=energies[:8])
+        E64, _ = m64.predict(te, zte)
+        E32, _ = m32.predict(te, zte)
+        np.testing.assert_allclose(E32, E64, rtol=5e-2, atol=5e-2)
+
+    def test_fp32_save_load_roundtrip(self, dataset: tuple, tmp_path) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:8], coords_list[8:]
+        ztr, zte = z_list[:8], z_list[8:]
+
+        model = CudaFCHL18KRRModel(sigma=5.0, l2=1e-4, max_size=MAX_SIZE, dtype="float32")
+        model.fit(tr, ztr, energies=energies[:8])
+        E_orig, F_orig = model.predict(te, zte)
+
+        path = tmp_path / "cuda_fchl18_fp32.npz"
+        model.save(path)
+        loaded = CudaFCHL18KRRModel.load(path)
+        assert loaded.dtype == "float32"
+        E_load, F_load = loaded.predict(te, zte)
+        np.testing.assert_allclose(E_load, E_orig, rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(F_load, F_orig, rtol=1e-4, atol=1e-4)
+
+    def test_fp32_requires_rfp(self) -> None:
+        model = CudaFCHL18KRRModel(dtype="float32", use_rfp=False, max_size=MAX_SIZE)
+        with pytest.raises(ValueError, match="use_rfp"):
+            model.fit(
+                [RNG.standard_normal((N_ATOMS, 3))],
+                [Z_ETHANOL],
+                energies=np.array([0.0]),
+            )
