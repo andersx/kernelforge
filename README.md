@@ -68,8 +68,8 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 
 Planned PyPI layout: a **CPU** ``kernelforge`` wheel plus a Linux companion
 ``kernelforge-cuda`` that drops ``cuda_*.so`` into ``site-packages/kernelforge/``.
-The companion is **not published yet**; until then use a local monorepo build or
-build both wheels yourself:
+Until the companion is published, use a local monorepo build or build both
+wheels yourself:
 
 ```bash
 # Day-to-day monorepo (one editable tree with CPU+CUDA):
@@ -80,7 +80,8 @@ make install-linux-mkl-ilp64-cuda   # passes -DKF_WITH_CUDA=ON
 make demo-cuda-wheels
 ```
 
-Once the companion is on PyPI, Linux users will be able to install with:
+Once the companion is on PyPI (release workflow builds it on GHA with
+``manylinux_cuda``; no GPU needed to *compile*), Linux users can install with:
 
 ```bash
 uv pip install kernelforge                 # CPU
@@ -91,7 +92,10 @@ Note: ``pip``/``uv`` install ``torch`` from the default index may be CPU-only;
 install a CUDA build of PyTorch (e.g. from the PyTorch CUDA wheel index) if you
 need GPU execution. Also requires an NVIDIA driver compatible with that build.
 
-Requires a CUDA toolkit + PyTorch for local builds.
+Requires a CUDA toolkit + PyTorch for local builds. Release CUDA wheels are
+cross-compiled on GitHub Actions (``build-wheels-cuda``); claim the
+``kernelforge-cuda`` project on PyPI and add a Trusted Publisher matching the
+``kernelforge`` release workflow before the first publish.
 
 ## Advanced: Custom BLAS/LAPACK Libraries
 
