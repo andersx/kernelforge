@@ -40,7 +40,7 @@ void kernel_gaussian_jacobian(
 // Transposed Jacobian kernel: Jacobians on set-1 side (dX1).
 // Output shape: (naq1, nm2), where naq1 = 3 * sum(n1).
 // Property: kernel_gaussian_jacobian_t(X1, dX1, X2, ...) ==
-//           kernel_gaussian_jacobian(X2, X1, dX1, ...).T
+//           -kernel_gaussian_jacobian(X2, X1, dX1, ...).T
 void kernel_gaussian_jacobian_t(
     const std::vector<double> &x1,   // (nm1, max_atoms1, rep)
     const std::vector<double> &x2,   // (nm2, max_atoms2, rep)

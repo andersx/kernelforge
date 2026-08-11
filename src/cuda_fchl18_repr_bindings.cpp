@@ -21,9 +21,9 @@ Parameters
 ----------
 coords : torch.Tensor, shape (nm, max_size, 3), float32 or float64, CUDA
     Padded Cartesian coordinates.
-z : torch.Tensor, shape (nm, max_size), int32, CUDA
+Z : torch.Tensor, shape (nm, max_size), int32, CUDA
     Padded nuclear charges.
-n : torch.Tensor, shape (nm,), int32, CUDA
+N : torch.Tensor, shape (nm,), int32, CUDA
     Active atom counts per molecule.
 cut_distance : float, default 5.0
     Neighbour cutoff radius in Angstrom.

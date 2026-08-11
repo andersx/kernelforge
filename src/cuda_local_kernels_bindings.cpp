@@ -901,7 +901,7 @@ X_t : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
 Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
 N_t : torch.Tensor, shape (nm_t,), int32, CUDA
 alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
-alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+alpha_desc_F : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
 sigma : float
 
 Returns

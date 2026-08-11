@@ -755,7 +755,7 @@ PYBIND11_MODULE(global_kernels, m) {
         py::arg("sigma"),
         "Compute transposed Jacobian kernel with Jacobians on reference side (X2).\n"
         "Shapes: X1(N1,M), X2(N2,M), dX2(N2,D,M) -> K(N1, N2*D).\n"
-        "Property: kernel_gaussian_jacobian_t(X2, X1, dX2, σ) == kernel_gaussian_jacobian(X1, dX1, "
+        "Property: kernel_gaussian_jacobian_t(X2, X1, dX1, σ) == kernel_gaussian_jacobian(X1, dX1, "
         "X2, σ).T"
     );
     m.def(
