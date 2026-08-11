@@ -71,7 +71,7 @@ def ref_full_matvec_local(
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Reference: build full K_full block matrix, multiply by [alpha_E; alpha_F]."""
     nm1 = x1.shape[0]
-    K_full = _kernels.kernel_gaussian_full(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
+    K_full = _kernels.kernel_gaussian_full(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
     alpha = np.concatenate([alpha_e.ravel(), alpha_f.ravel()])
     pred = K_full @ alpha
     e_ref: NDArray[np.float64] = pred[:nm1]

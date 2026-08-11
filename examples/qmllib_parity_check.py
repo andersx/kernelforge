@@ -273,8 +273,8 @@ def check_jacobian_kernels():
 
     K_jact = kf_lk.kernel_gaussian_jacobian_t(
         d["X_kf"][:nm1],
-        d["X_kf"][nm1:],
         d["dX_kf"][:nm1],
+        d["X_kf"][nm1:],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],
         d["N_kf"][:nm1],
@@ -283,8 +283,8 @@ def check_jacobian_kernels():
     )
     K_full = kf_lk.kernel_gaussian_full(
         d["X_kf"][:nm1],
-        d["X_kf"][nm1:],
         d["dX_kf"][:nm1],
+        d["X_kf"][nm1:],
         d["dX_kf"][nm1:],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],
@@ -320,8 +320,8 @@ def check_hessian_kernels():
 
     K_kf = kf_lk.kernel_gaussian_hessian(
         d["X_kf"][:nm1],
-        d["X_kf"][nm1:],
         d["dX_kf"][:nm1],
+        d["X_kf"][nm1:],
         d["dX_kf"][nm1:],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],
@@ -384,8 +384,8 @@ def check_gp_kernels():
     naq2 = int(np.sum(d["N_kf"][nm1:]) * 3)
     K_kf = kf_lk.kernel_gaussian_full(
         d["X_kf"][:nm1],
-        d["X_kf"][nm1:],
         d["dX_kf"][:nm1],
+        d["X_kf"][nm1:],
         d["dX_kf"][nm1:],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],
