@@ -56,7 +56,7 @@ def test_full_scalar_block(seed: int) -> None:
 
 @pytest.mark.parametrize("seed", [0, 42, 1234])
 def test_full_jacobian_block(seed: int) -> None:
-    """K_full[nm1:, 0:nm2] must match kernel_gaussian_jacobian_t(x1,x2,dX1,...) [naq1 x nm2]."""
+    """K_full[nm1:, 0:nm2] must match kernel_gaussian_jacobian_t(X1,dX1,X2,...) [naq1 x nm2]."""
     nm1, nm2 = 3, 4
     max_atoms, rep_size, n_species = 4, 7, 3
     sigma = 1.5
