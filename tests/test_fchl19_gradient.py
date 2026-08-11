@@ -262,7 +262,7 @@ def test_jacobian_t_matches_reference(seed: int) -> None:
 
 
 def test_jacobian_t_transpose_property() -> None:
-    """kernel_gaussian_jacobian_t(x1,dX1,x2,...) == kernel_gaussian_jacobian(x2,x1,dX1,...).T"""
+    """kernel_gaussian_jacobian_t(X1,dX1,X2,...) == -kernel_gaussian_jacobian(X2,X1,dX1,...).T"""
     rng = np.random.default_rng(42)
 
     nm1, nm2 = 3, 4

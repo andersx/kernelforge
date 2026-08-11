@@ -299,7 +299,7 @@ def kernel_gaussian_jacobian_t(
     Z_train_list: Sequence[NDArray[np.int32]],
     X_test: NDArray[np.float64],
     N_test: NDArray[np.int32],
-    nN_test: NDArray[np.int32],
+    NN_test: NDArray[np.int32],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,

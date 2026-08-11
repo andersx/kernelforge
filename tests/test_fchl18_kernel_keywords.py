@@ -43,6 +43,7 @@ class _KernelArgs(TypedDict):
     use_atm: bool
 
 
+# Scalar / gradient / jacobian defaults
 KERNEL_KW: _KernelArgs = {
     "two_body_scaling": 2.0,
     "two_body_width": 0.1,
@@ -54,6 +55,20 @@ KERNEL_KW: _KernelArgs = {
     "cut_distance": 1e6,
     "fourier_order": 2,
     "use_atm": True,
+}
+
+# Hessian / full defaults (match binding defaults)
+HESSIAN_KW: _KernelArgs = {
+    "two_body_scaling": 2.0,
+    "two_body_width": 0.1,
+    "two_body_power": 6.0,
+    "three_body_scaling": 2.0,
+    "three_body_width": 3.0,
+    "three_body_power": 3.0,
+    "cut_start": 1.0,
+    "cut_distance": 1e6,
+    "fourier_order": 1,
+    "use_atm": False,
 }
 
 
@@ -101,3 +116,73 @@ def test_fchl18_keyword_names_match_positional() -> None:
         **KERNEL_KW,
     )
     np.testing.assert_array_equal(g_kw, g_pos)
+
+    j_pos = fk.kernel_gaussian_jacobian(coords_a, zs_a, x2, n2, nn2, SIGMA, **KERNEL_KW)
+    j_kw = fk.kernel_gaussian_jacobian(
+        coords_A_list=coords_a,
+        Z_A_list=zs_a,
+        X2=x2,
+        N2=n2,
+        NN2=nn2,
+        sigma=SIGMA,
+        **KERNEL_KW,
+    )
+    np.testing.assert_array_equal(j_kw, j_pos)
+
+    jt_pos = fk.kernel_gaussian_jacobian_t(coords_a, zs_a, x2, n2, nn2, SIGMA, **KERNEL_KW)
+    jt_kw = fk.kernel_gaussian_jacobian_t(
+        coords_train_list=coords_a,
+        Z_train_list=zs_a,
+        X_test=x2,
+        N_test=n2,
+        NN_test=nn2,
+        sigma=SIGMA,
+        **KERNEL_KW,
+    )
+    np.testing.assert_array_equal(jt_kw, jt_pos)
+
+    h_pos = fk.kernel_gaussian_hessian(coords_a, zs_a, coords_b, zs_b, SIGMA, **HESSIAN_KW)
+    h_kw = fk.kernel_gaussian_hessian(
+        coords_A_list=coords_a,
+        Z_A_list=zs_a,
+        coords_B_list=coords_b,
+        Z_B_list=zs_b,
+        sigma=SIGMA,
+        **HESSIAN_KW,
+    )
+    np.testing.assert_array_equal(h_kw, h_pos)
+
+    hs_pos = fk.kernel_gaussian_hessian_symm(coords_a, zs_a, SIGMA, **HESSIAN_KW)
+    hs_kw = fk.kernel_gaussian_hessian_symm(
+        coords_list=coords_a, Z_list=zs_a, sigma=SIGMA, **HESSIAN_KW
+    )
+    np.testing.assert_array_equal(hs_kw, hs_pos)
+
+    hsr_pos = fk.kernel_gaussian_hessian_symm_rfp(coords_a, zs_a, SIGMA, **HESSIAN_KW)
+    hsr_kw = fk.kernel_gaussian_hessian_symm_rfp(
+        coords_list=coords_a, Z_list=zs_a, sigma=SIGMA, **HESSIAN_KW
+    )
+    np.testing.assert_array_equal(hsr_kw, hsr_pos)
+
+    f_pos = fk.kernel_gaussian_full(coords_a, zs_a, coords_b, zs_b, SIGMA, **HESSIAN_KW)
+    f_kw = fk.kernel_gaussian_full(
+        coords_A_list=coords_a,
+        Z_A_list=zs_a,
+        coords_B_list=coords_b,
+        Z_B_list=zs_b,
+        sigma=SIGMA,
+        **HESSIAN_KW,
+    )
+    np.testing.assert_array_equal(f_kw, f_pos)
+
+    fs_pos = fk.kernel_gaussian_full_symm(coords_a, zs_a, SIGMA, **HESSIAN_KW)
+    fs_kw = fk.kernel_gaussian_full_symm(
+        coords_list=coords_a, Z_list=zs_a, sigma=SIGMA, **HESSIAN_KW
+    )
+    np.testing.assert_array_equal(fs_kw, fs_pos)
+
+    fsr_pos = fk.kernel_gaussian_full_symm_rfp(coords_a, zs_a, SIGMA, **HESSIAN_KW)
+    fsr_kw = fk.kernel_gaussian_full_symm_rfp(
+        coords_list=coords_a, Z_list=zs_a, sigma=SIGMA, **HESSIAN_KW
+    )
+    np.testing.assert_array_equal(fsr_kw, fsr_pos)

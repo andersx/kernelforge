@@ -1355,18 +1355,18 @@ Compute the rectangular FCHL18 Gaussian kernel matrix on GPU.
 
 Parameters
 ----------
-x1, x2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations. Dtypes must match.
-n1, n2 : torch.Tensor, shape (nm,), int32, CUDA
+N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn1, nn2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (nm1, nm2), same dtype as x1, CUDA
+torch.Tensor, shape (nm1, nm2), same dtype as X1, CUDA
     Rectangular energy-only kernel matrix.
 )doc"
     );
@@ -1395,18 +1395,18 @@ Only upper-triangle molecule pairs (a <= b) are evaluated; K[b,a] is mirrored.
 
 Parameters
 ----------
-x : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations.
-n : torch.Tensor, shape (nm,), int32, CUDA
+N : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (nm, nm), same dtype as x, CUDA
+torch.Tensor, shape (nm, nm), same dtype as X, CUDA
     Symmetric energy-only kernel matrix.
 )doc"
     );
@@ -1440,18 +1440,18 @@ Unpack with: kernelmath.rfp_to_full(K_rfp, nm, uplo='L', transr='N')
 
 Parameters
 ----------
-x : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations.
-n : torch.Tensor, shape (nm,), int32, CUDA
+N : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (nm*(nm+1)//2,), same dtype as x, CUDA
+torch.Tensor, shape (nm*(nm+1)//2,), same dtype as X, CUDA
     Upper-triangle RFP-packed energy-only kernel.
 )doc"
     );
@@ -1482,33 +1482,33 @@ torch.Tensor, shape (nm*(nm+1)//2,), same dtype as x, CUDA
 Compute the FCHL18 Jacobian kernel dK/dR_A on GPU.
 
 J[row, b] = dK(A_a, B_b) / dR_{A_a}[alpha, mu]
-with row = row_offset[a] + alpha*3 + mu and row_offset[a] = 3 * sum_{a' < a} n1[a'].
+with row = row_offset[a] + alpha*3 + mu and row_offset[a] = 3 * sum_{a' < a} N1[a'].
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_jacobian.
 
 Unlike the CPU function, which takes raw coordinate lists and builds the query
-representation internally, this takes a precomputed x1 (as kernel_gaussian does)
-plus coords1/z1. The coordinates are needed to map each neighbour slot of the
+representation internally, this takes a precomputed X1 (as kernel_gaussian does)
+plus coords1/Z1. The coordinates are needed to map each neighbour slot of the
 representation back to an atom index for the chain rule; they must be the same
 padded coordinates the representation was generated from.
 
 Parameters
 ----------
-x1, x2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations. Dtypes must match.
-n1, n2 : torch.Tensor, shape (nm,), int32, CUDA
+N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn1, nn2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
-coords1 : torch.Tensor, shape (nm1, max_size1, 3), same dtype as x1, CUDA
+coords1 : torch.Tensor, shape (nm1, max_size1, 3), same dtype as X1, CUDA
     Padded Cartesian coordinates of the query molecules.
-z1 : torch.Tensor, shape (nm1, max_size1), int32, CUDA
+Z1 : torch.Tensor, shape (nm1, max_size1), int32, CUDA
     Padded nuclear charges of the query molecules.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (3 * sum(n1), nm2), same dtype as x1, CUDA
+torch.Tensor, shape (3 * sum(N1), nm2), same dtype as X1, CUDA
     Jacobian of the energy kernel with respect to the query coordinates.
 )doc"
     );
@@ -1539,7 +1539,7 @@ torch.Tensor, shape (3 * sum(n1), nm2), same dtype as x1, CUDA
 Compute the FCHL18 Jacobian-T kernel on GPU.
 
 Same computation as kernel_gaussian_jacobian, but stores
-Jt[b, row] = dK(A_a, B_b) / dR_{A_a}[...] with shape (nm2, 3*sum(n1)).
+Jt[b, row] = dK(A_a, B_b) / dR_{A_a}[...] with shape (nm2, 3*sum(N1)).
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_jacobian_t.
 )doc"
     );
@@ -1604,7 +1604,7 @@ Compute the FCHL18 Hessian kernel d2K/dR_A dR_B on GPU.
 
 H[row, col] = d2K(A_a, B_b) / dR_{A_a}[alpha, mu] dR_{B_b}[beta, nu]
 with row = row_offset[a] + alpha*3 + mu, col = col_offset[b] + beta*3 + nu,
-row_offset[a] = 3 * sum_{a' < a} n1[a'] and col_offset[b] = 3 * sum_{b' < b} n2[b'].
+row_offset[a] = 3 * sum_{a' < a} N1[a'] and col_offset[b] = 3 * sum_{b' < b} N2[b'].
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian.
 
 Like kernel_gaussian_jacobian, both sides take a precomputed representation plus
@@ -1617,23 +1617,23 @@ use_atm is False, matching the CPU implementation.
 
 Parameters
 ----------
-x1, x2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations. Dtypes must match.
-n1, n2 : torch.Tensor, shape (nm,), int32, CUDA
+N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn1, nn2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
-coords1, coords2 : torch.Tensor, shape (nm, max_size, 3), same dtype as x1, CUDA
+coords1, coords2 : torch.Tensor, shape (nm, max_size, 3), same dtype as X1, CUDA
     Padded Cartesian coordinates of each side's molecules.
-z1, z2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+Z1, Z2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Padded nuclear charges of each side's molecules.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (3 * sum(n1), 3 * sum(n2)), same dtype as x1, CUDA
-    Force-force block matrix, one dense (3*n1[a], 3*n2[b]) block per molecule pair.
+torch.Tensor, shape (3 * sum(N1), 3 * sum(N2)), same dtype as X1, CUDA
+    Force-force block matrix, one dense (3*N1[a], 3*N2[b]) block per molecule pair.
 )doc"
     );
 
@@ -1660,7 +1660,7 @@ torch.Tensor, shape (3 * sum(n1), 3 * sum(n2)), same dtype as x1, CUDA
 Compute the symmetric FCHL18 Hessian kernel on GPU.
 
 Evaluates lower-triangle molecule pairs once, mirrors off-diagonal blocks, and
-symmetrises diagonal blocks. Shape (D, D) with D = 3*sum(n).
+symmetrises diagonal blocks. Shape (D, D) with D = 3*sum(N).
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm.
 )doc"
     );
@@ -1687,7 +1687,7 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm.
         R"doc(
 Compute the symmetric FCHL18 Hessian kernel in RFP format on GPU.
 
-TRANSR='N', UPLO='U'. Length D*(D+1)/2 with D = 3*sum(n).
+TRANSR='N', UPLO='U'. Length D*(D+1)/2 with D = 3*sum(N).
 Unpack with: kernelmath.rfp_to_full(H_rfp, D, uplo='L', transr='N')
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm_rfp.
 )doc"
@@ -1720,7 +1720,7 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm_rfp.
         R"doc(
 Compute the full FCHL18 energy+force kernel matrix on GPU.
 
-Block layout (N_A=nm1, N_B=nm2, D_A=3*sum(n1), D_B=3*sum(n2)):
+Block layout (N_A=nm1, N_B=nm2, D_A=3*sum(N1), D_B=3*sum(N2)):
   K[0:N_A, 0:N_B]     scalar
   K[0:N_A, N_B:]      jacobian_t (dK/dR_B)
   K[N_A:,  0:N_B]     jacobian   (dK/dR_A)
@@ -1751,7 +1751,7 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full.
         R"doc(
 Compute the symmetric full FCHL18 energy+force kernel on GPU.
 
-Shape (N+D, N+D) with N=nm and D=3*sum(n). Hessian uses lower-triangle pairs
+Shape (N+D, N+D) with N=nm and D=3*sum(N). Hessian uses lower-triangle pairs
 only. Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full_symm.
 )doc"
     );
