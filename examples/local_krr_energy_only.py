@@ -175,7 +175,7 @@ def main():
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
     K_te_jac = kernel_gaussian_jacobian_t(  # (N_test*naq, N_train)
-        X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, SIGMA
+        X_te, dX_te, X_tr, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
     F_te_pred = (K_te_jac @ alpha).reshape(N_TEST, naq)
     print(f"    Force  prediction kernel built in {time.perf_counter() - t0:.4f}s")

@@ -271,9 +271,9 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
 
 static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> x1,  // (nm1, max_atoms1, rep)
-    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<double, py::array::c_style | py::array::forcecast>
         dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
+    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<int, py::array::c_style | py::array::forcecast> q1,  // (nm1, max_atoms1)
     py::array_t<int, py::array::c_style | py::array::forcecast> q2,  // (nm2, max_atoms2)
     py::array_t<int, py::array::c_style | py::array::forcecast> n1,  // (nm1,)
@@ -388,9 +388,9 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
 
 static py::array_t<double> fgdml_kernel_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> x1,  // (nm1, max_atoms1, rep)
-    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<double, py::array::c_style | py::array::forcecast>
         dx1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
+    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<double, py::array::c_style | py::array::forcecast>
         dx2,  // (nm2, max_atoms2, rep, 3*max_atoms2)
     py::array_t<int, py::array::c_style | py::array::forcecast> q1,  // (nm1, max_atoms1)
@@ -765,166 +765,166 @@ PYBIND11_MODULE(local_kernels, m) {
     m.def(
         "kernel_gaussian_hessian_symm",
         &fgdml_kernel_symm_py,
-        py::arg("x1"),
-        py::arg("dx1"),
-        py::arg("q1"),
-        py::arg("n1"),
+        py::arg("X"),
+        py::arg("dX"),
+        py::arg("Q"),
+        py::arg("N"),
         py::arg("sigma"),
         R"(Compute the Gaussian GDML/Hessian kernel (symmetric).
 
 Args:
-  x1:  (nm1, max_atoms1, rep)
-  dx1: (nm1, max_atoms1, rep, 3*max_atoms1)
-  q1:  (nm1, max_atoms1)
-  n1:  (nm1,)
+  X:  (nm, max_atoms, rep)
+  dX: (nm, max_atoms, rep, 3*max_atoms)
+  Q:  (nm, max_atoms)
+  N:  (nm,)
   sigma: positive float
 
 Returns:
-  K: (naq1, naq1) row-major, where naq1 = 3 * sum(n1)
+  K: (naq, naq) row-major, where naq = 3 * sum(N)
 )"
     );
 
     m.def(
         "kernel_gaussian_hessian",
         &fgdml_kernel_py,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("dx1"),
-        py::arg("dx2"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("X1"),
+        py::arg("dX1"),
+        py::arg("X2"),
+        py::arg("dX2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma"),
         R"(Compute the Gaussian GDML/Hessian kernel.
 
 Args:
-  x1:  (nm1, max_atoms1, rep)
-  x2:  (nm2, max_atoms2, rep)
-  dx1: (nm1, max_atoms1, rep, 3*max_atoms1)
-  dx2: (nm2, max_atoms2, rep, 3*max_atoms2)
-  q1:  (nm1, max_atoms1)
-  q2:  (nm2, max_atoms2)
-  n1:  (nm1,)
-  n2:  (nm2,)
+  X1:  (nm1, max_atoms1, rep)
+  dX1: (nm1, max_atoms1, rep, 3*max_atoms1)
+  X2:  (nm2, max_atoms2, rep)
+  dX2: (nm2, max_atoms2, rep, 3*max_atoms2)
+  Q1:  (nm1, max_atoms1)
+  Q2:  (nm2, max_atoms2)
+  N1:  (nm1,)
+  N2:  (nm2,)
   sigma: positive float
 
 Returns:
   K: (naq2, naq1) row-major, where
-     naq1 = 3 * sum(n1), naq2 = 3 * sum(n2)
+     naq1 = 3 * sum(N1), naq2 = 3 * sum(N2)
 )"
     );
 
     m.def(
         "kernel_gaussian_jacobian",
         &fatomic_local_gradient_kernel_py,
-        py::arg("x1"),
-        py::arg("x2"),
+        py::arg("X1"),
+        py::arg("X2"),
         py::arg("dX2"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma"),
         R"(Compute the Gaussian Jacobian kernel (gradient w.r.t. coordinates of set-2).
 
 Args:
-  x1:  (nm1, max_atoms1, rep)
-  x2:  (nm2, max_atoms2, rep)
+  X1:  (nm1, max_atoms1, rep)
+  X2:  (nm2, max_atoms2, rep)
   dX2: (nm2, max_atoms2, rep, 3*max_atoms2)
-  q1:  (nm1, max_atoms1)
-  q2:  (nm2, max_atoms2)
-  n1:  (nm1,)
-  n2:  (nm2,)
+  Q1:  (nm1, max_atoms1)
+  Q2:  (nm2, max_atoms2)
+  N1:  (nm1,)
+  N2:  (nm2,)
   sigma: positive float
 
 Returns:
-  K: (nm1, naq2) where naq2 = 3 * sum(n2)
+  K: (nm1, naq2) where naq2 = 3 * sum(N2)
 )"
     );
 
     m.def(
         "kernel_gaussian_jacobian_t",
         &fatomic_local_gradient_kernel_t_py,
-        py::arg("x1"),
-        py::arg("x2"),
+        py::arg("X1"),
         py::arg("dX1"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("X2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma"),
         R"(Compute the transposed Gaussian Jacobian kernel (gradient w.r.t. coordinates of set-1).
 
 Args:
-  x1:  (nm1, max_atoms1, rep)
-  x2:  (nm2, max_atoms2, rep)
+  X1:  (nm1, max_atoms1, rep)
   dX1: (nm1, max_atoms1, rep, 3*max_atoms1)
-  q1:  (nm1, max_atoms1)
-  q2:  (nm2, max_atoms2)
-  n1:  (nm1,)
-  n2:  (nm2,)
+  X2:  (nm2, max_atoms2, rep)
+  Q1:  (nm1, max_atoms1)
+  Q2:  (nm2, max_atoms2)
+  N1:  (nm1,)
+  N2:  (nm2,)
   sigma: positive float
 
 Returns:
-  K: (naq1, nm2) where naq1 = 3 * sum(n1)
+  K: (naq1, nm2) where naq1 = 3 * sum(N1)
 
 Property:
-  kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma) ==
-      -kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1, sigma).T
+  kernel_gaussian_jacobian_t(X1, dX1, X2, Q1, Q2, N1, N2, sigma) ==
+      -kernel_gaussian_jacobian(X2, X1, dX1, Q2, Q1, N2, N1, sigma).T
 )"
     );
 
     m.def(
         "kernel_gaussian",
         &flocal_kernel_py,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma")
     );
     m.def(
         "kernel_gaussian_symm",
         &flocal_kernel_symm_py,
-        py::arg("x1"),
-        py::arg("q1"),
-        py::arg("n1"),
+        py::arg("X"),
+        py::arg("Q"),
+        py::arg("N"),
         py::arg("sigma")
     );
     m.def(
         "kernel_gaussian_symm_rfp",
         &flocal_kernel_symm_rfp_py,
-        py::arg("x1"),
-        py::arg("q1"),
-        py::arg("n1"),
+        py::arg("X"),
+        py::arg("Q"),
+        py::arg("N"),
         py::arg("sigma"),
         "Symmetric Gaussian kernel with RFP (TRANSR='N', UPLO='U') output.\n"
-        "Inputs: x1(nm,max_atoms,rep), q1(nm,max_atoms), n1(nm).\n"
+        "Inputs: X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm).\n"
         "Returns: 1-D RFP array of length nm*(nm+1)/2."
     );
 
     m.def(
         "kernel_gaussian_hessian_symm_rfp",
         &fgdml_kernel_symm_rfp_py,
-        py::arg("x1"),
-        py::arg("dx1"),
-        py::arg("q1"),
-        py::arg("n1"),
+        py::arg("X"),
+        py::arg("dX"),
+        py::arg("Q"),
+        py::arg("N"),
         py::arg("sigma"),
         R"(Symmetric Hessian kernel in RFP (TRANSR='N', UPLO='U') format.
 
 Args:
-  x1:  (nm, max_atoms, rep)
-  dx1: (nm, max_atoms, rep, 3*max_atoms)
-  q1:  (nm, max_atoms)
-  n1:  (nm,)
+  X:  (nm, max_atoms, rep)
+  dX: (nm, max_atoms, rep, 3*max_atoms)
+  Q:  (nm, max_atoms)
+  N:  (nm,)
   sigma: positive float
 
 Returns:
-  arf: 1-D array of length naq*(naq+1)/2, where naq = 3 * sum(n1).
+  arf: 1-D array of length naq*(naq+1)/2, where naq = 3 * sum(N).
        Packed as RFP TRANSR='N', UPLO='U'.
        Equivalent to: np.triu(kernel_gaussian_hessian_symm(...)) packed by dpftrs convention.
 )"
@@ -934,9 +934,9 @@ Returns:
         "kernel_gaussian_full",
         [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
            py::array_t<double, py::array::c_style | py::array::forcecast>
-               x2,
-           py::array_t<double, py::array::c_style | py::array::forcecast>
                dx1,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               x2,
            py::array_t<double, py::array::c_style | py::array::forcecast>
                dx2,
            py::array_t<int, py::array::c_style | py::array::forcecast>
@@ -1014,18 +1014,18 @@ Returns:
                 capsule
             );
         },
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("dx1"),
-        py::arg("dx2"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("X1"),
+        py::arg("dX1"),
+        py::arg("X2"),
+        py::arg("dX2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma"),
         R"(Full combined energy+force kernel (asymmetric).
 
-Output shape: (nm1+naq1, nm2+naq2) where naq1=3*sum(n1), naq2=3*sum(n2).
+Output shape: (nm1+naq1, nm2+naq2) where naq1=3*sum(N1), naq2=3*sum(N2).
 
 Block layout:
   K[0:nm1,   0:nm2]   = scalar kernel
@@ -1092,10 +1092,10 @@ Block layout:
                 capsule
             );
         },
-        py::arg("x"),
-        py::arg("dx"),
-        py::arg("q"),
-        py::arg("n"),
+        py::arg("X"),
+        py::arg("dX"),
+        py::arg("Q"),
+        py::arg("N"),
         py::arg("sigma"),
         R"(Full combined energy+force kernel (symmetric).
 
@@ -1167,10 +1167,10 @@ Block layout:
                 capsule
             );
         },
-        py::arg("x"),
-        py::arg("dx"),
-        py::arg("q"),
-        py::arg("n"),
+        py::arg("X"),
+        py::arg("dX"),
+        py::arg("Q"),
+        py::arg("N"),
         py::arg("sigma"),
         R"(Full combined energy+force kernel (symmetric, RFP packed).
 
@@ -1227,17 +1227,17 @@ Packed as RFP TRANSR='N', UPLO='U'.
                 capsule
             );
         },
-        py::arg("dx2"),
-        py::arg("q2"),
-        py::arg("n2"),
+        py::arg("dX2"),
+        py::arg("Q2"),
+        py::arg("N2"),
         py::arg("alpha"),
         R"(Pre-compute descriptor-space force coefficients for J^T*alpha trick.
 
 Shapes:
-  dx2:   (nm2, max_atoms2, rep_size, 3*max_atoms2), training Jacobians
-  q2:    (nm2, max_atoms2), atomic labels
-  n2:    (nm2,), active atom counts
-  alpha: (naq2,) where naq2 = 3*sum(n2), force coefficients in Cartesian space
+  dX2:   (nm2, max_atoms2, rep_size, 3*max_atoms2), training Jacobians
+  Q2:    (nm2, max_atoms2), atomic labels
+  N2:    (nm2,), active atom counts
+  alpha: (naq2,) where naq2 = 3*sum(N2), force coefficients in Cartesian space
 
 Returns:
   alpha_desc: (nm2, max_atoms2, rep_size), descriptor-space coefficients
@@ -1330,14 +1330,14 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
                 capsule
             );
         },
-        py::arg("x1"),
-        py::arg("dx1"),
-        py::arg("x2"),
+        py::arg("X1"),
+        py::arg("dX1"),
+        py::arg("X2"),
         py::arg("alpha_desc"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma"),
         R"(Predict forces via local Hessian kernel matvec using J^T*alpha trick.
 
@@ -1410,13 +1410,13 @@ Returns:
             }
             return E;
         },
-        py::arg("x1"),
-        py::arg("x2"),
+        py::arg("X1"),
+        py::arg("X2"),
         py::arg("alpha_desc"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma"),
         R"(Predict energies via local Jacobian kernel matvec using J^T*alpha trick.
 
@@ -1505,15 +1505,15 @@ Returns:
             }
             return py::make_tuple(E, F);
         },
-        py::arg("x1"),
-        py::arg("dx1"),
-        py::arg("x2"),
+        py::arg("X1"),
+        py::arg("dX1"),
+        py::arg("X2"),
         py::arg("alpha_desc_F"),
         py::arg("alpha_E"),
-        py::arg("q1"),
-        py::arg("q2"),
-        py::arg("n1"),
-        py::arg("n2"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
         py::arg("sigma"),
         R"(Predict energies+forces via full local kernel matvec using J^T*alpha trick.
 
