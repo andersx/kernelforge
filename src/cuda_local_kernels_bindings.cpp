@@ -17,7 +17,7 @@
 //       alpha_F : (naq,)                            float32 CUDA
 //       → alpha_desc : (nm, max_atoms, rep) float32 CUDA
 //
-//   kernel_gaussian_full_matvec(X_q,dX_q,Q_q,N_q, X_t,Q_t,N_t, alpha_E,alpha_desc, sigma)
+//   kernel_gaussian_full_matvec(X_q,dX_q,Q_q,N_q, X_t,Q_t,N_t, alpha_E,alpha_desc_F, sigma)
 //       → (E_pred : (nm_q,) float32 CUDA,
 //          F_pred : (naq_q,) float32 CUDA)
 
@@ -738,7 +738,7 @@ kernel_gaussian_full_symm(X, dX, Q, N, sigma)
 compute_alpha_desc(dX, N, alpha_F)
     Precompute descriptor-space force weights for the J^T·alpha trick.
 
-kernel_gaussian_full_matvec(X_q, dX_q, Q_q, N_q, X_t, Q_t, N_t, alpha_E, alpha_desc, sigma)
+kernel_gaussian_full_matvec(X_q, dX_q, Q_q, N_q, X_t, Q_t, N_t, alpha_E, alpha_desc_F, sigma)
     Contracted E+F inference using the J^T·alpha trick (no K_test_train materialisation).
 )doc";
 
@@ -860,7 +860,7 @@ Precompute descriptor-space force weights (J^T·alpha trick).
 alpha_desc[b, i2, k] = sum_{c=0}^{3*N[b]-1} dX[b,i2,k,c] * alpha_F[offs[b]+c]
 
 Call once after the KRR solve.  The result is passed to
-``kernel_gaussian_full_matvec`` at inference time.
+``kernel_gaussian_full_matvec`` as ``alpha_desc_F`` at inference time.
 
 Parameters
 ----------

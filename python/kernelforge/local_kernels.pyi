@@ -74,10 +74,10 @@ def kernel_gaussian_full(
 ) -> NDArray[np.float64]:
     """Asymmetric full kernel, shape (nm1+naq1, nm2+naq2).
 
-    Block layout:
+    Block layout (names match the standalone local APIs):
       [:nm1, :nm2]   scalar
-      [:nm1, nm2:]   jacobian_t  (dK/dR_2)
-      [nm1:, :nm2]   jacobian    (dK/dR_1)
+      [:nm1, nm2:]   jacobian    (dK/dR_2)
+      [nm1:, :nm2]   jacobian_t  (dK/dR_1)
       [nm1:, nm2:]   hessian
     """
     ...
@@ -91,10 +91,10 @@ def kernel_gaussian_full_symm(
 ) -> NDArray[np.float64]:
     """Symmetric full kernel, shape (nm+naq, nm+naq), fully filled.
 
-    Block layout:
+    Block layout (names match the standalone local APIs):
       [:nm, :nm]   scalar  (symmetric)
-      [:nm, nm:]   jacobian_t = jacobian.T
-      [nm:, :nm]   jacobian
+      [:nm, nm:]   jacobian    (dK/dR_2) = -jacobian_t.T
+      [nm:, :nm]   jacobian_t  (dK/dR_1)
       [nm:, nm:]   hessian (symmetric)
     """
     ...
@@ -153,7 +153,8 @@ def kernel_gaussian_local_hessian_matvec(
       X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
       dX1:       (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
       X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
-      alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+      alpha_desc:(nm2, max_atoms2, rep_size), from
+                 kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha)
       Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
       N1, N2:    (nm1/nm2), active atom counts
       sigma:     Gaussian width parameter
@@ -178,7 +179,8 @@ def kernel_gaussian_local_jacobian_t_matvec(
     Shapes:
       X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
       X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
-      alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+      alpha_desc:(nm2, max_atoms2, rep_size), from
+                 kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha)
       Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
       N1, N2:    (nm1/nm2), active atom counts
       sigma:     Gaussian width parameter
@@ -206,7 +208,8 @@ def kernel_gaussian_local_full_matvec(
       X1:          (nm1, max_atoms1, rep_size), query descriptor vectors
       dX1:         (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
       X2:          (nm2, max_atoms2, rep_size), training descriptor vectors
-      alpha_desc_F:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc(dX2, alpha_F)
+      alpha_desc_F:(nm2, max_atoms2, rep_size), from
+                   kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha_F)
       alpha_E:     (nm2,), energy coefficients
       Q1, Q2:      (nm1/nm2, max_atoms1/2), atomic labels (for matching)
       N1, N2:      (nm1/nm2), active atom counts

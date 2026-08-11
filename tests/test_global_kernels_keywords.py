@@ -88,3 +88,30 @@ def test_keyword_names_match_positional(data: tuple) -> None:
     )
     np.testing.assert_allclose(ef_kw[0], ef_pos[0])
     np.testing.assert_allclose(ef_kw[1], ef_pos[1])
+
+    f_pos = gk.kernel_gaussian_hessian_matvec(x1, dx1, x2, alpha_desc, sigma)
+    f_kw = gk.kernel_gaussian_hessian_matvec(
+        X_q=x1, dX_q=dx1, X_t=x2, alpha_desc=alpha_desc, sigma=sigma
+    )
+    np.testing.assert_allclose(f_kw, f_pos)
+
+    # Symmetric / RFP variants
+    ksr_pos = gk.kernel_gaussian_symm_rfp(x1, sigma)
+    ksr_kw = gk.kernel_gaussian_symm_rfp(X=x1, sigma=sigma)
+    np.testing.assert_array_equal(ksr_kw, ksr_pos)
+
+    hs_pos = gk.kernel_gaussian_hessian_symm(x1, dx1, sigma)
+    hs_kw = gk.kernel_gaussian_hessian_symm(X=x1, dX=dx1, sigma=sigma)
+    np.testing.assert_array_equal(hs_kw, hs_pos)
+
+    hsr_pos = gk.kernel_gaussian_hessian_symm_rfp(x1, dx1, sigma)
+    hsr_kw = gk.kernel_gaussian_hessian_symm_rfp(X=x1, dX=dx1, sigma=sigma)
+    np.testing.assert_array_equal(hsr_kw, hsr_pos)
+
+    fs_pos = gk.kernel_gaussian_full_symm(x1, dx1, sigma)
+    fs_kw = gk.kernel_gaussian_full_symm(X=x1, dX=dx1, sigma=sigma)
+    np.testing.assert_array_equal(fs_kw, fs_pos)
+
+    fsr_pos = gk.kernel_gaussian_full_symm_rfp(x1, dx1, sigma)
+    fsr_kw = gk.kernel_gaussian_full_symm_rfp(X=x1, dX=dx1, sigma=sigma)
+    np.testing.assert_array_equal(fsr_kw, fsr_pos)

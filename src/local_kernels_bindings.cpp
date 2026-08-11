@@ -1026,8 +1026,8 @@ Output shape: (nm1+naq1, nm2+naq2) where naq1=3*sum(N1), naq2=3*sum(N2).
 
 Block layout:
   K[0:nm1,   0:nm2]   = scalar kernel
-  K[0:nm1,   nm2:]    = jacobian_t  (dX2-side derivatives, shape nm1 x naq2)
-  K[nm1:,    0:nm2]   = jacobian    (dX1-side derivatives, shape naq1 x nm2)
+  K[0:nm1,   nm2:]    = jacobian    (dX2-side / dK/dR_2, shape nm1 x naq2)
+  K[nm1:,    0:nm2]   = jacobian_t  (dX1-side / dK/dR_1, shape naq1 x nm2)
   K[nm1:,    nm2:]    = hessian     (shape naq1 x naq2)
 )"
     );
@@ -1096,12 +1096,12 @@ Block layout:
         py::arg("sigma"),
         R"(Full combined energy+force kernel (symmetric).
 
-Output shape: (nm+naq, nm+naq) where naq=3*sum(n).
+Output shape: (nm+naq, nm+naq) where naq=3*sum(N).
 
 Block layout:
   K[0:nm,  0:nm]  = scalar kernel      (fully filled, symmetric)
-  K[0:nm,  nm:]   = jacobian_t         (nm x naq, fully filled)
-  K[nm:,   0:nm]  = jacobian           (naq x nm, fully filled)
+  K[0:nm,  nm:]   = jacobian           (dK/dR_2 layout, nm x naq)
+  K[nm:,   0:nm]  = jacobian_t         (dK/dR_1 layout, naq x nm)
   K[nm:,   nm:]   = hessian block      (naq x naq, lower triangle + diagonal filled)
 )"
     );
@@ -1171,7 +1171,7 @@ Block layout:
         py::arg("sigma"),
         R"(Full combined energy+force kernel (symmetric, RFP packed).
 
-Output: 1-D array of length BIG*(BIG+1)/2 where BIG=nm+naq, naq=3*sum(n).
+Output: 1-D array of length BIG*(BIG+1)/2 where BIG=nm+naq, naq=3*sum(N).
 Packed as RFP TRANSR='N', UPLO='U'.
 )"
     );
@@ -1344,7 +1344,8 @@ Shapes:
   X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
   dX1:       (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
   X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
-  alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+  alpha_desc:(nm2, max_atoms2, rep_size), from
+             kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha)
   Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
   N1, N2:    (nm1/nm2), active atom counts
   sigma:     Gaussian width parameter
@@ -1422,7 +1423,8 @@ Cost: O(nm1·naq2·rep) vs O(nm1·naq2·rep·3*na) for full matrix.
 Shapes:
   X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
   X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
-  alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+  alpha_desc:(nm2, max_atoms2, rep_size), from
+             kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha)
   Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
   N1, N2:    (nm1/nm2), active atom counts
   sigma:     Gaussian width parameter
@@ -1520,7 +1522,8 @@ Shapes:
   X1:          (nm1, max_atoms1, rep_size), query descriptor vectors
   dX1:         (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
   X2:          (nm2, max_atoms2, rep_size), training descriptor vectors
-  alpha_desc_F:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc(dX2, alpha_F)
+  alpha_desc_F:(nm2, max_atoms2, rep_size), from
+               kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha_F)
   alpha_E:     (nm2,), energy coefficients
   Q1, Q2:      (nm1/nm2, max_atoms1/2), atomic labels (for matching)
   N1, N2:      (nm1/nm2), active atom counts

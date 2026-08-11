@@ -215,7 +215,9 @@ def kernel_gaussian_jacobian_t(
 
     Same computation as ``kernel_gaussian_jacobian``, but stores
     ``Jt[b, row] = dK(A_a, B_b) / dR_{A_a}[...]`` with shape ``(nm2, 3*sum(N1))``.
-    Matches CPU ``kernelforge.fchl18_kernel.kernel_gaussian_jacobian_t``.
+    Numerically comparable to CPU ``fchl18_kernel.kernel_gaussian_jacobian_t`` after
+    argument remapping; CUDA uses ``X1/X2/.../coords1/Z1`` rather than the CPU
+    train/test list API.
     """
     ...
 
