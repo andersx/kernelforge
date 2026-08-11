@@ -22,7 +22,7 @@ jobs:
         os: [ubuntu-26.04, macos-26]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # Fetch all history for setuptools-scm to detect version from tags
 
@@ -97,7 +97,7 @@ jobs:
   build-wheels-cuda:
     runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
