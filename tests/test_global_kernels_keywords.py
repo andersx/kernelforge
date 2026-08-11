@@ -67,17 +67,13 @@ def test_keyword_names_match_positional(data: tuple) -> None:
     f_kw = gk.kernel_gaussian_full(X1=x1, dX1=dx1, X2=x2, dX2=dx2, sigma=sigma)
     np.testing.assert_array_equal(f_kw, f_pos)
 
-    alpha = np.random.default_rng(1).normal(size=(x2.shape[0], dx2.shape[1])).astype(
-        np.float64
-    )
+    alpha = np.random.default_rng(1).normal(size=(x2.shape[0], dx2.shape[1])).astype(np.float64)
     alpha_desc = gk.kernel_gaussian_compute_alpha_desc(dX=dx2, alpha=alpha)
     alpha_desc_pos = gk.kernel_gaussian_compute_alpha_desc(dx2, alpha)
     np.testing.assert_array_equal(alpha_desc, alpha_desc_pos)
 
     e_pos = gk.kernel_gaussian_jacobian_t_matvec(x1, x2, alpha_desc, sigma)
-    e_kw = gk.kernel_gaussian_jacobian_t_matvec(
-        X_q=x1, X_t=x2, alpha_desc=alpha_desc, sigma=sigma
-    )
+    e_kw = gk.kernel_gaussian_jacobian_t_matvec(X_q=x1, X_t=x2, alpha_desc=alpha_desc, sigma=sigma)
     np.testing.assert_allclose(e_kw, e_pos)
 
     alpha_e = np.random.default_rng(2).normal(size=x2.shape[0]).astype(np.float64)

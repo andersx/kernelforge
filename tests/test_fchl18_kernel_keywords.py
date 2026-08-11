@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import numpy as np
+from numpy.typing import NDArray
 
 import kernelforge.fchl18_kernel as fk
 import kernelforge.fchl18_repr as repr_mod
@@ -25,7 +28,22 @@ AMMONIA_COORDS = np.array(
 AMMONIA_Z = np.array([7, 1, 1, 1], dtype=np.int32)
 
 SIGMA = 2.5
-KERNEL_KW = {
+
+
+class _KernelArgs(TypedDict):
+    two_body_scaling: float
+    two_body_width: float
+    two_body_power: float
+    three_body_scaling: float
+    three_body_width: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
+
+KERNEL_KW: _KernelArgs = {
     "two_body_scaling": 2.0,
     "two_body_width": 0.1,
     "two_body_power": 6.0,
@@ -40,12 +58,11 @@ KERNEL_KW = {
 
 
 def _make_repr(
-    coords_list: list[np.ndarray],
-    z_list: list[np.ndarray],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    coords_list: list[NDArray[np.float64]],
+    z_list: list[NDArray[np.int32]],
+) -> tuple[NDArray[np.float64], NDArray[np.int32], NDArray[np.int32]]:
     max_size = max(len(z) for z in z_list)
-    x, n, nn = repr_mod.generate(coords_list, z_list, max_size=max_size, cut_distance=1e6)
-    return x, n, nn
+    return repr_mod.generate(coords_list, z_list, max_size=max_size, cut_distance=1e6)
 
 
 def test_fchl18_keyword_names_match_positional() -> None:
