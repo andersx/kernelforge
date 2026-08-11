@@ -884,7 +884,7 @@ alpha_desc : torch.Tensor, shape (nm, max_atoms, rep), float32, CUDA
           py::arg("Q_t"),
           py::arg("N_t"),
           py::arg("alpha_E"),
-          py::arg("alpha_desc"),
+          py::arg("alpha_desc_F"),
           py::arg("sigma"),
           R"doc(
 Contracted energy+force inference using the J^T·alpha trick (local version).

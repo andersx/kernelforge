@@ -11,8 +11,8 @@ PYBIND11_MODULE(cuda_fchl18_repr, m) {
         "generate",
         &kf::fchl18::generate_fchl18_cuda,
         py::arg("coords"),
-        py::arg("z"),
-        py::arg("n"),
+        py::arg("Z"),
+        py::arg("N"),
         py::arg("cut_distance") = 5.0,
         R"doc(
 Generate FCHL18 representations on the GPU.
