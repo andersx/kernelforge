@@ -286,7 +286,7 @@ def test_jacobian_t_transpose_property() -> None:
 
     # kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1) -> (nm2, naq1)
     # Swapping x1/x2 flips d = x1-x2 -> x2-x1, negating the output regardless of the
-    # output sign convention.  So K_t(x1,x2,dX1) == -K_jac(x2,x1,dX1).T always holds.
+    # output sign convention.  So K_t(X1,dX1,X2) == -K_jac(X2,X1,dX1).T always holds.
     K_jac = fchl.kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1, sigma)
 
     np.testing.assert_allclose(K_t, -K_jac.T, rtol=1e-10, atol=1e-10)

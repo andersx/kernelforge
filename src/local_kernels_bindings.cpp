@@ -36,8 +36,8 @@ static py::array_t<double> flocal_kernel_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 ||
         n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expect shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), q1(max_atoms1,nm1), "
-            "q2(max_atoms2,nm2), n1(nm1), n2(nm2)."
+            "Expect shapes: X1(nm1,max_atoms1,rep), X2(nm2,max_atoms2,rep), Q1(nm1,max_atoms1), "
+            "Q2(nm2,max_atoms2), N1(nm1), N2(nm2)."
         );
     }
 
@@ -111,7 +111,7 @@ static py::array_t<double> flocal_kernel_symm_py(
 ) {
     if (x1.ndim() != 3 || q1.ndim() != 2 || n1.ndim() != 1) {
         throw std::invalid_argument(
-            "Expect shapes: x1(nm1,max_atoms1,rep), q1(max_atoms1,nm1), n1(nm1),."
+            "Expect shapes: X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm)."
         );
     }
 
@@ -170,9 +170,9 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || dX2.ndim() != 4 || q1.ndim() != 2 || q2.ndim() != 2 ||
         n1.ndim() != 1 || n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
-            "dX2(nm2,max_atoms2,rep,3*max_atoms2), q1(nm1,max_atoms1), q2(nm2,max_atoms2), "
-            "n1(nm1), n2(nm2)."
+            "Expected shapes: X1(nm1,max_atoms1,rep), X2(nm2,max_atoms2,rep), "
+            "dX2(nm2,max_atoms2,rep,3*max_atoms2), Q1(nm1,max_atoms1), Q2(nm2,max_atoms2), "
+            "N1(nm1), N2(nm2)."
         );
     }
 
@@ -284,9 +284,8 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || dX1.ndim() != 4 || q1.ndim() != 2 || q2.ndim() != 2 ||
         n1.ndim() != 1 || n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
-            "dX1(nm1,max_atoms1,rep,3*max_atoms1), q1(nm1,max_atoms1), q2(nm2,max_atoms2), "
-            "n1(nm1), n2(nm2)."
+            "Expected shapes: X1(nm1,max_atoms1,rep), dX1(nm1,max_atoms1,rep,3*max_atoms1), "
+            "X2(nm2,max_atoms2,rep), Q1(nm1,max_atoms1), Q2(nm2,max_atoms2), N1(nm1), N2(nm2)."
         );
     }
 
@@ -403,9 +402,9 @@ static py::array_t<double> fgdml_kernel_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || dx1.ndim() != 4 || dx2.ndim() != 4 || q1.ndim() != 2 ||
         q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
-            "dx1(nm1,max_atoms1,rep,3*max_atoms1), dx2(nm2,max_atoms2,rep,3*max_atoms2), "
-            "q1(nm1,max_atoms1), q2(nm2,max_atoms2), n1(nm1), n2(nm2)."
+            "Expected: X1(nm1,max_atoms1,rep), dX1(nm1,max_atoms1,rep,3*max_atoms1), "
+            "X2(nm2,max_atoms2,rep), dX2(nm2,max_atoms2,rep,3*max_atoms2), "
+            "Q1(nm1,max_atoms1), Q2(nm2,max_atoms2), N1(nm1), N2(nm2)."
         );
     }
 
@@ -536,9 +535,8 @@ static py::array_t<double> fgdml_kernel_symm_py(
     // ---- shape checks ----
     if (x1.ndim() != 3 || dx1.ndim() != 4 || q1.ndim() != 2 || n1.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected: x1(nm1,max_atoms1,rep),  "
-            "dx1(nm1,max_atoms1,rep,3*max_atoms1), "
-            "q1(nm1,max_atoms1), n1(nm1)."
+            "Expected: X(nm,max_atoms,rep), dX(nm,max_atoms,rep,3*max_atoms), "
+            "Q(nm,max_atoms), N(nm)."
         );
     }
 
@@ -632,9 +630,9 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
     py::array_t<int, py::array::c_style | py::array::forcecast> q1,
     py::array_t<int, py::array::c_style | py::array::forcecast> n1, double sigma
 ) {
-    // Expect shapes: x1(nm, max_atoms, rep), q1(nm, max_atoms), n1(nm)
+    // Expect shapes: X(nm, max_atoms, rep), Q(nm, max_atoms), N(nm)
     if (x1.ndim() != 3 || q1.ndim() != 2 || n1.ndim() != 1) {
-        throw std::invalid_argument("Expect x1(nm,max_atoms,rep), q1(nm,max_atoms), n1(nm).");
+        throw std::invalid_argument("Expect X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm).");
     }
 
     const int nm = static_cast<int>(x1.shape(0));
@@ -683,9 +681,8 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
     // ---- shape checks ----
     if (x1.ndim() != 3 || dx1.ndim() != 4 || q1.ndim() != 2 || n1.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected: x1(nm,max_atoms,rep), "
-            "dx1(nm,max_atoms,rep,3*max_atoms), "
-            "q1(nm,max_atoms), n1(nm)."
+            "Expected: X(nm,max_atoms,rep), dX(nm,max_atoms,rep,3*max_atoms), "
+            "Q(nm,max_atoms), N(nm)."
         );
     }
 
@@ -1344,16 +1341,16 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
 Cost: O(nm1·naq2·rep + naq1) vs O(naq1·naq2·rep + naq1) for full matrix.
 
 Shapes:
-  x1:        (nm1, max_atoms1, rep_size), query descriptor vectors
-  dx1:       (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
-  x2:        (nm2, max_atoms2, rep_size), training descriptor vectors
+  X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
+  dX1:       (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
+  X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
   alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
-  q1, q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
-  n1, n2:    (nm1/nm2), active atom counts
+  Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  N1, N2:    (nm1/nm2), active atom counts
   sigma:     Gaussian width parameter
 
 Returns:
-  F: (naq1,) where naq1 = 3*sum(n1), forces in Cartesian coordinates
+  F: (naq1,) where naq1 = 3*sum(N1), forces in Cartesian coordinates
 )"
     );
 
@@ -1423,11 +1420,11 @@ Returns:
 Cost: O(nm1·naq2·rep) vs O(nm1·naq2·rep·3*na) for full matrix.
 
 Shapes:
-  x1:        (nm1, max_atoms1, rep_size), query descriptor vectors
-  x2:        (nm2, max_atoms2, rep_size), training descriptor vectors
+  X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
+  X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
   alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
-  q1, q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
-  n1, n2:    (nm1/nm2), active atom counts
+  Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  N1, N2:    (nm1/nm2), active atom counts
   sigma:     Gaussian width parameter
 
 Returns:
@@ -1520,17 +1517,17 @@ Returns:
 Cost: O(nm1·naq2·rep + naq1) vs O((nm1+naq1)·(nm2+naq2)·rep) for full matrix.
 
 Shapes:
-  x1:          (nm1, max_atoms1, rep_size), query descriptor vectors
-  dx1:         (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
-  x2:          (nm2, max_atoms2, rep_size), training descriptor vectors
+  X1:          (nm1, max_atoms1, rep_size), query descriptor vectors
+  dX1:         (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
+  X2:          (nm2, max_atoms2, rep_size), training descriptor vectors
   alpha_desc_F:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc(dX2, alpha_F)
   alpha_E:     (nm2,), energy coefficients
-  q1, q2:      (nm1/nm2, max_atoms1/2), atomic labels (for matching)
-  n1, n2:      (nm1/nm2), active atom counts
+  Q1, Q2:      (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  N1, N2:      (nm1/nm2), active atom counts
   sigma:       Gaussian width parameter
 
 Returns:
-  (E, F): E=(nm1,) energies, F=(naq1,) forces where naq1=3*sum(n1)
+  (E, F): E=(nm1,) energies, F=(naq1,) forces where naq1=3*sum(N1)
 )"
     );
 }

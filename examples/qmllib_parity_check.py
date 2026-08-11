@@ -267,7 +267,7 @@ def check_jacobian_kernels():
         d["charges_qml"][nm1:],
         SIGMA,
     )
-    # kernelforge sign convention: K_jact(x1,x2,dX1) == -K_jac(x2,x1,dX1).T, so the
+    # kernelforge sign convention: K_jact(X1,dX1,X2) == -K_jac(X2,X1,dX1).T, so the
     # standalone jacobian has opposite sign to qmllib's get_local_gradient_kernel.
     ok &= _check("kernel_gaussian_jacobian", K_kf, -K_qml.T, rtol=KERN_RTOL, atol=KERN_ATOL)
 
