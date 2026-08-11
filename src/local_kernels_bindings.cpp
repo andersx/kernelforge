@@ -48,13 +48,13 @@ static py::array_t<double> flocal_kernel_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     // Cross-check all shapes
-    if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch.");
+    if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch.");
     if (q1.shape(1) != max_atoms1 || q1.shape(0) != nm1)
-        throw std::invalid_argument("q1 shape mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
     if (q2.shape(1) != max_atoms2 || q2.shape(0) != nm2)
-        throw std::invalid_argument("q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
+        throw std::invalid_argument("Q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
     // Flatten into std::vector
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
@@ -120,10 +120,10 @@ static py::array_t<double> flocal_kernel_symm_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     // Cross-check all shapes
-    if (x1.shape(2) != rep_size) throw std::invalid_argument("x1 rep_size mismatch.");
+    if (x1.shape(2) != rep_size) throw std::invalid_argument("X1 rep_size mismatch.");
     if (q1.shape(1) != max_atoms1 || q1.shape(0) != nm1)
-        throw std::invalid_argument("q1 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
 
     // Flatten into std::vector
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
@@ -183,18 +183,18 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
-        throw std::invalid_argument("x2 shape mismatch.");
+        throw std::invalid_argument("X2 shape mismatch.");
     if (dX2.shape(0) != nm2 || dX2.shape(1) != max_atoms2 || dX2.shape(2) != rep_size ||
         dX2.shape(3) != 3 * max_atoms2)
         throw std::invalid_argument(
             "dX2 shape mismatch (must be (nm2,max_atoms2,rep,3*max_atoms2))."
         );
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("q1 shape mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
     if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-        throw std::invalid_argument("q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
+        throw std::invalid_argument("Q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
     // Flatten into std::vector (C-contiguous thanks to c_style|forcecast)
     const std::size_t x1N = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size;
@@ -296,18 +296,18 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
-        throw std::invalid_argument("x2 shape mismatch.");
+        throw std::invalid_argument("X2 shape mismatch.");
     if (dX1.shape(0) != nm1 || dX1.shape(1) != max_atoms1 || dX1.shape(2) != rep_size ||
         dX1.shape(3) != 3 * max_atoms1)
         throw std::invalid_argument(
             "dX1 shape mismatch (must be (nm1,max_atoms1,rep,3*max_atoms1))."
         );
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("q1 shape mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
     if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-        throw std::invalid_argument("q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
+        throw std::invalid_argument("Q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
     // Flatten into std::vector (C-contiguous thanks to c_style|forcecast)
     const std::size_t x1N = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size;
@@ -415,19 +415,19 @@ static py::array_t<double> fgdml_kernel_py(
     const int nm2 = static_cast<int>(x2.shape(0));
     const int max_atoms2 = static_cast<int>(x2.shape(1));
 
-    if (x2.shape(2) != rep) throw std::invalid_argument("x2 rep mismatch.");
+    if (x2.shape(2) != rep) throw std::invalid_argument("X2 rep mismatch.");
     if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep ||
         dx1.shape(3) != 3 * max_atoms1)
-        throw std::invalid_argument("dx1 shape mismatch.");
+        throw std::invalid_argument("dX1 shape mismatch.");
     if (dx2.shape(0) != nm2 || dx2.shape(1) != max_atoms2 || dx2.shape(2) != rep ||
         dx2.shape(3) != 3 * max_atoms2)
-        throw std::invalid_argument("dx2 shape mismatch.");
+        throw std::invalid_argument("dX2 shape mismatch.");
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("q1 shape mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
     if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-        throw std::invalid_argument("q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
+        throw std::invalid_argument("Q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
     // ---- flatten to std::vector (C-contiguous guaranteed by c_style|forcecast) ----
     const std::size_t x1N = (std::size_t)nm1 * max_atoms1 * rep;
@@ -546,10 +546,10 @@ static py::array_t<double> fgdml_kernel_symm_py(
 
     if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep ||
         dx1.shape(3) != 3 * max_atoms1)
-        throw std::invalid_argument("dx1 shape mismatch.");
+        throw std::invalid_argument("dX1 shape mismatch.");
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("q1 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
 
     // ---- flatten to std::vector (C-contiguous guaranteed by c_style|forcecast) ----
     const std::size_t x1N = (std::size_t)nm1 * max_atoms1 * rep;
@@ -641,8 +641,8 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
 
     // Cross-check shapes
     if (q1.shape(0) != nm || q1.shape(1) != max_atoms)
-        throw std::invalid_argument("q1 shape mismatch.");
-    if (n1.shape(0) != nm) throw std::invalid_argument("n1 length mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
+    if (n1.shape(0) != nm) throw std::invalid_argument("N1 length mismatch.");
 
     // Flatten into std::vector
     const size_t xN = (size_t)nm * (size_t)max_atoms * (size_t)rep_size;
@@ -692,10 +692,10 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
 
     if (dx1.shape(0) != nm || dx1.shape(1) != max_atoms || dx1.shape(2) != rep ||
         dx1.shape(3) != 3 * max_atoms)
-        throw std::invalid_argument("dx1 shape mismatch.");
+        throw std::invalid_argument("dX1 shape mismatch.");
     if (q1.shape(0) != nm || q1.shape(1) != max_atoms)
-        throw std::invalid_argument("q1 shape mismatch.");
-    if (n1.shape(0) != nm) throw std::invalid_argument("n1 length mismatch.");
+        throw std::invalid_argument("Q1 shape mismatch.");
+    if (n1.shape(0) != nm) throw std::invalid_argument("N1 length mismatch.");
 
     // ---- flatten to std::vector ----
     const std::size_t x1N = (std::size_t)nm * max_atoms * rep;
@@ -952,16 +952,16 @@ Returns:
             const int nm2 = x2.shape(0), max_atoms2 = x2.shape(1);
             if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep ||
                 dx1.shape(3) != 3 * max_atoms1)
-                throw std::invalid_argument("dx1 shape mismatch");
+                throw std::invalid_argument("dX1 shape mismatch");
             if (dx2.shape(0) != nm2 || dx2.shape(1) != max_atoms2 || dx2.shape(2) != rep ||
                 dx2.shape(3) != 3 * max_atoms2)
-                throw std::invalid_argument("dx2 shape mismatch");
+                throw std::invalid_argument("dX2 shape mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("q1 shape mismatch");
+                throw std::invalid_argument("Q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("q2 shape mismatch");
+                throw std::invalid_argument("Q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("n1/n2 length mismatch");
+                throw std::invalid_argument("N1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> x2v(x2.data(), x2.data() + x2.size());
@@ -1049,10 +1049,10 @@ Block layout:
             const int rep = x.shape(2);
             if (dx.shape(0) != nm || dx.shape(1) != max_atoms || dx.shape(2) != rep ||
                 dx.shape(3) != 3 * max_atoms)
-                throw std::invalid_argument("dx shape mismatch");
+                throw std::invalid_argument("dX shape mismatch");
             if (q.shape(0) != nm || q.shape(1) != max_atoms)
-                throw std::invalid_argument("q shape mismatch");
-            if (n.shape(0) != nm) throw std::invalid_argument("n length mismatch");
+                throw std::invalid_argument("Q shape mismatch");
+            if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
 
             std::vector<double> xv(x.data(), x.data() + x.size());
             std::vector<double> dxv(dx.data(), dx.data() + dx.size());
@@ -1123,10 +1123,10 @@ Block layout:
             const int rep = x.shape(2);
             if (dx.shape(0) != nm || dx.shape(1) != max_atoms || dx.shape(2) != rep ||
                 dx.shape(3) != 3 * max_atoms)
-                throw std::invalid_argument("dx shape mismatch");
+                throw std::invalid_argument("dX shape mismatch");
             if (q.shape(0) != nm || q.shape(1) != max_atoms)
-                throw std::invalid_argument("q shape mismatch");
-            if (n.shape(0) != nm) throw std::invalid_argument("n length mismatch");
+                throw std::invalid_argument("Q shape mismatch");
+            if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
 
             std::vector<double> xv(x.data(), x.data() + x.size());
             std::vector<double> dxv(dx.data(), dx.data() + dx.size());
@@ -1187,9 +1187,9 @@ Packed as RFP TRANSR='N', UPLO='U'.
             const int nm2 = static_cast<int>(dx2.shape(0));
             const int max_atoms2 = static_cast<int>(dx2.shape(1));
             const int rep_size = static_cast<int>(dx2.shape(2));
-            if (dx2.shape(3) != 3 * max_atoms2) throw std::invalid_argument("dx2 shape mismatch");
-            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2) throw std::invalid_argument("q2 shape mismatch");
-            if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch");
+            if (dx2.shape(3) != 3 * max_atoms2) throw std::invalid_argument("dX2 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2) throw std::invalid_argument("Q2 shape mismatch");
+            if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch");
 
             std::vector<double> dx2v(dx2.data(), dx2.data() + dx2.size());
             std::vector<int> q2v(q2.data(), q2.data() + q2.size());
@@ -1266,18 +1266,18 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
 
             if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep_size ||
                 dx1.shape(3) != 3 * max_atoms1)
-                throw std::invalid_argument("dx1 shape mismatch");
+                throw std::invalid_argument("dX1 shape mismatch");
             if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
-                throw std::invalid_argument("x2 shape mismatch");
+                throw std::invalid_argument("X2 shape mismatch");
             if (alpha_desc.shape(0) != nm2 || alpha_desc.shape(1) != max_atoms2 ||
                 alpha_desc.shape(2) != rep_size)
                 throw std::invalid_argument("alpha_desc shape mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("q1 shape mismatch");
+                throw std::invalid_argument("Q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("q2 shape mismatch");
+                throw std::invalid_argument("Q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("n1/n2 length mismatch");
+                throw std::invalid_argument("N1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
@@ -1374,16 +1374,16 @@ Returns:
             const int nm2 = static_cast<int>(x2.shape(0));
             const int max_atoms2 = static_cast<int>(x2.shape(1));
 
-            if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch");
+            if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch");
             if (alpha_desc.shape(0) != nm2 || alpha_desc.shape(1) != max_atoms2 ||
                 alpha_desc.shape(2) != rep_size)
                 throw std::invalid_argument("alpha_desc shape mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("q1 shape mismatch");
+                throw std::invalid_argument("Q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("q2 shape mismatch");
+                throw std::invalid_argument("Q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("n1/n2 length mismatch");
+                throw std::invalid_argument("N1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> x2v(x2.data(), x2.data() + x2.size());
@@ -1457,18 +1457,18 @@ Returns:
 
             if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 ||
                 dx1.shape(2) != rep_size || dx1.shape(3) != 3 * max_atoms1)
-                throw std::invalid_argument("dx1 shape mismatch");
-            if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch");
+                throw std::invalid_argument("dX1 shape mismatch");
+            if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch");
             if (alpha_desc_F.shape(0) != nm2 || alpha_desc_F.shape(1) != max_atoms2 ||
                 alpha_desc_F.shape(2) != rep_size)
                 throw std::invalid_argument("alpha_desc_F shape mismatch");
             if (alpha_E.shape(0) != nm2) throw std::invalid_argument("alpha_E length mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("q1 shape mismatch");
+                throw std::invalid_argument("Q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("q2 shape mismatch");
+                throw std::invalid_argument("Q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("n1/n2 length mismatch");
+                throw std::invalid_argument("N1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());

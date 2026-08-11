@@ -61,9 +61,7 @@ def test_keyword_names_match_positional(data: tuple) -> None:
     sigma = 1.25
 
     k_pos = lk.kernel_gaussian(x1, x2, q1, q2, n1, n2, sigma)
-    k_kw = lk.kernel_gaussian(
-        X1=x1, X2=x2, Q1=q1, Q2=q2, N1=n1, N2=n2, sigma=sigma
-    )
+    k_kw = lk.kernel_gaussian(X1=x1, X2=x2, Q1=q1, Q2=q2, N1=n1, N2=n2, sigma=sigma)
     np.testing.assert_array_equal(k_kw, k_pos)
 
     ks_pos = lk.kernel_gaussian_symm(x1, q1, n1, sigma)
@@ -93,9 +91,7 @@ def test_keyword_names_match_positional(data: tuple) -> None:
     np.testing.assert_array_equal(hs_kw, hs_pos)
 
     hsr_pos = lk.kernel_gaussian_hessian_symm_rfp(x1, dx1, q1, n1, sigma)
-    hsr_kw = lk.kernel_gaussian_hessian_symm_rfp(
-        X=x1, dX=dx1, Q=q1, N=n1, sigma=sigma
-    )
+    hsr_kw = lk.kernel_gaussian_hessian_symm_rfp(X=x1, dX=dx1, Q=q1, N=n1, sigma=sigma)
     np.testing.assert_array_equal(hsr_kw, hsr_pos)
 
     j_pos = lk.kernel_gaussian_jacobian(x1, x2, dx2, q1, q2, n1, n2, sigma)
@@ -129,9 +125,7 @@ def test_keyword_names_match_positional(data: tuple) -> None:
     np.testing.assert_array_equal(fs_kw, fs_pos)
 
     fsr_pos = lk.kernel_gaussian_full_symm_rfp(x1, dx1, q1, n1, sigma)
-    fsr_kw = lk.kernel_gaussian_full_symm_rfp(
-        X=x1, dX=dx1, Q=q1, N=n1, sigma=sigma
-    )
+    fsr_kw = lk.kernel_gaussian_full_symm_rfp(X=x1, dX=dx1, Q=q1, N=n1, sigma=sigma)
     np.testing.assert_array_equal(fsr_kw, fsr_pos)
 
 
@@ -145,15 +139,11 @@ def test_matvec_keyword_names(data: tuple) -> None:
     alpha_f = np.random.default_rng(1).normal(size=naq2)
     alpha_e = np.random.default_rng(2).normal(size=nm2)
 
-    alpha_desc = lk.kernel_gaussian_local_compute_alpha_desc(
-        dX2=dx2, Q2=q2, N2=n2, alpha=alpha_f
-    )
+    alpha_desc = lk.kernel_gaussian_local_compute_alpha_desc(dX2=dx2, Q2=q2, N2=n2, alpha=alpha_f)
     alpha_desc_pos = lk.kernel_gaussian_local_compute_alpha_desc(dx2, q2, n2, alpha_f)
     np.testing.assert_array_equal(alpha_desc, alpha_desc_pos)
 
-    f_pos = lk.kernel_gaussian_local_hessian_matvec(
-        x1, dx1, x2, alpha_desc, q1, q2, n1, n2, sigma
-    )
+    f_pos = lk.kernel_gaussian_local_hessian_matvec(x1, dx1, x2, alpha_desc, q1, q2, n1, n2, sigma)
     f_kw = lk.kernel_gaussian_local_hessian_matvec(
         X1=x1,
         dX1=dx1,
@@ -167,9 +157,7 @@ def test_matvec_keyword_names(data: tuple) -> None:
     )
     np.testing.assert_array_equal(f_kw, f_pos)
 
-    e_pos = lk.kernel_gaussian_local_jacobian_t_matvec(
-        x1, x2, alpha_desc, q1, q2, n1, n2, sigma
-    )
+    e_pos = lk.kernel_gaussian_local_jacobian_t_matvec(x1, x2, alpha_desc, q1, q2, n1, n2, sigma)
     e_kw = lk.kernel_gaussian_local_jacobian_t_matvec(
         X1=x1,
         X2=x2,
