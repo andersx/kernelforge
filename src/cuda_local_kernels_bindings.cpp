@@ -17,7 +17,7 @@
 //       alpha_F : (naq,)                            float32 CUDA
 //       → alpha_desc : (nm, max_atoms, rep) float32 CUDA
 //
-//   kernel_gaussian_full_matvec(X_q,dX_q,Q_q,N_q, X_t,Q_t,N_t, alpha_E,alpha_desc_F, sigma)
+//   kernel_gaussian_full_matvec(X_q,dX_q,Q_q,N_q, X_t,Q_t,N_t, alpha_E,alpha_desc, sigma)
 //       → (E_pred : (nm_q,) float32 CUDA,
 //          F_pred : (naq_q,) float32 CUDA)
 
@@ -738,7 +738,7 @@ kernel_gaussian_full_symm(X, dX, Q, N, sigma)
 compute_alpha_desc(dX, N, alpha_F)
     Precompute descriptor-space force weights for the J^T·alpha trick.
 
-kernel_gaussian_full_matvec(X_q, dX_q, Q_q, N_q, X_t, Q_t, N_t, alpha_E, alpha_desc_F, sigma)
+kernel_gaussian_full_matvec(X_q, dX_q, Q_q, N_q, X_t, Q_t, N_t, alpha_E, alpha_desc, sigma)
     Contracted E+F inference using the J^T·alpha trick (no K_test_train materialisation).
 )doc";
 
@@ -860,7 +860,7 @@ Precompute descriptor-space force weights (J^T·alpha trick).
 alpha_desc[b, i2, k] = sum_{c=0}^{3*N[b]-1} dX[b,i2,k,c] * alpha_F[offs[b]+c]
 
 Call once after the KRR solve.  The result is passed to
-``kernel_gaussian_full_matvec`` as ``alpha_desc_F`` at inference time.
+``kernel_gaussian_full_matvec`` at inference time.
 
 Parameters
 ----------
@@ -884,7 +884,7 @@ alpha_desc : torch.Tensor, shape (nm, max_atoms, rep), float32, CUDA
           py::arg("Q_t"),
           py::arg("N_t"),
           py::arg("alpha_E"),
-          py::arg("alpha_desc_F"),
+          py::arg("alpha_desc"),
           py::arg("sigma"),
           R"doc(
 Contracted energy+force inference using the J^T·alpha trick (local version).
@@ -901,7 +901,7 @@ X_t : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
 Q_t : torch.Tensor, shape (nm_t, max_atoms_t), int32, CUDA
 N_t : torch.Tensor, shape (nm_t,), int32, CUDA
 alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
-alpha_desc_F : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
+alpha_desc : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
 sigma : float
 
 Returns

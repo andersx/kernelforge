@@ -168,7 +168,7 @@ def main():
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
     K_te_hess = kernel_gaussian_hessian(  # (N_test*naq, N_train*naq)
-        X_te, dX_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, SIGMA
+        X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
     F_te_pred = (K_te_hess @ alpha).reshape(N_TEST, naq)
     del K_te_hess

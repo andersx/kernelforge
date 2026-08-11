@@ -220,7 +220,7 @@ def kernel_gaussian_full_matvec(
     alpha_E : torch.Tensor, shape (nm_t,), float32, CUDA
         Energy dual coefficients.
     alpha_desc_F : torch.Tensor, shape (nm_t, max_atoms_t, rep), float32, CUDA
-        Precomputed force weights (from ``compute_alpha_desc``; pass as ``alpha_desc_F``).
+        Precomputed force weights (from ``compute_alpha_desc``).
     sigma : float
         Gaussian kernel length-scale.
 

@@ -267,14 +267,14 @@ def check_jacobian_kernels():
         d["charges_qml"][nm1:],
         SIGMA,
     )
-    # kernelforge sign convention: K_jact(X1,dX1,X2) == -K_jac(X2,X1,dX1).T, so the
+    # kernelforge sign convention: K_jact(x1,x2,dX1) == -K_jac(x2,x1,dX1).T, so the
     # standalone jacobian has opposite sign to qmllib's get_local_gradient_kernel.
     ok &= _check("kernel_gaussian_jacobian", K_kf, -K_qml.T, rtol=KERN_RTOL, atol=KERN_ATOL)
 
     K_jact = kf_lk.kernel_gaussian_jacobian_t(
         d["X_kf"][:nm1],
-        d["dX_kf"][:nm1],
         d["X_kf"][nm1:],
+        d["dX_kf"][:nm1],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],
         d["N_kf"][:nm1],
@@ -283,8 +283,8 @@ def check_jacobian_kernels():
     )
     K_full = kf_lk.kernel_gaussian_full(
         d["X_kf"][:nm1],
-        d["dX_kf"][:nm1],
         d["X_kf"][nm1:],
+        d["dX_kf"][:nm1],
         d["dX_kf"][nm1:],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],
@@ -320,8 +320,8 @@ def check_hessian_kernels():
 
     K_kf = kf_lk.kernel_gaussian_hessian(
         d["X_kf"][:nm1],
-        d["dX_kf"][:nm1],
         d["X_kf"][nm1:],
+        d["dX_kf"][:nm1],
         d["dX_kf"][nm1:],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],
@@ -384,8 +384,8 @@ def check_gp_kernels():
     naq2 = int(np.sum(d["N_kf"][nm1:]) * 3)
     K_kf = kf_lk.kernel_gaussian_full(
         d["X_kf"][:nm1],
-        d["dX_kf"][:nm1],
         d["X_kf"][nm1:],
+        d["dX_kf"][:nm1],
         d["dX_kf"][nm1:],
         d["Q_kf"][:nm1],
         d["Q_kf"][nm1:],

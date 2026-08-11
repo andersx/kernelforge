@@ -11,8 +11,8 @@ PYBIND11_MODULE(cuda_fchl18_repr, m) {
         "generate",
         &kf::fchl18::generate_fchl18_cuda,
         py::arg("coords"),
-        py::arg("Z"),
-        py::arg("N"),
+        py::arg("z"),
+        py::arg("n"),
         py::arg("cut_distance") = 5.0,
         R"doc(
 Generate FCHL18 representations on the GPU.
@@ -21,9 +21,9 @@ Parameters
 ----------
 coords : torch.Tensor, shape (nm, max_size, 3), float32 or float64, CUDA
     Padded Cartesian coordinates.
-Z : torch.Tensor, shape (nm, max_size), int32, CUDA
+z : torch.Tensor, shape (nm, max_size), int32, CUDA
     Padded nuclear charges.
-N : torch.Tensor, shape (nm,), int32, CUDA
+n : torch.Tensor, shape (nm,), int32, CUDA
     Active atom counts per molecule.
 cut_distance : float, default 5.0
     Neighbour cutoff radius in Angstrom.

@@ -78,10 +78,10 @@ static py::array_t<double> kernel_gaussian_py(
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm
 ) {
-    if (x1.ndim() != 4) throw std::invalid_argument("X1 must be 4-D");
-    if (x2.ndim() != 4) throw std::invalid_argument("X2 must be 4-D");
-    if (x1.shape(2) != 5) throw std::invalid_argument("X1 dim 2 must be 5");
-    if (x2.shape(2) != 5) throw std::invalid_argument("X2 dim 2 must be 5");
+    if (x1.ndim() != 4) throw std::invalid_argument("x1 must be 4-D");
+    if (x2.ndim() != 4) throw std::invalid_argument("x2 must be 4-D");
+    if (x1.shape(2) != 5) throw std::invalid_argument("x1 dim 2 must be 5");
+    if (x2.shape(2) != 5) throw std::invalid_argument("x2 dim 2 must be 5");
 
     const int nm1 = static_cast<int>(x1.shape(0));
     const int max_size1 = static_cast<int>(x1.shape(1));
@@ -139,8 +139,8 @@ static py::array_t<double> kernel_gaussian_symm_py(
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm
 ) {
-    if (x.ndim() != 4) throw std::invalid_argument("X must be 4-D");
-    if (x.shape(2) != 5) throw std::invalid_argument("X dim 2 must be 5");
+    if (x.ndim() != 4) throw std::invalid_argument("x must be 4-D");
+    if (x.shape(2) != 5) throw std::invalid_argument("x dim 2 must be 5");
 
     const int nm = static_cast<int>(x.shape(0));
     const int max_size = static_cast<int>(x.shape(1));
@@ -203,8 +203,8 @@ static py::array_t<double> kernel_gaussian_gradient_py(
         throw std::invalid_argument("coords_A must have shape (n_atoms_A, 3)");
     if (z_A.ndim() != 1 || z_A.shape(0) != coords_A.shape(0))
         throw std::invalid_argument("z_A must have shape (n_atoms_A,)");
-    if (x2.ndim() != 4) throw std::invalid_argument("X2 must be 4-D");
-    if (x2.shape(2) != 5) throw std::invalid_argument("X2 dim 2 must be 5");
+    if (x2.ndim() != 4) throw std::invalid_argument("x2 must be 4-D");
+    if (x2.shape(2) != 5) throw std::invalid_argument("x2 dim 2 must be 5");
 
     const int n_atoms_A = static_cast<int>(coords_A.shape(0));
     const int nm2 = static_cast<int>(x2.shape(0));
@@ -447,7 +447,7 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
         throw std::invalid_argument("coords_train_list and z_train_list must have the same length");
     if (x_test.ndim() != 4 || x_test.shape(2) != 5)
         throw std::invalid_argument(
-            "X_test must be 4-D with shape (N_test, max_size, 5, max_size)"
+            "x_test must be 4-D with shape (N_test, max_size, 5, max_size)"
         );
     if (N_train == 0) throw std::invalid_argument("kernel_gaussian_jacobian_t: empty training set");
 
@@ -510,10 +510,11 @@ Compute the FCHL18 Gaussian kernel matrix K[a, b] between two sets of molecules.
 
 Parameters
 ----------
-X1, X2 : ndarray, shape (nm, max_size, 5, max_size), float64
+x1, x2 : ndarray, shape (nm, max_size, 5, max_size), float64
     Representations from fchl18_repr.generate().
-N1, N2 : ndarray, shape (nm,), int32
-NN1, NN2 : ndarray, shape (nm, max_size), int32
+n1, n2 : ndarray, shape (nm,), int32
+n1, n2 : ndarray, shape (nm,), int32
+nn1, nn2 : ndarray, shape (nm, max_size), int32
 sigma : float
 
 Returns
@@ -524,12 +525,12 @@ ndarray, shape (nm1, nm2), float64
     m.def(
         "kernel_gaussian",
         &kernel_gaussian_py,
-        py::arg("X1"),
-        py::arg("X2"),
-        py::arg("N1"),
-        py::arg("N2"),
-        py::arg("NN1"),
-        py::arg("NN2"),
+        py::arg("x1"),
+        py::arg("x2"),
+        py::arg("n1"),
+        py::arg("n2"),
+        py::arg("nn1"),
+        py::arg("nn2"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -547,9 +548,9 @@ ndarray, shape (nm1, nm2), float64
     m.def(
         "kernel_gaussian_symm",
         &kernel_gaussian_symm_py,
-        py::arg("X"),
-        py::arg("N"),
-        py::arg("NN"),
+        py::arg("x"),
+        py::arg("n"),
+        py::arg("nn"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -568,10 +569,10 @@ ndarray, shape (nm1, nm2), float64
         "kernel_gaussian_gradient",
         &kernel_gaussian_gradient_py,
         py::arg("coords_A"),
-        py::arg("Z_A"),
-        py::arg("X2"),
-        py::arg("N2"),
-        py::arg("NN2"),
+        py::arg("z_A"),
+        py::arg("x2"),
+        py::arg("n2"),
+        py::arg("nn2"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -590,9 +591,9 @@ ndarray, shape (nm1, nm2), float64
         "kernel_gaussian_hessian",
         &kernel_gaussian_hessian_py,
         py::arg("coords_A_list"),
-        py::arg("Z_A_list"),
+        py::arg("z_A_list"),
         py::arg("coords_B_list"),
-        py::arg("Z_B_list"),
+        py::arg("z_B_list"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -611,7 +612,7 @@ ndarray, shape (nm1, nm2), float64
         "kernel_gaussian_hessian_symm_rfp",
         &kernel_gaussian_hessian_symm_rfp_py,
         py::arg("coords_list"),
-        py::arg("Z_list"),
+        py::arg("z_list"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -630,10 +631,10 @@ ndarray, shape (nm1, nm2), float64
         "kernel_gaussian_jacobian_t",
         &kernel_gaussian_jacobian_t_py,
         py::arg("coords_train_list"),
-        py::arg("Z_train_list"),
-        py::arg("X_test"),
-        py::arg("N_test"),
-        py::arg("NN_test"),
+        py::arg("z_train_list"),
+        py::arg("x_test"),
+        py::arg("n_test"),
+        py::arg("nn_test"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -662,12 +663,12 @@ Parameters
 ----------
 coords_train_list : list of ndarray, each shape (n_atoms_j, 3), float64
     Cartesian coordinates of the N_train training molecules.
-Z_train_list : list of ndarray, each shape (n_atoms_j,), int32
+z_train_list : list of ndarray, each shape (n_atoms_j,), int32
     Nuclear charges of the training molecules.
-X_test : ndarray, shape (N_test, max_size, 5, max_size), float64
+x_test : ndarray, shape (N_test, max_size, 5, max_size), float64
     Pre-computed FCHL18 representations of the test molecules.
-N_test : ndarray, shape (N_test,), int32
-NN_test : ndarray, shape (N_test, max_size), int32
+n_test : ndarray, shape (N_test,), int32
+nn_test : ndarray, shape (N_test, max_size), int32
 sigma : float
 
 Returns
@@ -683,7 +684,7 @@ ndarray, shape (N_test, D_total), float64
         "kernel_gaussian_symm_rfp",
         &kernel_gaussian_symm_rfp_py,
         py::arg("coords_list"),
-        py::arg("Z_list"),
+        py::arg("z_list"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -705,7 +706,7 @@ with cho_solve_rfp.
 Parameters
 ----------
 coords_list : list of ndarray, each shape (n_atoms_i, 3), float64
-Z_list : list of ndarray, each shape (n_atoms_i,), int32
+z_list : list of ndarray, each shape (n_atoms_i,), int32
 sigma : float
 (remaining hyperparameters same as kernel_gaussian)
 
@@ -720,10 +721,10 @@ ndarray, shape (N*(N+1)//2,), float64
         "kernel_gaussian_jacobian",
         &kernel_gaussian_jacobian_py,
         py::arg("coords_A_list"),
-        py::arg("Z_A_list"),
-        py::arg("X2"),
-        py::arg("N2"),
-        py::arg("NN2"),
+        py::arg("z_A_list"),
+        py::arg("x2"),
+        py::arg("n2"),
+        py::arg("nn2"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -745,12 +746,12 @@ Parameters
 ----------
 coords_A_list : list of ndarray, each shape (n_atoms_i, 3), float64
     Raw Cartesian coordinates for query molecules.
-Z_A_list : list of ndarray, each shape (n_atoms_i,), int32
+z_A_list : list of ndarray, each shape (n_atoms_i,), int32
     Nuclear charges for query molecules.
-X2 : ndarray, shape (N_B, max_size, 5, max_size), float64
+x2 : ndarray, shape (N_B, max_size, 5, max_size), float64
     Pre-computed FCHL18 representations of training molecules B.
-N2 : ndarray, shape (N_B,), int32
-NN2 : ndarray, shape (N_B, max_size), int32
+n2 : ndarray, shape (N_B,), int32
+nn2 : ndarray, shape (N_B, max_size), int32
 sigma : float
 
 Returns
@@ -764,7 +765,7 @@ ndarray, shape (D_A, N_B), float64
         "kernel_gaussian_hessian_symm",
         &kernel_gaussian_hessian_symm_py,
         py::arg("coords_list"),
-        py::arg("Z_list"),
+        py::arg("z_list"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -785,7 +786,7 @@ only lower triangle of molecule blocks is computed, then mirrored.
 Parameters
 ----------
 coords_list : list of ndarray, each shape (n_atoms_i, 3), float64
-Z_list : list of ndarray, each shape (n_atoms_i,), int32
+z_list : list of ndarray, each shape (n_atoms_i,), int32
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False
@@ -801,9 +802,9 @@ ndarray, shape (D, D), float64
         "kernel_gaussian_full",
         &kernel_gaussian_full_py,
         py::arg("coords_A_list"),
-        py::arg("Z_A_list"),
+        py::arg("z_A_list"),
         py::arg("coords_B_list"),
-        py::arg("Z_B_list"),
+        py::arg("z_B_list"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -828,8 +829,8 @@ Block layout:
 
 Parameters
 ----------
-coords_A_list, Z_A_list : N_A query molecules (raw coords + charges)
-coords_B_list, Z_B_list : N_B training molecules
+coords_A_list, z_A_list : N_A query molecules (raw coords + charges)
+coords_B_list, z_B_list : N_B training molecules
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False
@@ -844,7 +845,7 @@ ndarray, shape (N_A+D_A_total, N_B+D_B_total), float64
         "kernel_gaussian_full_symm",
         &kernel_gaussian_full_symm_py,
         py::arg("coords_list"),
-        py::arg("Z_list"),
+        py::arg("z_list"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -863,7 +864,7 @@ Shape: (N*(1+D), N*(1+D)) where D = sum_i n_atoms_i * 3. Full matrix filled.
 
 Parameters
 ----------
-coords_list, Z_list : N training molecules
+coords_list, z_list : N training molecules
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False
@@ -878,7 +879,7 @@ ndarray, shape (N+D, N+D), float64
         "kernel_gaussian_full_symm_rfp",
         &kernel_gaussian_full_symm_rfp_py,
         py::arg("coords_list"),
-        py::arg("Z_list"),
+        py::arg("z_list"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -898,7 +899,7 @@ Compatible with cho_solve_rfp.
 
 Parameters
 ----------
-coords_list, Z_list : N training molecules
+coords_list, z_list : N training molecules
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False

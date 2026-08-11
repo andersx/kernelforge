@@ -50,7 +50,7 @@ def ref_hessian_matvec(
     sigma: float,
 ) -> NDArray[np.float64]:
     """Reference: build full local Hessian, multiply by alpha."""
-    H = _kernels.kernel_gaussian_hessian(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
+    H = _kernels.kernel_gaussian_hessian(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
     result: NDArray[np.float64] = H @ alpha
     return result
 

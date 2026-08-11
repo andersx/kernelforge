@@ -82,7 +82,7 @@ py::tuple inverse_distance_upper_and_jacobian_py(
 PYBIND11_MODULE(invdist_repr, m) {
     m.doc() = "Inverse distance representation and Jacobians";
 
-    m.def("num_pairs", &kf::invdist::num_pairs, py::arg("N"));
+    m.def("num_pairs", &kf::invdist::num_pairs);
     m.def(
         "pair_to_index",
         &kf::invdist::pair_to_index,

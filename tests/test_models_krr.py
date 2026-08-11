@@ -265,8 +265,8 @@ class TestLocalKRRModelFastPath:
 
         K_hess = local_kernels.kernel_gaussian_hessian(
             X_te,
-            dX_te,
             X_tr,
+            dX_te,
             dX_tr,
             Q_te,
             Q_tr,
@@ -310,8 +310,8 @@ class TestLocalKRRModelFastPath:
 
         K_full = local_kernels.kernel_gaussian_full(
             X_te,
-            dX_te,
             X_tr,
+            dX_te,
             dX_tr,
             Q_te,
             Q_tr,

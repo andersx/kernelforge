@@ -254,7 +254,7 @@ def test_jacobian_t_matches_reference(seed: int) -> None:
     n1 = rng.integers(1, max_atoms1 + 1, size=(nm1,)).astype(np.int32)
     n2 = rng.integers(1, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
 
-    K = fchl.kernel_gaussian_jacobian_t(x1, dX1, x2, q1, q2, n1, n2, sigma)
+    K = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
     K_ref = slow_ref_grad_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
 
     assert K.shape == K_ref.shape
@@ -262,7 +262,7 @@ def test_jacobian_t_matches_reference(seed: int) -> None:
 
 
 def test_jacobian_t_transpose_property() -> None:
-    """kernel_gaussian_jacobian_t(X1,dX1,X2,...) == -kernel_gaussian_jacobian(X2,X1,dX1,...).T"""
+    """kernel_gaussian_jacobian_t(x1,x2,dX1,...) == kernel_gaussian_jacobian(x2,x1,dX1,...).T"""
     rng = np.random.default_rng(42)
 
     nm1, nm2 = 3, 4
@@ -281,12 +281,12 @@ def test_jacobian_t_transpose_property() -> None:
     n1 = rng.integers(1, max_atoms + 1, size=(nm1,)).astype(np.int32)
     n2 = rng.integers(1, max_atoms + 1, size=(nm2,)).astype(np.int32)
 
-    # kernel_gaussian_jacobian_t(x1, dX1, x2, q1, q2, n1, n2) -> (naq1, nm2)
-    K_t = fchl.kernel_gaussian_jacobian_t(x1, dX1, x2, q1, q2, n1, n2, sigma)
+    # kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2) -> (naq1, nm2)
+    K_t = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
 
     # kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1) -> (nm2, naq1)
     # Swapping x1/x2 flips d = x1-x2 -> x2-x1, negating the output regardless of the
-    # output sign convention.  So K_t(X1,dX1,X2) == -K_jac(X2,X1,dX1).T always holds.
+    # output sign convention.  So K_t(x1,x2,dX1) == -K_jac(x2,x1,dX1).T always holds.
     K_jac = fchl.kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1, sigma)
 
     np.testing.assert_allclose(K_t, -K_jac.T, rtol=1e-10, atol=1e-10)
@@ -309,7 +309,7 @@ def test_jacobian_t_no_matches_yields_zero_matrix() -> None:
     n1 = np.full((nm1,), max_atoms1, dtype=np.int32)
     n2 = np.full((nm2,), max_atoms2, dtype=np.int32)
 
-    K = fchl.kernel_gaussian_jacobian_t(x1, dX1, x2, q1, q2, n1, n2, sigma)
+    K = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
     naq1 = 3 * nm1 * max_atoms1
     assert K.shape == (naq1, nm2)
     assert np.allclose(K, 0.0)
@@ -332,7 +332,7 @@ def test_jacobian_t_empty_n1_returns_0_by_nm2() -> None:
     n1 = np.zeros((nm1,), dtype=np.int32)  # no atoms -> naq1 = 0
     n2 = rng.integers(1, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
 
-    K = fchl.kernel_gaussian_jacobian_t(x1, dX1, x2, q1, q2, n1, n2, sigma)
+    K = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma)
     assert K.shape == (0, nm2)
     assert K.size == 0
 
@@ -354,4 +354,4 @@ def test_jacobian_t_shape_errors_raise_valueerror() -> None:
     n2 = rng.integers(0, max_atoms2 + 1, size=(nm2,)).astype(np.int32)
 
     with pytest.raises(ValueError, match=r".*"):
-        _ = fchl.kernel_gaussian_jacobian_t(x1, dX1_bad, x2, q1, q2, n1, n2, sigma)
+        _ = fchl.kernel_gaussian_jacobian_t(x1, x2, dX1_bad, q1, q2, n1, n2, sigma)

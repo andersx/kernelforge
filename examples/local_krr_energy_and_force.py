@@ -142,7 +142,7 @@ def main():
     # 2. Build training kernel  --  full combined, dense square matrix
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
-    # K_tr = kernel_gaussian_full(X_tr, dX_tr, X_tr, dX_tr, Q_tr, Q_tr, N_tr, N_tr, SIGMA)
+    # K_tr = kernel_gaussian_full(X_tr, X_tr, dX_tr, dX_tr, Q_tr, Q_tr, N_tr, N_tr, SIGMA)
     K_tr = kernel_gaussian_full_symm_rfp(X_tr, dX_tr, Q_tr, N_tr, SIGMA)
     print(f"\n[2] Training kernel (full dense) built in {time.perf_counter() - t0:.3f}s")
     print(f"    K_tr shape={K_tr.shape}  ({K_tr.nbytes / 1024**2:.1f} MB)")
@@ -183,7 +183,7 @@ def main():
     # ------------------------------------------------------------------
     t0 = time.perf_counter()
     K_pred = kernel_gaussian_full(  # (BIG_te, BIG_tr)
-        X_te, dX_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, SIGMA
+        X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, SIGMA
     )
     y_te_pred = K_pred @ alpha  # (BIG_te,)
     del K_pred

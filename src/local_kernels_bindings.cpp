@@ -36,8 +36,8 @@ static py::array_t<double> flocal_kernel_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 ||
         n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expect shapes: X1(nm1,max_atoms1,rep), X2(nm2,max_atoms2,rep), Q1(nm1,max_atoms1), "
-            "Q2(nm2,max_atoms2), N1(nm1), N2(nm2)."
+            "Expect shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), q1(max_atoms1,nm1), "
+            "q2(max_atoms2,nm2), n1(nm1), n2(nm2)."
         );
     }
 
@@ -48,13 +48,13 @@ static py::array_t<double> flocal_kernel_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     // Cross-check all shapes
-    if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch.");
+    if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch.");
     if (q1.shape(1) != max_atoms1 || q1.shape(0) != nm1)
-        throw std::invalid_argument("Q1 shape mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
     if (q2.shape(1) != max_atoms2 || q2.shape(0) != nm2)
-        throw std::invalid_argument("Q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
+        throw std::invalid_argument("q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
 
     // Flatten into std::vector
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
@@ -111,7 +111,7 @@ static py::array_t<double> flocal_kernel_symm_py(
 ) {
     if (x1.ndim() != 3 || q1.ndim() != 2 || n1.ndim() != 1) {
         throw std::invalid_argument(
-            "Expect shapes: X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm)."
+            "Expect shapes: x1(nm1,max_atoms1,rep), q1(max_atoms1,nm1), n1(nm1),."
         );
     }
 
@@ -120,10 +120,10 @@ static py::array_t<double> flocal_kernel_symm_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     // Cross-check all shapes
-    if (x1.shape(2) != rep_size) throw std::invalid_argument("X rep_size mismatch.");
+    if (x1.shape(2) != rep_size) throw std::invalid_argument("x1 rep_size mismatch.");
     if (q1.shape(1) != max_atoms1 || q1.shape(0) != nm1)
-        throw std::invalid_argument("Q shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("N length mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
 
     // Flatten into std::vector
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
@@ -170,9 +170,9 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || dX2.ndim() != 4 || q1.ndim() != 2 || q2.ndim() != 2 ||
         n1.ndim() != 1 || n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected shapes: X1(nm1,max_atoms1,rep), X2(nm2,max_atoms2,rep), "
-            "dX2(nm2,max_atoms2,rep,3*max_atoms2), Q1(nm1,max_atoms1), Q2(nm2,max_atoms2), "
-            "N1(nm1), N2(nm2)."
+            "Expected shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
+            "dX2(nm2,max_atoms2,rep,3*max_atoms2), q1(nm1,max_atoms1), q2(nm2,max_atoms2), "
+            "n1(nm1), n2(nm2)."
         );
     }
 
@@ -183,18 +183,18 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
-        throw std::invalid_argument("X2 shape mismatch.");
+        throw std::invalid_argument("x2 shape mismatch.");
     if (dX2.shape(0) != nm2 || dX2.shape(1) != max_atoms2 || dX2.shape(2) != rep_size ||
         dX2.shape(3) != 3 * max_atoms2)
         throw std::invalid_argument(
             "dX2 shape mismatch (must be (nm2,max_atoms2,rep,3*max_atoms2))."
         );
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("Q1 shape mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
     if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-        throw std::invalid_argument("Q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
+        throw std::invalid_argument("q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
 
     // Flatten into std::vector (C-contiguous thanks to c_style|forcecast)
     const std::size_t x1N = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size;
@@ -271,9 +271,9 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
 
 static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> x1,  // (nm1, max_atoms1, rep)
+    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<double, py::array::c_style | py::array::forcecast>
         dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
-    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<int, py::array::c_style | py::array::forcecast> q1,  // (nm1, max_atoms1)
     py::array_t<int, py::array::c_style | py::array::forcecast> q2,  // (nm2, max_atoms2)
     py::array_t<int, py::array::c_style | py::array::forcecast> n1,  // (nm1,)
@@ -284,8 +284,9 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || dX1.ndim() != 4 || q1.ndim() != 2 || q2.ndim() != 2 ||
         n1.ndim() != 1 || n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected shapes: X1(nm1,max_atoms1,rep), dX1(nm1,max_atoms1,rep,3*max_atoms1), "
-            "X2(nm2,max_atoms2,rep), Q1(nm1,max_atoms1), Q2(nm2,max_atoms2), N1(nm1), N2(nm2)."
+            "Expected shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
+            "dX1(nm1,max_atoms1,rep,3*max_atoms1), q1(nm1,max_atoms1), q2(nm2,max_atoms2), "
+            "n1(nm1), n2(nm2)."
         );
     }
 
@@ -296,18 +297,18 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     const int rep_size = static_cast<int>(x1.shape(2));
 
     if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
-        throw std::invalid_argument("X2 shape mismatch.");
+        throw std::invalid_argument("x2 shape mismatch.");
     if (dX1.shape(0) != nm1 || dX1.shape(1) != max_atoms1 || dX1.shape(2) != rep_size ||
         dX1.shape(3) != 3 * max_atoms1)
         throw std::invalid_argument(
             "dX1 shape mismatch (must be (nm1,max_atoms1,rep,3*max_atoms1))."
         );
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("Q1 shape mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
     if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-        throw std::invalid_argument("Q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
+        throw std::invalid_argument("q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
 
     // Flatten into std::vector (C-contiguous thanks to c_style|forcecast)
     const std::size_t x1N = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size;
@@ -387,9 +388,9 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
 
 static py::array_t<double> fgdml_kernel_py(
     py::array_t<double, py::array::c_style | py::array::forcecast> x1,  // (nm1, max_atoms1, rep)
+    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<double, py::array::c_style | py::array::forcecast>
         dx1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
-    py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
     py::array_t<double, py::array::c_style | py::array::forcecast>
         dx2,  // (nm2, max_atoms2, rep, 3*max_atoms2)
     py::array_t<int, py::array::c_style | py::array::forcecast> q1,  // (nm1, max_atoms1)
@@ -402,9 +403,9 @@ static py::array_t<double> fgdml_kernel_py(
     if (x1.ndim() != 3 || x2.ndim() != 3 || dx1.ndim() != 4 || dx2.ndim() != 4 || q1.ndim() != 2 ||
         q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected: X1(nm1,max_atoms1,rep), dX1(nm1,max_atoms1,rep,3*max_atoms1), "
-            "X2(nm2,max_atoms2,rep), dX2(nm2,max_atoms2,rep,3*max_atoms2), "
-            "Q1(nm1,max_atoms1), Q2(nm2,max_atoms2), N1(nm1), N2(nm2)."
+            "Expected: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), "
+            "dx1(nm1,max_atoms1,rep,3*max_atoms1), dx2(nm2,max_atoms2,rep,3*max_atoms2), "
+            "q1(nm1,max_atoms1), q2(nm2,max_atoms2), n1(nm1), n2(nm2)."
         );
     }
 
@@ -415,19 +416,19 @@ static py::array_t<double> fgdml_kernel_py(
     const int nm2 = static_cast<int>(x2.shape(0));
     const int max_atoms2 = static_cast<int>(x2.shape(1));
 
-    if (x2.shape(2) != rep) throw std::invalid_argument("X2 rep mismatch.");
+    if (x2.shape(2) != rep) throw std::invalid_argument("x2 rep mismatch.");
     if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep ||
         dx1.shape(3) != 3 * max_atoms1)
-        throw std::invalid_argument("dX1 shape mismatch.");
+        throw std::invalid_argument("dx1 shape mismatch.");
     if (dx2.shape(0) != nm2 || dx2.shape(1) != max_atoms2 || dx2.shape(2) != rep ||
         dx2.shape(3) != 3 * max_atoms2)
-        throw std::invalid_argument("dX2 shape mismatch.");
+        throw std::invalid_argument("dx2 shape mismatch.");
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("Q1 shape mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
     if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-        throw std::invalid_argument("Q2 shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
-    if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
+        throw std::invalid_argument("q2 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
+    if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch.");
 
     // ---- flatten to std::vector (C-contiguous guaranteed by c_style|forcecast) ----
     const std::size_t x1N = (std::size_t)nm1 * max_atoms1 * rep;
@@ -535,8 +536,9 @@ static py::array_t<double> fgdml_kernel_symm_py(
     // ---- shape checks ----
     if (x1.ndim() != 3 || dx1.ndim() != 4 || q1.ndim() != 2 || n1.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected: X(nm,max_atoms,rep), dX(nm,max_atoms,rep,3*max_atoms), "
-            "Q(nm,max_atoms), N(nm)."
+            "Expected: x1(nm1,max_atoms1,rep),  "
+            "dx1(nm1,max_atoms1,rep,3*max_atoms1), "
+            "q1(nm1,max_atoms1), n1(nm1)."
         );
     }
 
@@ -546,10 +548,10 @@ static py::array_t<double> fgdml_kernel_symm_py(
 
     if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep ||
         dx1.shape(3) != 3 * max_atoms1)
-        throw std::invalid_argument("dX shape mismatch.");
+        throw std::invalid_argument("dx1 shape mismatch.");
     if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-        throw std::invalid_argument("Q shape mismatch.");
-    if (n1.shape(0) != nm1) throw std::invalid_argument("N length mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
+    if (n1.shape(0) != nm1) throw std::invalid_argument("n1 length mismatch.");
 
     // ---- flatten to std::vector (C-contiguous guaranteed by c_style|forcecast) ----
     const std::size_t x1N = (std::size_t)nm1 * max_atoms1 * rep;
@@ -630,9 +632,9 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
     py::array_t<int, py::array::c_style | py::array::forcecast> q1,
     py::array_t<int, py::array::c_style | py::array::forcecast> n1, double sigma
 ) {
-    // Expect shapes: X(nm, max_atoms, rep), Q(nm, max_atoms), N(nm)
+    // Expect shapes: x1(nm, max_atoms, rep), q1(nm, max_atoms), n1(nm)
     if (x1.ndim() != 3 || q1.ndim() != 2 || n1.ndim() != 1) {
-        throw std::invalid_argument("Expect X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm).");
+        throw std::invalid_argument("Expect x1(nm,max_atoms,rep), q1(nm,max_atoms), n1(nm).");
     }
 
     const int nm = static_cast<int>(x1.shape(0));
@@ -641,8 +643,8 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
 
     // Cross-check shapes
     if (q1.shape(0) != nm || q1.shape(1) != max_atoms)
-        throw std::invalid_argument("Q shape mismatch.");
-    if (n1.shape(0) != nm) throw std::invalid_argument("N length mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
+    if (n1.shape(0) != nm) throw std::invalid_argument("n1 length mismatch.");
 
     // Flatten into std::vector
     const size_t xN = (size_t)nm * (size_t)max_atoms * (size_t)rep_size;
@@ -681,8 +683,9 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
     // ---- shape checks ----
     if (x1.ndim() != 3 || dx1.ndim() != 4 || q1.ndim() != 2 || n1.ndim() != 1) {
         throw std::invalid_argument(
-            "Expected: X(nm,max_atoms,rep), dX(nm,max_atoms,rep,3*max_atoms), "
-            "Q(nm,max_atoms), N(nm)."
+            "Expected: x1(nm,max_atoms,rep), "
+            "dx1(nm,max_atoms,rep,3*max_atoms), "
+            "q1(nm,max_atoms), n1(nm)."
         );
     }
 
@@ -692,10 +695,10 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
 
     if (dx1.shape(0) != nm || dx1.shape(1) != max_atoms || dx1.shape(2) != rep ||
         dx1.shape(3) != 3 * max_atoms)
-        throw std::invalid_argument("dX shape mismatch.");
+        throw std::invalid_argument("dx1 shape mismatch.");
     if (q1.shape(0) != nm || q1.shape(1) != max_atoms)
-        throw std::invalid_argument("Q shape mismatch.");
-    if (n1.shape(0) != nm) throw std::invalid_argument("N length mismatch.");
+        throw std::invalid_argument("q1 shape mismatch.");
+    if (n1.shape(0) != nm) throw std::invalid_argument("n1 length mismatch.");
 
     // ---- flatten to std::vector ----
     const std::size_t x1N = (std::size_t)nm * max_atoms * rep;
@@ -762,166 +765,166 @@ PYBIND11_MODULE(local_kernels, m) {
     m.def(
         "kernel_gaussian_hessian_symm",
         &fgdml_kernel_symm_py,
-        py::arg("X"),
-        py::arg("dX"),
-        py::arg("Q"),
-        py::arg("N"),
+        py::arg("x1"),
+        py::arg("dx1"),
+        py::arg("q1"),
+        py::arg("n1"),
         py::arg("sigma"),
         R"(Compute the Gaussian GDML/Hessian kernel (symmetric).
 
 Args:
-  X:  (nm, max_atoms, rep)
-  dX: (nm, max_atoms, rep, 3*max_atoms)
-  Q:  (nm, max_atoms)
-  N:  (nm,)
+  x1:  (nm1, max_atoms1, rep)
+  dx1: (nm1, max_atoms1, rep, 3*max_atoms1)
+  q1:  (nm1, max_atoms1)
+  n1:  (nm1,)
   sigma: positive float
 
 Returns:
-  K: (naq, naq) row-major, where naq = 3 * sum(N)
+  K: (naq1, naq1) row-major, where naq1 = 3 * sum(n1)
 )"
     );
 
     m.def(
         "kernel_gaussian_hessian",
         &fgdml_kernel_py,
-        py::arg("X1"),
-        py::arg("dX1"),
-        py::arg("X2"),
-        py::arg("dX2"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("x1"),
+        py::arg("x2"),
+        py::arg("dx1"),
+        py::arg("dx2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma"),
         R"(Compute the Gaussian GDML/Hessian kernel.
 
 Args:
-  X1:  (nm1, max_atoms1, rep)
-  dX1: (nm1, max_atoms1, rep, 3*max_atoms1)
-  X2:  (nm2, max_atoms2, rep)
-  dX2: (nm2, max_atoms2, rep, 3*max_atoms2)
-  Q1:  (nm1, max_atoms1)
-  Q2:  (nm2, max_atoms2)
-  N1:  (nm1,)
-  N2:  (nm2,)
+  x1:  (nm1, max_atoms1, rep)
+  x2:  (nm2, max_atoms2, rep)
+  dx1: (nm1, max_atoms1, rep, 3*max_atoms1)
+  dx2: (nm2, max_atoms2, rep, 3*max_atoms2)
+  q1:  (nm1, max_atoms1)
+  q2:  (nm2, max_atoms2)
+  n1:  (nm1,)
+  n2:  (nm2,)
   sigma: positive float
 
 Returns:
   K: (naq2, naq1) row-major, where
-     naq1 = 3 * sum(N1), naq2 = 3 * sum(N2)
+     naq1 = 3 * sum(n1), naq2 = 3 * sum(n2)
 )"
     );
 
     m.def(
         "kernel_gaussian_jacobian",
         &fatomic_local_gradient_kernel_py,
-        py::arg("X1"),
-        py::arg("X2"),
+        py::arg("x1"),
+        py::arg("x2"),
         py::arg("dX2"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma"),
         R"(Compute the Gaussian Jacobian kernel (gradient w.r.t. coordinates of set-2).
 
 Args:
-  X1:  (nm1, max_atoms1, rep)
-  X2:  (nm2, max_atoms2, rep)
+  x1:  (nm1, max_atoms1, rep)
+  x2:  (nm2, max_atoms2, rep)
   dX2: (nm2, max_atoms2, rep, 3*max_atoms2)
-  Q1:  (nm1, max_atoms1)
-  Q2:  (nm2, max_atoms2)
-  N1:  (nm1,)
-  N2:  (nm2,)
+  q1:  (nm1, max_atoms1)
+  q2:  (nm2, max_atoms2)
+  n1:  (nm1,)
+  n2:  (nm2,)
   sigma: positive float
 
 Returns:
-  K: (nm1, naq2) where naq2 = 3 * sum(N2)
+  K: (nm1, naq2) where naq2 = 3 * sum(n2)
 )"
     );
 
     m.def(
         "kernel_gaussian_jacobian_t",
         &fatomic_local_gradient_kernel_t_py,
-        py::arg("X1"),
+        py::arg("x1"),
+        py::arg("x2"),
         py::arg("dX1"),
-        py::arg("X2"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma"),
         R"(Compute the transposed Gaussian Jacobian kernel (gradient w.r.t. coordinates of set-1).
 
 Args:
-  X1:  (nm1, max_atoms1, rep)
+  x1:  (nm1, max_atoms1, rep)
+  x2:  (nm2, max_atoms2, rep)
   dX1: (nm1, max_atoms1, rep, 3*max_atoms1)
-  X2:  (nm2, max_atoms2, rep)
-  Q1:  (nm1, max_atoms1)
-  Q2:  (nm2, max_atoms2)
-  N1:  (nm1,)
-  N2:  (nm2,)
+  q1:  (nm1, max_atoms1)
+  q2:  (nm2, max_atoms2)
+  n1:  (nm1,)
+  n2:  (nm2,)
   sigma: positive float
 
 Returns:
-  K: (naq1, nm2) where naq1 = 3 * sum(N1)
+  K: (naq1, nm2) where naq1 = 3 * sum(n1)
 
 Property:
-  kernel_gaussian_jacobian_t(X1, dX1, X2, Q1, Q2, N1, N2, sigma) ==
-      -kernel_gaussian_jacobian(X2, X1, dX1, Q2, Q1, N2, N1, sigma).T
+  kernel_gaussian_jacobian_t(x1, x2, dX1, q1, q2, n1, n2, sigma) ==
+      -kernel_gaussian_jacobian(x2, x1, dX1, q2, q1, n2, n1, sigma).T
 )"
     );
 
     m.def(
         "kernel_gaussian",
         &flocal_kernel_py,
-        py::arg("X1"),
-        py::arg("X2"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("x1"),
+        py::arg("x2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma")
     );
     m.def(
         "kernel_gaussian_symm",
         &flocal_kernel_symm_py,
-        py::arg("X"),
-        py::arg("Q"),
-        py::arg("N"),
+        py::arg("x1"),
+        py::arg("q1"),
+        py::arg("n1"),
         py::arg("sigma")
     );
     m.def(
         "kernel_gaussian_symm_rfp",
         &flocal_kernel_symm_rfp_py,
-        py::arg("X"),
-        py::arg("Q"),
-        py::arg("N"),
+        py::arg("x1"),
+        py::arg("q1"),
+        py::arg("n1"),
         py::arg("sigma"),
         "Symmetric Gaussian kernel with RFP (TRANSR='N', UPLO='U') output.\n"
-        "Inputs: X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm).\n"
+        "Inputs: x1(nm,max_atoms,rep), q1(nm,max_atoms), n1(nm).\n"
         "Returns: 1-D RFP array of length nm*(nm+1)/2."
     );
 
     m.def(
         "kernel_gaussian_hessian_symm_rfp",
         &fgdml_kernel_symm_rfp_py,
-        py::arg("X"),
-        py::arg("dX"),
-        py::arg("Q"),
-        py::arg("N"),
+        py::arg("x1"),
+        py::arg("dx1"),
+        py::arg("q1"),
+        py::arg("n1"),
         py::arg("sigma"),
         R"(Symmetric Hessian kernel in RFP (TRANSR='N', UPLO='U') format.
 
 Args:
-  X:  (nm, max_atoms, rep)
-  dX: (nm, max_atoms, rep, 3*max_atoms)
-  Q:  (nm, max_atoms)
-  N:  (nm,)
+  x1:  (nm, max_atoms, rep)
+  dx1: (nm, max_atoms, rep, 3*max_atoms)
+  q1:  (nm, max_atoms)
+  n1:  (nm,)
   sigma: positive float
 
 Returns:
-  arf: 1-D array of length naq*(naq+1)/2, where naq = 3 * sum(N).
+  arf: 1-D array of length naq*(naq+1)/2, where naq = 3 * sum(n1).
        Packed as RFP TRANSR='N', UPLO='U'.
        Equivalent to: np.triu(kernel_gaussian_hessian_symm(...)) packed by dpftrs convention.
 )"
@@ -931,9 +934,9 @@ Returns:
         "kernel_gaussian_full",
         [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
            py::array_t<double, py::array::c_style | py::array::forcecast>
-               dx1,
-           py::array_t<double, py::array::c_style | py::array::forcecast>
                x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               dx1,
            py::array_t<double, py::array::c_style | py::array::forcecast>
                dx2,
            py::array_t<int, py::array::c_style | py::array::forcecast>
@@ -952,16 +955,16 @@ Returns:
             const int nm2 = x2.shape(0), max_atoms2 = x2.shape(1);
             if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep ||
                 dx1.shape(3) != 3 * max_atoms1)
-                throw std::invalid_argument("dX1 shape mismatch");
+                throw std::invalid_argument("dx1 shape mismatch");
             if (dx2.shape(0) != nm2 || dx2.shape(1) != max_atoms2 || dx2.shape(2) != rep ||
                 dx2.shape(3) != 3 * max_atoms2)
-                throw std::invalid_argument("dX2 shape mismatch");
+                throw std::invalid_argument("dx2 shape mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("Q1 shape mismatch");
+                throw std::invalid_argument("q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("Q2 shape mismatch");
+                throw std::invalid_argument("q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("N1/N2 length mismatch");
+                throw std::invalid_argument("n1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> x2v(x2.data(), x2.data() + x2.size());
@@ -1011,23 +1014,23 @@ Returns:
                 capsule
             );
         },
-        py::arg("X1"),
-        py::arg("dX1"),
-        py::arg("X2"),
-        py::arg("dX2"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("x1"),
+        py::arg("x2"),
+        py::arg("dx1"),
+        py::arg("dx2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma"),
         R"(Full combined energy+force kernel (asymmetric).
 
-Output shape: (nm1+naq1, nm2+naq2) where naq1=3*sum(N1), naq2=3*sum(N2).
+Output shape: (nm1+naq1, nm2+naq2) where naq1=3*sum(n1), naq2=3*sum(n2).
 
 Block layout:
   K[0:nm1,   0:nm2]   = scalar kernel
-  K[0:nm1,   nm2:]    = jacobian    (dX2-side / dK/dR_2, shape nm1 x naq2)
-  K[nm1:,    0:nm2]   = jacobian_t  (dX1-side / dK/dR_1, shape naq1 x nm2)
+  K[0:nm1,   nm2:]    = jacobian_t  (dX2-side derivatives, shape nm1 x naq2)
+  K[nm1:,    0:nm2]   = jacobian    (dX1-side derivatives, shape naq1 x nm2)
   K[nm1:,    nm2:]    = hessian     (shape naq1 x naq2)
 )"
     );
@@ -1049,10 +1052,10 @@ Block layout:
             const int rep = x.shape(2);
             if (dx.shape(0) != nm || dx.shape(1) != max_atoms || dx.shape(2) != rep ||
                 dx.shape(3) != 3 * max_atoms)
-                throw std::invalid_argument("dX shape mismatch");
+                throw std::invalid_argument("dx shape mismatch");
             if (q.shape(0) != nm || q.shape(1) != max_atoms)
-                throw std::invalid_argument("Q shape mismatch");
-            if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
+                throw std::invalid_argument("q shape mismatch");
+            if (n.shape(0) != nm) throw std::invalid_argument("n length mismatch");
 
             std::vector<double> xv(x.data(), x.data() + x.size());
             std::vector<double> dxv(dx.data(), dx.data() + dx.size());
@@ -1089,19 +1092,19 @@ Block layout:
                 capsule
             );
         },
-        py::arg("X"),
-        py::arg("dX"),
-        py::arg("Q"),
-        py::arg("N"),
+        py::arg("x"),
+        py::arg("dx"),
+        py::arg("q"),
+        py::arg("n"),
         py::arg("sigma"),
         R"(Full combined energy+force kernel (symmetric).
 
-Output shape: (nm+naq, nm+naq) where naq=3*sum(N).
+Output shape: (nm+naq, nm+naq) where naq=3*sum(n).
 
 Block layout:
   K[0:nm,  0:nm]  = scalar kernel      (fully filled, symmetric)
-  K[0:nm,  nm:]   = jacobian           (dK/dR_2 layout, nm x naq)
-  K[nm:,   0:nm]  = jacobian_t         (dK/dR_1 layout, naq x nm)
+  K[0:nm,  nm:]   = jacobian_t         (nm x naq, fully filled)
+  K[nm:,   0:nm]  = jacobian           (naq x nm, fully filled)
   K[nm:,   nm:]   = hessian block      (naq x naq, lower triangle + diagonal filled)
 )"
     );
@@ -1123,10 +1126,10 @@ Block layout:
             const int rep = x.shape(2);
             if (dx.shape(0) != nm || dx.shape(1) != max_atoms || dx.shape(2) != rep ||
                 dx.shape(3) != 3 * max_atoms)
-                throw std::invalid_argument("dX shape mismatch");
+                throw std::invalid_argument("dx shape mismatch");
             if (q.shape(0) != nm || q.shape(1) != max_atoms)
-                throw std::invalid_argument("Q shape mismatch");
-            if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
+                throw std::invalid_argument("q shape mismatch");
+            if (n.shape(0) != nm) throw std::invalid_argument("n length mismatch");
 
             std::vector<double> xv(x.data(), x.data() + x.size());
             std::vector<double> dxv(dx.data(), dx.data() + dx.size());
@@ -1164,14 +1167,14 @@ Block layout:
                 capsule
             );
         },
-        py::arg("X"),
-        py::arg("dX"),
-        py::arg("Q"),
-        py::arg("N"),
+        py::arg("x"),
+        py::arg("dx"),
+        py::arg("q"),
+        py::arg("n"),
         py::arg("sigma"),
         R"(Full combined energy+force kernel (symmetric, RFP packed).
 
-Output: 1-D array of length BIG*(BIG+1)/2 where BIG=nm+naq, naq=3*sum(N).
+Output: 1-D array of length BIG*(BIG+1)/2 where BIG=nm+naq, naq=3*sum(n).
 Packed as RFP TRANSR='N', UPLO='U'.
 )"
     );
@@ -1187,9 +1190,9 @@ Packed as RFP TRANSR='N', UPLO='U'.
             const int nm2 = static_cast<int>(dx2.shape(0));
             const int max_atoms2 = static_cast<int>(dx2.shape(1));
             const int rep_size = static_cast<int>(dx2.shape(2));
-            if (dx2.shape(3) != 3 * max_atoms2) throw std::invalid_argument("dX2 shape mismatch");
-            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2) throw std::invalid_argument("Q2 shape mismatch");
-            if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch");
+            if (dx2.shape(3) != 3 * max_atoms2) throw std::invalid_argument("dx2 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2) throw std::invalid_argument("q2 shape mismatch");
+            if (n2.shape(0) != nm2) throw std::invalid_argument("n2 length mismatch");
 
             std::vector<double> dx2v(dx2.data(), dx2.data() + dx2.size());
             std::vector<int> q2v(q2.data(), q2.data() + q2.size());
@@ -1224,17 +1227,17 @@ Packed as RFP TRANSR='N', UPLO='U'.
                 capsule
             );
         },
-        py::arg("dX2"),
-        py::arg("Q2"),
-        py::arg("N2"),
+        py::arg("dx2"),
+        py::arg("q2"),
+        py::arg("n2"),
         py::arg("alpha"),
         R"(Pre-compute descriptor-space force coefficients for J^T*alpha trick.
 
 Shapes:
-  dX2:   (nm2, max_atoms2, rep_size, 3*max_atoms2), training Jacobians
-  Q2:    (nm2, max_atoms2), atomic labels
-  N2:    (nm2,), active atom counts
-  alpha: (naq2,) where naq2 = 3*sum(N2), force coefficients in Cartesian space
+  dx2:   (nm2, max_atoms2, rep_size, 3*max_atoms2), training Jacobians
+  q2:    (nm2, max_atoms2), atomic labels
+  n2:    (nm2,), active atom counts
+  alpha: (naq2,) where naq2 = 3*sum(n2), force coefficients in Cartesian space
 
 Returns:
   alpha_desc: (nm2, max_atoms2, rep_size), descriptor-space coefficients
@@ -1266,18 +1269,18 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
 
             if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep_size ||
                 dx1.shape(3) != 3 * max_atoms1)
-                throw std::invalid_argument("dX1 shape mismatch");
+                throw std::invalid_argument("dx1 shape mismatch");
             if (x2.shape(1) != max_atoms2 || x2.shape(2) != rep_size)
-                throw std::invalid_argument("X2 shape mismatch");
+                throw std::invalid_argument("x2 shape mismatch");
             if (alpha_desc.shape(0) != nm2 || alpha_desc.shape(1) != max_atoms2 ||
                 alpha_desc.shape(2) != rep_size)
                 throw std::invalid_argument("alpha_desc shape mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("Q1 shape mismatch");
+                throw std::invalid_argument("q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("Q2 shape mismatch");
+                throw std::invalid_argument("q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("N1/N2 length mismatch");
+                throw std::invalid_argument("n1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
@@ -1327,31 +1330,30 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
                 capsule
             );
         },
-        py::arg("X1"),
-        py::arg("dX1"),
-        py::arg("X2"),
+        py::arg("x1"),
+        py::arg("dx1"),
+        py::arg("x2"),
         py::arg("alpha_desc"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma"),
         R"(Predict forces via local Hessian kernel matvec using J^T*alpha trick.
 
 Cost: O(nm1·naq2·rep + naq1) vs O(naq1·naq2·rep + naq1) for full matrix.
 
 Shapes:
-  X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
-  dX1:       (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
-  X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
-  alpha_desc:(nm2, max_atoms2, rep_size), from
-             kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha)
-  Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
-  N1, N2:    (nm1/nm2), active atom counts
+  x1:        (nm1, max_atoms1, rep_size), query descriptor vectors
+  dx1:       (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
+  x2:        (nm2, max_atoms2, rep_size), training descriptor vectors
+  alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+  q1, q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  n1, n2:    (nm1/nm2), active atom counts
   sigma:     Gaussian width parameter
 
 Returns:
-  F: (naq1,) where naq1 = 3*sum(N1), forces in Cartesian coordinates
+  F: (naq1,) where naq1 = 3*sum(n1), forces in Cartesian coordinates
 )"
     );
 
@@ -1375,16 +1377,16 @@ Returns:
             const int nm2 = static_cast<int>(x2.shape(0));
             const int max_atoms2 = static_cast<int>(x2.shape(1));
 
-            if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch");
+            if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch");
             if (alpha_desc.shape(0) != nm2 || alpha_desc.shape(1) != max_atoms2 ||
                 alpha_desc.shape(2) != rep_size)
                 throw std::invalid_argument("alpha_desc shape mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("Q1 shape mismatch");
+                throw std::invalid_argument("q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("Q2 shape mismatch");
+                throw std::invalid_argument("q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("N1/N2 length mismatch");
+                throw std::invalid_argument("n1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> x2v(x2.data(), x2.data() + x2.size());
@@ -1408,25 +1410,24 @@ Returns:
             }
             return E;
         },
-        py::arg("X1"),
-        py::arg("X2"),
+        py::arg("x1"),
+        py::arg("x2"),
         py::arg("alpha_desc"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma"),
         R"(Predict energies via local Jacobian kernel matvec using J^T*alpha trick.
 
 Cost: O(nm1·naq2·rep) vs O(nm1·naq2·rep·3*na) for full matrix.
 
 Shapes:
-  X1:        (nm1, max_atoms1, rep_size), query descriptor vectors
-  X2:        (nm2, max_atoms2, rep_size), training descriptor vectors
-  alpha_desc:(nm2, max_atoms2, rep_size), from
-             kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha)
-  Q1, Q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
-  N1, N2:    (nm1/nm2), active atom counts
+  x1:        (nm1, max_atoms1, rep_size), query descriptor vectors
+  x2:        (nm2, max_atoms2, rep_size), training descriptor vectors
+  alpha_desc:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc
+  q1, q2:    (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  n1, n2:    (nm1/nm2), active atom counts
   sigma:     Gaussian width parameter
 
 Returns:
@@ -1459,18 +1460,18 @@ Returns:
 
             if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 ||
                 dx1.shape(2) != rep_size || dx1.shape(3) != 3 * max_atoms1)
-                throw std::invalid_argument("dX1 shape mismatch");
-            if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch");
+                throw std::invalid_argument("dx1 shape mismatch");
+            if (x2.shape(2) != rep_size) throw std::invalid_argument("x2 rep_size mismatch");
             if (alpha_desc_F.shape(0) != nm2 || alpha_desc_F.shape(1) != max_atoms2 ||
                 alpha_desc_F.shape(2) != rep_size)
                 throw std::invalid_argument("alpha_desc_F shape mismatch");
             if (alpha_E.shape(0) != nm2) throw std::invalid_argument("alpha_E length mismatch");
             if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
-                throw std::invalid_argument("Q1 shape mismatch");
+                throw std::invalid_argument("q1 shape mismatch");
             if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
-                throw std::invalid_argument("Q2 shape mismatch");
+                throw std::invalid_argument("q2 shape mismatch");
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
-                throw std::invalid_argument("N1/N2 length mismatch");
+                throw std::invalid_argument("n1/n2 length mismatch");
 
             std::vector<double> x1v(x1.data(), x1.data() + x1.size());
             std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
@@ -1504,33 +1505,32 @@ Returns:
             }
             return py::make_tuple(E, F);
         },
-        py::arg("X1"),
-        py::arg("dX1"),
-        py::arg("X2"),
+        py::arg("x1"),
+        py::arg("dx1"),
+        py::arg("x2"),
         py::arg("alpha_desc_F"),
         py::arg("alpha_E"),
-        py::arg("Q1"),
-        py::arg("Q2"),
-        py::arg("N1"),
-        py::arg("N2"),
+        py::arg("q1"),
+        py::arg("q2"),
+        py::arg("n1"),
+        py::arg("n2"),
         py::arg("sigma"),
         R"(Predict energies+forces via full local kernel matvec using J^T*alpha trick.
 
 Cost: O(nm1·naq2·rep + naq1) vs O((nm1+naq1)·(nm2+naq2)·rep) for full matrix.
 
 Shapes:
-  X1:          (nm1, max_atoms1, rep_size), query descriptor vectors
-  dX1:         (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
-  X2:          (nm2, max_atoms2, rep_size), training descriptor vectors
-  alpha_desc_F:(nm2, max_atoms2, rep_size), from
-               kernel_gaussian_local_compute_alpha_desc(dX2, Q2, N2, alpha_F)
+  x1:          (nm1, max_atoms1, rep_size), query descriptor vectors
+  dx1:         (nm1, max_atoms1, rep_size, 3*max_atoms1), query Jacobians
+  x2:          (nm2, max_atoms2, rep_size), training descriptor vectors
+  alpha_desc_F:(nm2, max_atoms2, rep_size), pre-computed via compute_alpha_desc(dX2, alpha_F)
   alpha_E:     (nm2,), energy coefficients
-  Q1, Q2:      (nm1/nm2, max_atoms1/2), atomic labels (for matching)
-  N1, N2:      (nm1/nm2), active atom counts
+  q1, q2:      (nm1/nm2, max_atoms1/2), atomic labels (for matching)
+  n1, n2:      (nm1/nm2), active atom counts
   sigma:       Gaussian width parameter
 
 Returns:
-  (E, F): E=(nm1,) energies, F=(naq1,) forces where naq1=3*sum(N1)
+  (E, F): E=(nm1,) energies, F=(naq1,) forces where naq1=3*sum(n1)
 )"
     );
 }

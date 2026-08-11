@@ -980,8 +980,8 @@ void kernel_gaussian_jacobian(
 // Output shape: (naq1, nm2), where naq1 = 3 * sum(n1).
 //
 // Mathematical relationship:
-//   kernel_gaussian_jacobian_t(X1, dX1, X2, ...) ==
-//       -kernel_gaussian_jacobian(X2, X1, dX1, ...).T
+//   kernel_gaussian_jacobian_t(x1, x2, dX1, ...) ==
+//       kernel_gaussian_jacobian(x2, x1, dX1, ...).T
 //
 // For each matching-label pair (a,j1) from set-1 and (b,j2) from set-2:
 //   d = x1[a,j1] - x2[b,j2]
