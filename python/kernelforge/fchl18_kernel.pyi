@@ -4,12 +4,12 @@ import numpy as np
 from numpy.typing import NDArray
 
 def kernel_gaussian(
-    x1: NDArray[np.float64],
-    x2: NDArray[np.float64],
-    n1: NDArray[np.int32],
-    n2: NDArray[np.int32],
-    nn1: NDArray[np.int32],
-    nn2: NDArray[np.int32],
+    X1: NDArray[np.float64],
+    X2: NDArray[np.float64],
+    N1: NDArray[np.int32],
+    N2: NDArray[np.int32],
+    NN1: NDArray[np.int32],
+    NN2: NDArray[np.int32],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -29,11 +29,11 @@ def kernel_gaussian(
 
     Parameters
     ----------
-    x1, x2 : ndarray, shape (nm, max_size, 5, max_size), float64
+    X1, X2 : ndarray, shape (nm, max_size, 5, max_size), float64
         Representations from fchl18_repr.generate().
-    n1, n2 : ndarray, shape (nm,), int32
+    N1, N2 : ndarray, shape (nm,), int32
         Number of real atoms per molecule.
-    nn1, nn2 : ndarray, shape (nm, max_size), int32
+    NN1, NN2 : ndarray, shape (nm, max_size), int32
         Number of neighbours per atom.
     sigma : float
         Gaussian kernel width.
@@ -58,10 +58,10 @@ def kernel_gaussian(
 
 def kernel_gaussian_gradient(
     coords_A: NDArray[np.float64],
-    z_A: NDArray[np.int32],
-    x2: NDArray[np.float64],
-    n2: NDArray[np.int32],
-    nn2: NDArray[np.int32],
+    Z_A: NDArray[np.int32],
+    X2: NDArray[np.float64],
+    N2: NDArray[np.int32],
+    NN2: NDArray[np.int32],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -82,13 +82,13 @@ def kernel_gaussian_gradient(
     ----------
     coords_A : ndarray, shape (n_atoms_A, 3), float64
         Cartesian coordinates of the query molecule A.
-    z_A : ndarray, shape (n_atoms_A,), int32
+    Z_A : ndarray, shape (n_atoms_A,), int32
         Nuclear charges of molecule A.
-    x2 : ndarray, shape (nm2, max_size2, 5, max_size2), float64
+    X2 : ndarray, shape (nm2, max_size2, 5, max_size2), float64
         Pre-computed representations of training set B.
-    n2 : ndarray, shape (nm2,), int32
+    N2 : ndarray, shape (nm2,), int32
         Number of real atoms per training molecule.
-    nn2 : ndarray, shape (nm2, max_size2), int32
+    NN2 : ndarray, shape (nm2, max_size2), int32
         Neighbour counts per atom in training set.
     sigma : float
         Gaussian kernel width.
@@ -111,9 +111,9 @@ def kernel_gaussian_gradient(
     ...
 
 def kernel_gaussian_symm(
-    x: NDArray[np.float64],
-    n: NDArray[np.int32],
-    nn: NDArray[np.int32],
+    X: NDArray[np.float64],
+    N: NDArray[np.int32],
+    NN: NDArray[np.int32],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -130,9 +130,9 @@ def kernel_gaussian_symm(
 
     Parameters
     ----------
-    x : ndarray, shape (nm, max_size, 5, max_size), float64
-    n : ndarray, shape (nm,), int32
-    nn : ndarray, shape (nm, max_size), int32
+    X : ndarray, shape (nm, max_size, 5, max_size), float64
+    N : ndarray, shape (nm,), int32
+    NN : ndarray, shape (nm, max_size), int32
     sigma : float
     (remaining hyperparameters same as kernel_gaussian)
     use_atm : bool, default True
@@ -147,9 +147,9 @@ def kernel_gaussian_symm(
 
 def kernel_gaussian_hessian(
     coords_A_list: Sequence[NDArray[np.float64]],
-    z_A_list: Sequence[NDArray[np.int32]],
+    Z_A_list: Sequence[NDArray[np.int32]],
     coords_B_list: Sequence[NDArray[np.float64]],
-    z_B_list: Sequence[NDArray[np.int32]],
+    Z_B_list: Sequence[NDArray[np.int32]],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -171,9 +171,9 @@ def kernel_gaussian_hessian(
     Parameters
     ----------
     coords_A_list : list of ndarray, each (n_atoms_i, 3), float64
-    z_A_list      : list of ndarray, each (n_atoms_i,), int32
+    Z_A_list      : list of ndarray, each (n_atoms_i,), int32
     coords_B_list : list of ndarray, each (n_atoms_j, 3), float64
-    z_B_list      : list of ndarray, each (n_atoms_j,), int32
+    Z_B_list      : list of ndarray, each (n_atoms_j,), int32
     sigma : float
     two_body_scaling : float, default 2.0
     two_body_width : float, default 0.1
@@ -195,7 +195,7 @@ def kernel_gaussian_hessian(
 
 def kernel_gaussian_hessian_symm(
     coords_list: Sequence[NDArray[np.float64]],
-    z_list: Sequence[NDArray[np.int32]],
+    Z_list: Sequence[NDArray[np.int32]],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -221,7 +221,7 @@ def kernel_gaussian_hessian_symm(
 
 def kernel_gaussian_hessian_symm_rfp(
     coords_list: Sequence[NDArray[np.float64]],
-    z_list: Sequence[NDArray[np.int32]],
+    Z_list: Sequence[NDArray[np.int32]],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -245,7 +245,7 @@ def kernel_gaussian_hessian_symm_rfp(
 
 def kernel_gaussian_symm_rfp(
     coords_list: Sequence[NDArray[np.float64]],
-    z_list: Sequence[NDArray[np.int32]],
+    Z_list: Sequence[NDArray[np.int32]],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -269,10 +269,10 @@ def kernel_gaussian_symm_rfp(
 
 def kernel_gaussian_jacobian(
     coords_A_list: Sequence[NDArray[np.float64]],
-    z_A_list: Sequence[NDArray[np.int32]],
-    x2: NDArray[np.float64],
-    n2: NDArray[np.int32],
-    nn2: NDArray[np.int32],
+    Z_A_list: Sequence[NDArray[np.int32]],
+    X2: NDArray[np.float64],
+    N2: NDArray[np.int32],
+    NN2: NDArray[np.int32],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -296,10 +296,10 @@ def kernel_gaussian_jacobian(
 
 def kernel_gaussian_jacobian_t(
     coords_train_list: Sequence[NDArray[np.float64]],
-    z_train_list: Sequence[NDArray[np.int32]],
-    x_test: NDArray[np.float64],
-    n_test: NDArray[np.int32],
-    nn_test: NDArray[np.int32],
+    Z_train_list: Sequence[NDArray[np.int32]],
+    X_test: NDArray[np.float64],
+    N_test: NDArray[np.int32],
+    NN_test: NDArray[np.int32],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -322,9 +322,9 @@ def kernel_gaussian_jacobian_t(
 
 def kernel_gaussian_full(
     coords_A_list: Sequence[NDArray[np.float64]],
-    z_A_list: Sequence[NDArray[np.int32]],
+    Z_A_list: Sequence[NDArray[np.int32]],
     coords_B_list: Sequence[NDArray[np.float64]],
-    z_B_list: Sequence[NDArray[np.int32]],
+    Z_B_list: Sequence[NDArray[np.int32]],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -354,7 +354,7 @@ def kernel_gaussian_full(
 
 def kernel_gaussian_full_symm(
     coords_list: Sequence[NDArray[np.float64]],
-    z_list: Sequence[NDArray[np.int32]],
+    Z_list: Sequence[NDArray[np.int32]],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,
@@ -377,7 +377,7 @@ def kernel_gaussian_full_symm(
 
 def kernel_gaussian_full_symm_rfp(
     coords_list: Sequence[NDArray[np.float64]],
-    z_list: Sequence[NDArray[np.int32]],
+    Z_list: Sequence[NDArray[np.int32]],
     sigma: float,
     two_body_scaling: float = 2.0,
     two_body_width: float = 0.1,

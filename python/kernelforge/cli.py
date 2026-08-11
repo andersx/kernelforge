@@ -1192,7 +1192,7 @@ def benchmark_local_kernel_gaussian_jacobian_t() -> tuple[float, str]:
 
     start = time.perf_counter()
     _ = kernel_gaussian_jacobian_t(
-        X_train, X_test, dX_train, Q_train, Q_test, N_train, N_test, sigma
+        X_train, dX_train, X_test, Q_train, Q_test, N_train, N_test, sigma
     )
     elapsed = (time.perf_counter() - start) * 1000
 
@@ -1234,7 +1234,7 @@ def benchmark_local_kernel_gaussian_hessian() -> tuple[float, str]:
 
     start = time.perf_counter()
     _ = kernel_gaussian_hessian(
-        X_train, X_test, dX_train, dX_test, Q_train, Q_test, N_train, N_test, sigma
+        X_train, dX_train, X_test, dX_test, Q_train, Q_test, N_train, N_test, sigma
     )
     elapsed = (time.perf_counter() - start) * 1000
 
@@ -1269,7 +1269,7 @@ def benchmark_local_kernel_gaussian_full() -> tuple[float, str]:
     sigma = 2.5
 
     start = time.perf_counter()
-    _ = kernel_gaussian_full(X, X, dX, dX, Q, Q, N, N, sigma)
+    _ = kernel_gaussian_full(X, dX, X, dX, Q, Q, N, N, sigma)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"local::kernel_gaussian_full (Ethanol, N={n})"

@@ -41,22 +41,22 @@ torch::Tensor kernel_gaussian(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x1, "x1");
-    check_cuda_floating(x2, "x2");
-    check_cuda_int32(n1, "n1");
-    check_cuda_int32(n2, "n2");
-    check_cuda_int32(nn1, "nn1");
-    check_cuda_int32(nn2, "nn2");
+    check_cuda_floating(x1, "X1");
+    check_cuda_floating(x2, "X2");
+    check_cuda_int32(n1, "N1");
+    check_cuda_int32(n2, "N2");
+    check_cuda_int32(nn1, "NN1");
+    check_cuda_int32(nn2, "NN2");
 
-    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "x1 and x2 dtype must match");
-    TORCH_CHECK(x1.dim() == 4, "x1 must be 4-D");
-    TORCH_CHECK(x2.dim() == 4, "x2 must be 4-D");
-    TORCH_CHECK(x1.size(2) == 5, "x1.size(2) must equal 5");
-    TORCH_CHECK(x2.size(2) == 5, "x2.size(2) must equal 5");
-    TORCH_CHECK(n1.dim() == 1, "n1 must be 1-D");
-    TORCH_CHECK(n2.dim() == 1, "n2 must be 1-D");
-    TORCH_CHECK(nn1.dim() == 2, "nn1 must be 2-D");
-    TORCH_CHECK(nn2.dim() == 2, "nn2 must be 2-D");
+    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "X1 and X2 dtype must match");
+    TORCH_CHECK(x1.dim() == 4, "X1 must be 4-D");
+    TORCH_CHECK(x2.dim() == 4, "X2 must be 4-D");
+    TORCH_CHECK(x1.size(2) == 5, "X1.size(2) must equal 5");
+    TORCH_CHECK(x2.size(2) == 5, "X2.size(2) must equal 5");
+    TORCH_CHECK(n1.dim() == 1, "N1 must be 1-D");
+    TORCH_CHECK(n2.dim() == 1, "N2 must be 1-D");
+    TORCH_CHECK(nn1.dim() == 2, "NN1 must be 2-D");
+    TORCH_CHECK(nn2.dim() == 2, "NN2 must be 2-D");
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
     TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
 
@@ -65,12 +65,12 @@ torch::Tensor kernel_gaussian(
     const int nm2 = static_cast<int>(x2.size(0));
     const int max_size2 = static_cast<int>(x2.size(1));
 
-    TORCH_CHECK(x1.size(3) == max_size1, "x1 shape must be (nm1, max_size1, 5, max_size1)");
-    TORCH_CHECK(x2.size(3) == max_size2, "x2 shape must be (nm2, max_size2, 5, max_size2)");
-    TORCH_CHECK(n1.size(0) == nm1, "n1.size(0) must equal x1.size(0)");
-    TORCH_CHECK(n2.size(0) == nm2, "n2.size(0) must equal x2.size(0)");
-    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "nn1 shape mismatch");
-    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "nn2 shape mismatch");
+    TORCH_CHECK(x1.size(3) == max_size1, "X1 shape must be (nm1, max_size1, 5, max_size1)");
+    TORCH_CHECK(x2.size(3) == max_size2, "X2 shape must be (nm2, max_size2, 5, max_size2)");
+    TORCH_CHECK(n1.size(0) == nm1, "N1.size(0) must equal X1.size(0)");
+    TORCH_CHECK(n2.size(0) == nm2, "N2.size(0) must equal X2.size(0)");
+    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "NN1 shape mismatch");
+    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "NN2 shape mismatch");
 
     auto K = torch::empty({nm1, nm2}, x1.options());
     if (x1.scalar_type() == torch::kFloat32) {
@@ -143,23 +143,23 @@ torch::Tensor kernel_gaussian_symm(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x, "x");
-    check_cuda_int32(n, "n");
-    check_cuda_int32(nn, "nn");
+    check_cuda_floating(x, "X");
+    check_cuda_int32(n, "N");
+    check_cuda_int32(nn, "NN");
 
-    TORCH_CHECK(x.dim() == 4, "x must be 4-D");
-    TORCH_CHECK(x.size(2) == 5, "x.size(2) must equal 5");
-    TORCH_CHECK(n.dim() == 1, "n must be 1-D");
-    TORCH_CHECK(nn.dim() == 2, "nn must be 2-D");
+    TORCH_CHECK(x.dim() == 4, "X must be 4-D");
+    TORCH_CHECK(x.size(2) == 5, "X.size(2) must equal 5");
+    TORCH_CHECK(n.dim() == 1, "N must be 1-D");
+    TORCH_CHECK(nn.dim() == 2, "NN must be 2-D");
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
     TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
 
     const int nm = static_cast<int>(x.size(0));
     const int max_size = static_cast<int>(x.size(1));
 
-    TORCH_CHECK(x.size(3) == max_size, "x shape must be (nm, max_size, 5, max_size)");
-    TORCH_CHECK(n.size(0) == nm, "n.size(0) must equal x.size(0)");
-    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "nn shape mismatch");
+    TORCH_CHECK(x.size(3) == max_size, "X shape must be (nm, max_size, 5, max_size)");
+    TORCH_CHECK(n.size(0) == nm, "N.size(0) must equal X.size(0)");
+    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "NN shape mismatch");
 
     auto K = torch::empty({nm, nm}, x.options());
     if (x.scalar_type() == torch::kFloat32) {
@@ -222,14 +222,14 @@ torch::Tensor kernel_gaussian_symm_rfp(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x, "x");
-    check_cuda_int32(n, "n");
-    check_cuda_int32(nn, "nn");
+    check_cuda_floating(x, "X");
+    check_cuda_int32(n, "N");
+    check_cuda_int32(nn, "NN");
 
-    TORCH_CHECK(x.dim() == 4, "x must be 4-D");
-    TORCH_CHECK(x.size(2) == 5, "x.size(2) must equal 5");
-    TORCH_CHECK(n.dim() == 1, "n must be 1-D");
-    TORCH_CHECK(nn.dim() == 2, "nn must be 2-D");
+    TORCH_CHECK(x.dim() == 4, "X must be 4-D");
+    TORCH_CHECK(x.size(2) == 5, "X.size(2) must equal 5");
+    TORCH_CHECK(n.dim() == 1, "N must be 1-D");
+    TORCH_CHECK(nn.dim() == 2, "NN must be 2-D");
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
     TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
 
@@ -237,9 +237,9 @@ torch::Tensor kernel_gaussian_symm_rfp(
     const int max_size = static_cast<int>(x.size(1));
     const long long n_rfp = static_cast<long long>(nm) * (nm + 1) / 2;
 
-    TORCH_CHECK(x.size(3) == max_size, "x shape must be (nm, max_size, 5, max_size)");
-    TORCH_CHECK(n.size(0) == nm, "n.size(0) must equal x.size(0)");
-    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "nn shape mismatch");
+    TORCH_CHECK(x.size(3) == max_size, "X shape must be (nm, max_size, 5, max_size)");
+    TORCH_CHECK(n.size(0) == nm, "N.size(0) must equal X.size(0)");
+    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "NN shape mismatch");
 
     auto K_rfp = torch::empty({n_rfp}, x.options());
     if (x.scalar_type() == torch::kFloat32) {
@@ -307,27 +307,27 @@ torch::Tensor kernel_gaussian_jacobian(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x1, "x1");
-    check_cuda_floating(x2, "x2");
+    check_cuda_floating(x1, "X1");
+    check_cuda_floating(x2, "X2");
     check_cuda_floating(coords1, "coords1");
-    check_cuda_int32(n1, "n1");
-    check_cuda_int32(n2, "n2");
-    check_cuda_int32(nn1, "nn1");
-    check_cuda_int32(nn2, "nn2");
-    check_cuda_int32(z1, "z1");
+    check_cuda_int32(n1, "N1");
+    check_cuda_int32(n2, "N2");
+    check_cuda_int32(nn1, "NN1");
+    check_cuda_int32(nn2, "NN2");
+    check_cuda_int32(z1, "Z1");
 
-    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "x1 and x2 dtype must match");
-    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "x1 and coords1 dtype must match");
-    TORCH_CHECK(x1.dim() == 4, "x1 must be 4-D");
-    TORCH_CHECK(x2.dim() == 4, "x2 must be 4-D");
-    TORCH_CHECK(x1.size(2) == 5, "x1.size(2) must equal 5");
-    TORCH_CHECK(x2.size(2) == 5, "x2.size(2) must equal 5");
-    TORCH_CHECK(n1.dim() == 1, "n1 must be 1-D");
-    TORCH_CHECK(n2.dim() == 1, "n2 must be 1-D");
-    TORCH_CHECK(nn1.dim() == 2, "nn1 must be 2-D");
-    TORCH_CHECK(nn2.dim() == 2, "nn2 must be 2-D");
+    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "X1 and X2 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "X1 and coords1 dtype must match");
+    TORCH_CHECK(x1.dim() == 4, "X1 must be 4-D");
+    TORCH_CHECK(x2.dim() == 4, "X2 must be 4-D");
+    TORCH_CHECK(x1.size(2) == 5, "X1.size(2) must equal 5");
+    TORCH_CHECK(x2.size(2) == 5, "X2.size(2) must equal 5");
+    TORCH_CHECK(n1.dim() == 1, "N1 must be 1-D");
+    TORCH_CHECK(n2.dim() == 1, "N2 must be 1-D");
+    TORCH_CHECK(nn1.dim() == 2, "NN1 must be 2-D");
+    TORCH_CHECK(nn2.dim() == 2, "NN2 must be 2-D");
     TORCH_CHECK(coords1.dim() == 3, "coords1 must be 3-D");
-    TORCH_CHECK(z1.dim() == 2, "z1 must be 2-D");
+    TORCH_CHECK(z1.dim() == 2, "Z1 must be 2-D");
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
     TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
 
@@ -336,24 +336,24 @@ torch::Tensor kernel_gaussian_jacobian(
     const int nm2 = static_cast<int>(x2.size(0));
     const int max_size2 = static_cast<int>(x2.size(1));
 
-    TORCH_CHECK(x1.size(3) == max_size1, "x1 shape must be (nm1, max_size1, 5, max_size1)");
-    TORCH_CHECK(x2.size(3) == max_size2, "x2 shape must be (nm2, max_size2, 5, max_size2)");
-    TORCH_CHECK(n1.size(0) == nm1, "n1.size(0) must equal x1.size(0)");
-    TORCH_CHECK(n2.size(0) == nm2, "n2.size(0) must equal x2.size(0)");
-    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "nn1 shape mismatch");
-    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "nn2 shape mismatch");
+    TORCH_CHECK(x1.size(3) == max_size1, "X1 shape must be (nm1, max_size1, 5, max_size1)");
+    TORCH_CHECK(x2.size(3) == max_size2, "X2 shape must be (nm2, max_size2, 5, max_size2)");
+    TORCH_CHECK(n1.size(0) == nm1, "N1.size(0) must equal X1.size(0)");
+    TORCH_CHECK(n2.size(0) == nm2, "N2.size(0) must equal X2.size(0)");
+    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "NN1 shape mismatch");
+    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "NN2 shape mismatch");
     TORCH_CHECK(
         coords1.size(0) == nm1 && coords1.size(1) == max_size1 && coords1.size(2) == 3,
         "coords1 shape must be (nm1, max_size1, 3)"
     );
-    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "z1 shape must be (nm1, max_size1)");
+    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "Z1 shape must be (nm1, max_size1)");
 
     const auto n1_host = n1.to(torch::kCPU);
     const int *n1_ptr = n1_host.data_ptr<int>();
     long long d_a_rows = 0;
     for (int a = 0; a < nm1; ++a) {
         TORCH_CHECK(
-            n1_ptr[a] >= 0 && n1_ptr[a] <= max_size1, "n1 entries must be in [0, max_size1]"
+            n1_ptr[a] >= 0 && n1_ptr[a] <= max_size1, "N1 entries must be in [0, max_size1]"
         );
         d_a_rows += 3LL * n1_ptr[a];
     }
@@ -441,27 +441,27 @@ torch::Tensor kernel_gaussian_jacobian_t(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x1, "x1");
-    check_cuda_floating(x2, "x2");
+    check_cuda_floating(x1, "X1");
+    check_cuda_floating(x2, "X2");
     check_cuda_floating(coords1, "coords1");
-    check_cuda_int32(n1, "n1");
-    check_cuda_int32(n2, "n2");
-    check_cuda_int32(nn1, "nn1");
-    check_cuda_int32(nn2, "nn2");
-    check_cuda_int32(z1, "z1");
+    check_cuda_int32(n1, "N1");
+    check_cuda_int32(n2, "N2");
+    check_cuda_int32(nn1, "NN1");
+    check_cuda_int32(nn2, "NN2");
+    check_cuda_int32(z1, "Z1");
 
-    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "x1 and x2 dtype must match");
-    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "x1 and coords1 dtype must match");
-    TORCH_CHECK(x1.dim() == 4, "x1 must be 4-D");
-    TORCH_CHECK(x2.dim() == 4, "x2 must be 4-D");
-    TORCH_CHECK(x1.size(2) == 5, "x1.size(2) must equal 5");
-    TORCH_CHECK(x2.size(2) == 5, "x2.size(2) must equal 5");
-    TORCH_CHECK(n1.dim() == 1, "n1 must be 1-D");
-    TORCH_CHECK(n2.dim() == 1, "n2 must be 1-D");
-    TORCH_CHECK(nn1.dim() == 2, "nn1 must be 2-D");
-    TORCH_CHECK(nn2.dim() == 2, "nn2 must be 2-D");
+    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "X1 and X2 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "X1 and coords1 dtype must match");
+    TORCH_CHECK(x1.dim() == 4, "X1 must be 4-D");
+    TORCH_CHECK(x2.dim() == 4, "X2 must be 4-D");
+    TORCH_CHECK(x1.size(2) == 5, "X1.size(2) must equal 5");
+    TORCH_CHECK(x2.size(2) == 5, "X2.size(2) must equal 5");
+    TORCH_CHECK(n1.dim() == 1, "N1 must be 1-D");
+    TORCH_CHECK(n2.dim() == 1, "N2 must be 1-D");
+    TORCH_CHECK(nn1.dim() == 2, "NN1 must be 2-D");
+    TORCH_CHECK(nn2.dim() == 2, "NN2 must be 2-D");
     TORCH_CHECK(coords1.dim() == 3, "coords1 must be 3-D");
-    TORCH_CHECK(z1.dim() == 2, "z1 must be 2-D");
+    TORCH_CHECK(z1.dim() == 2, "Z1 must be 2-D");
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
     TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
 
@@ -470,24 +470,24 @@ torch::Tensor kernel_gaussian_jacobian_t(
     const int nm2 = static_cast<int>(x2.size(0));
     const int max_size2 = static_cast<int>(x2.size(1));
 
-    TORCH_CHECK(x1.size(3) == max_size1, "x1 shape must be (nm1, max_size1, 5, max_size1)");
-    TORCH_CHECK(x2.size(3) == max_size2, "x2 shape must be (nm2, max_size2, 5, max_size2)");
-    TORCH_CHECK(n1.size(0) == nm1, "n1.size(0) must equal x1.size(0)");
-    TORCH_CHECK(n2.size(0) == nm2, "n2.size(0) must equal x2.size(0)");
-    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "nn1 shape mismatch");
-    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "nn2 shape mismatch");
+    TORCH_CHECK(x1.size(3) == max_size1, "X1 shape must be (nm1, max_size1, 5, max_size1)");
+    TORCH_CHECK(x2.size(3) == max_size2, "X2 shape must be (nm2, max_size2, 5, max_size2)");
+    TORCH_CHECK(n1.size(0) == nm1, "N1.size(0) must equal X1.size(0)");
+    TORCH_CHECK(n2.size(0) == nm2, "N2.size(0) must equal X2.size(0)");
+    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "NN1 shape mismatch");
+    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "NN2 shape mismatch");
     TORCH_CHECK(
         coords1.size(0) == nm1 && coords1.size(1) == max_size1 && coords1.size(2) == 3,
         "coords1 shape must be (nm1, max_size1, 3)"
     );
-    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "z1 shape must be (nm1, max_size1)");
+    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "Z1 shape must be (nm1, max_size1)");
 
     const auto n1_host = n1.to(torch::kCPU);
     const int *n1_ptr = n1_host.data_ptr<int>();
     long long d_a_rows = 0;
     for (int a = 0; a < nm1; ++a) {
         TORCH_CHECK(
-            n1_ptr[a] >= 0 && n1_ptr[a] <= max_size1, "n1 entries must be in [0, max_size1]"
+            n1_ptr[a] >= 0 && n1_ptr[a] <= max_size1, "N1 entries must be in [0, max_size1]"
         );
         d_a_rows += 3LL * n1_ptr[a];
     }
@@ -577,32 +577,32 @@ torch::Tensor kernel_gaussian_hessian(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x1, "x1");
-    check_cuda_floating(x2, "x2");
+    check_cuda_floating(x1, "X1");
+    check_cuda_floating(x2, "X2");
     check_cuda_floating(coords1, "coords1");
     check_cuda_floating(coords2, "coords2");
-    check_cuda_int32(n1, "n1");
-    check_cuda_int32(n2, "n2");
-    check_cuda_int32(nn1, "nn1");
-    check_cuda_int32(nn2, "nn2");
-    check_cuda_int32(z1, "z1");
-    check_cuda_int32(z2, "z2");
+    check_cuda_int32(n1, "N1");
+    check_cuda_int32(n2, "N2");
+    check_cuda_int32(nn1, "NN1");
+    check_cuda_int32(nn2, "NN2");
+    check_cuda_int32(z1, "Z1");
+    check_cuda_int32(z2, "Z2");
 
-    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "x1 and x2 dtype must match");
-    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "x1 and coords1 dtype must match");
-    TORCH_CHECK(x1.scalar_type() == coords2.scalar_type(), "x1 and coords2 dtype must match");
-    TORCH_CHECK(x1.dim() == 4, "x1 must be 4-D");
-    TORCH_CHECK(x2.dim() == 4, "x2 must be 4-D");
-    TORCH_CHECK(x1.size(2) == 5, "x1.size(2) must equal 5");
-    TORCH_CHECK(x2.size(2) == 5, "x2.size(2) must equal 5");
-    TORCH_CHECK(n1.dim() == 1, "n1 must be 1-D");
-    TORCH_CHECK(n2.dim() == 1, "n2 must be 1-D");
-    TORCH_CHECK(nn1.dim() == 2, "nn1 must be 2-D");
-    TORCH_CHECK(nn2.dim() == 2, "nn2 must be 2-D");
+    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "X1 and X2 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "X1 and coords1 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == coords2.scalar_type(), "X1 and coords2 dtype must match");
+    TORCH_CHECK(x1.dim() == 4, "X1 must be 4-D");
+    TORCH_CHECK(x2.dim() == 4, "X2 must be 4-D");
+    TORCH_CHECK(x1.size(2) == 5, "X1.size(2) must equal 5");
+    TORCH_CHECK(x2.size(2) == 5, "X2.size(2) must equal 5");
+    TORCH_CHECK(n1.dim() == 1, "N1 must be 1-D");
+    TORCH_CHECK(n2.dim() == 1, "N2 must be 1-D");
+    TORCH_CHECK(nn1.dim() == 2, "NN1 must be 2-D");
+    TORCH_CHECK(nn2.dim() == 2, "NN2 must be 2-D");
     TORCH_CHECK(coords1.dim() == 3, "coords1 must be 3-D");
     TORCH_CHECK(coords2.dim() == 3, "coords2 must be 3-D");
-    TORCH_CHECK(z1.dim() == 2, "z1 must be 2-D");
-    TORCH_CHECK(z2.dim() == 2, "z2 must be 2-D");
+    TORCH_CHECK(z1.dim() == 2, "Z1 must be 2-D");
+    TORCH_CHECK(z2.dim() == 2, "Z2 must be 2-D");
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
     TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
 
@@ -611,12 +611,12 @@ torch::Tensor kernel_gaussian_hessian(
     const int nm2 = static_cast<int>(x2.size(0));
     const int max_size2 = static_cast<int>(x2.size(1));
 
-    TORCH_CHECK(x1.size(3) == max_size1, "x1 shape must be (nm1, max_size1, 5, max_size1)");
-    TORCH_CHECK(x2.size(3) == max_size2, "x2 shape must be (nm2, max_size2, 5, max_size2)");
-    TORCH_CHECK(n1.size(0) == nm1, "n1.size(0) must equal x1.size(0)");
-    TORCH_CHECK(n2.size(0) == nm2, "n2.size(0) must equal x2.size(0)");
-    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "nn1 shape mismatch");
-    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "nn2 shape mismatch");
+    TORCH_CHECK(x1.size(3) == max_size1, "X1 shape must be (nm1, max_size1, 5, max_size1)");
+    TORCH_CHECK(x2.size(3) == max_size2, "X2 shape must be (nm2, max_size2, 5, max_size2)");
+    TORCH_CHECK(n1.size(0) == nm1, "N1.size(0) must equal X1.size(0)");
+    TORCH_CHECK(n2.size(0) == nm2, "N2.size(0) must equal X2.size(0)");
+    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "NN1 shape mismatch");
+    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "NN2 shape mismatch");
     TORCH_CHECK(
         coords1.size(0) == nm1 && coords1.size(1) == max_size1 && coords1.size(2) == 3,
         "coords1 shape must be (nm1, max_size1, 3)"
@@ -625,15 +625,15 @@ torch::Tensor kernel_gaussian_hessian(
         coords2.size(0) == nm2 && coords2.size(1) == max_size2 && coords2.size(2) == 3,
         "coords2 shape must be (nm2, max_size2, 3)"
     );
-    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "z1 shape must be (nm1, max_size1)");
-    TORCH_CHECK(z2.size(0) == nm2 && z2.size(1) == max_size2, "z2 shape must be (nm2, max_size2)");
+    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "Z1 shape must be (nm1, max_size1)");
+    TORCH_CHECK(z2.size(0) == nm2 && z2.size(1) == max_size2, "Z2 shape must be (nm2, max_size2)");
 
     const auto n1_host = n1.to(torch::kCPU);
     const int *n1_ptr = n1_host.data_ptr<int>();
     long long d_a_rows = 0;
     for (int a = 0; a < nm1; ++a) {
         TORCH_CHECK(
-            n1_ptr[a] >= 0 && n1_ptr[a] <= max_size1, "n1 entries must be in [0, max_size1]"
+            n1_ptr[a] >= 0 && n1_ptr[a] <= max_size1, "N1 entries must be in [0, max_size1]"
         );
         d_a_rows += 3LL * n1_ptr[a];
     }
@@ -642,7 +642,7 @@ torch::Tensor kernel_gaussian_hessian(
     long long d_b_cols = 0;
     for (int b = 0; b < nm2; ++b) {
         TORCH_CHECK(
-            n2_ptr[b] >= 0 && n2_ptr[b] <= max_size2, "n2 entries must be in [0, max_size2]"
+            n2_ptr[b] >= 0 && n2_ptr[b] <= max_size2, "N2 entries must be in [0, max_size2]"
         );
         d_b_cols += 3LL * n2_ptr[b];
     }
@@ -738,36 +738,36 @@ torch::Tensor kernel_gaussian_full(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x1, "x1");
-    check_cuda_floating(x2, "x2");
+    check_cuda_floating(x1, "X1");
+    check_cuda_floating(x2, "X2");
     check_cuda_floating(coords1, "coords1");
     check_cuda_floating(coords2, "coords2");
-    check_cuda_int32(n1, "n1");
-    check_cuda_int32(n2, "n2");
-    check_cuda_int32(nn1, "nn1");
-    check_cuda_int32(nn2, "nn2");
-    check_cuda_int32(z1, "z1");
-    check_cuda_int32(z2, "z2");
+    check_cuda_int32(n1, "N1");
+    check_cuda_int32(n2, "N2");
+    check_cuda_int32(nn1, "NN1");
+    check_cuda_int32(nn2, "NN2");
+    check_cuda_int32(z1, "Z1");
+    check_cuda_int32(z2, "Z2");
 
-    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "x1 and x2 dtype must match");
-    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "x1 and coords1 dtype must match");
-    TORCH_CHECK(x1.scalar_type() == coords2.scalar_type(), "x1 and coords2 dtype must match");
-    TORCH_CHECK(x1.dim() == 4 && x2.dim() == 4, "x1/x2 must be 4-D");
-    TORCH_CHECK(x1.size(2) == 5 && x2.size(2) == 5, "x channel dim must be 5");
-    TORCH_CHECK(n1.dim() == 1 && n2.dim() == 1, "n must be 1-D");
-    TORCH_CHECK(nn1.dim() == 2 && nn2.dim() == 2, "nn must be 2-D");
+    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "X1 and X2 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == coords1.scalar_type(), "X1 and coords1 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == coords2.scalar_type(), "X1 and coords2 dtype must match");
+    TORCH_CHECK(x1.dim() == 4 && x2.dim() == 4, "X1/x2 must be 4-D");
+    TORCH_CHECK(x1.size(2) == 5 && x2.size(2) == 5, "X channel dim must be 5");
+    TORCH_CHECK(n1.dim() == 1 && n2.dim() == 1, "N must be 1-D");
+    TORCH_CHECK(nn1.dim() == 2 && nn2.dim() == 2, "NN must be 2-D");
     TORCH_CHECK(coords1.dim() == 3 && coords2.dim() == 3, "coords must be 3-D");
-    TORCH_CHECK(z1.dim() == 2 && z2.dim() == 2, "z must be 2-D");
+    TORCH_CHECK(z1.dim() == 2 && z2.dim() == 2, "Z must be 2-D");
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
 
     const int nm1 = static_cast<int>(x1.size(0));
     const int max_size1 = static_cast<int>(x1.size(1));
     const int nm2 = static_cast<int>(x2.size(0));
     const int max_size2 = static_cast<int>(x2.size(1));
-    TORCH_CHECK(x1.size(3) == max_size1 && x2.size(3) == max_size2, "x trailing size mismatch");
-    TORCH_CHECK(n1.size(0) == nm1 && n2.size(0) == nm2, "n size mismatch");
-    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "nn1 shape mismatch");
-    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "nn2 shape mismatch");
+    TORCH_CHECK(x1.size(3) == max_size1 && x2.size(3) == max_size2, "X trailing size mismatch");
+    TORCH_CHECK(n1.size(0) == nm1 && n2.size(0) == nm2, "N size mismatch");
+    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "NN1 shape mismatch");
+    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "NN2 shape mismatch");
     TORCH_CHECK(
         coords1.size(0) == nm1 && coords1.size(1) == max_size1 && coords1.size(2) == 3,
         "coords1 shape mismatch"
@@ -776,8 +776,8 @@ torch::Tensor kernel_gaussian_full(
         coords2.size(0) == nm2 && coords2.size(1) == max_size2 && coords2.size(2) == 3,
         "coords2 shape mismatch"
     );
-    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "z1 shape mismatch");
-    TORCH_CHECK(z2.size(0) == nm2 && z2.size(1) == max_size2, "z2 shape mismatch");
+    TORCH_CHECK(z1.size(0) == nm1 && z1.size(1) == max_size1, "Z1 shape mismatch");
+    TORCH_CHECK(z2.size(0) == nm2 && z2.size(1) == max_size2, "Z2 shape mismatch");
 
     const auto n1_host = n1.to(torch::kCPU);
     const auto n2_host = n2.to(torch::kCPU);
@@ -878,26 +878,26 @@ torch::Tensor kernel_gaussian_full_symm(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x, "x");
+    check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
-    check_cuda_int32(n, "n");
-    check_cuda_int32(nn, "nn");
-    check_cuda_int32(z, "z");
-    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "x and coords dtype must match");
-    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "x must be (nm, max_size, 5, max_size)");
+    check_cuda_int32(n, "N");
+    check_cuda_int32(nn, "NN");
+    check_cuda_int32(z, "Z");
+    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "X and coords dtype must match");
+    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "X must be (nm, max_size, 5, max_size)");
     TORCH_CHECK(n.dim() == 1 && nn.dim() == 2 && coords.dim() == 3 && z.dim() == 2);
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
 
     const int nm = static_cast<int>(x.size(0));
     const int max_size = static_cast<int>(x.size(1));
-    TORCH_CHECK(x.size(3) == max_size, "x trailing size mismatch");
-    TORCH_CHECK(n.size(0) == nm, "n size mismatch");
-    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "nn shape mismatch");
+    TORCH_CHECK(x.size(3) == max_size, "X trailing size mismatch");
+    TORCH_CHECK(n.size(0) == nm, "N size mismatch");
+    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "NN shape mismatch");
     TORCH_CHECK(
         coords.size(0) == nm && coords.size(1) == max_size && coords.size(2) == 3,
         "coords shape mismatch"
     );
-    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "z shape mismatch");
+    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "Z shape mismatch");
 
     const auto n_host = n.to(torch::kCPU);
     const int *n_ptr = n_host.data_ptr<int>();
@@ -976,26 +976,26 @@ torch::Tensor kernel_gaussian_full_symm_rfp(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x, "x");
+    check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
-    check_cuda_int32(n, "n");
-    check_cuda_int32(nn, "nn");
-    check_cuda_int32(z, "z");
-    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "x and coords dtype must match");
-    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "x must be (nm, max_size, 5, max_size)");
+    check_cuda_int32(n, "N");
+    check_cuda_int32(nn, "NN");
+    check_cuda_int32(z, "Z");
+    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "X and coords dtype must match");
+    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "X must be (nm, max_size, 5, max_size)");
     TORCH_CHECK(n.dim() == 1 && nn.dim() == 2 && coords.dim() == 3 && z.dim() == 2);
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
 
     const int nm = static_cast<int>(x.size(0));
     const int max_size = static_cast<int>(x.size(1));
-    TORCH_CHECK(x.size(3) == max_size, "x trailing size mismatch");
-    TORCH_CHECK(n.size(0) == nm, "n size mismatch");
-    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "nn shape mismatch");
+    TORCH_CHECK(x.size(3) == max_size, "X trailing size mismatch");
+    TORCH_CHECK(n.size(0) == nm, "N size mismatch");
+    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "NN shape mismatch");
     TORCH_CHECK(
         coords.size(0) == nm && coords.size(1) == max_size && coords.size(2) == 3,
         "coords shape mismatch"
     );
-    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "z shape mismatch");
+    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "Z shape mismatch");
 
     const auto n_host = n.to(torch::kCPU);
     const int *n_ptr = n_host.data_ptr<int>();
@@ -1082,9 +1082,9 @@ torch::Tensor kernel_gaussian_gradient(
     // Single-query convenience wrapper around jacobian with CPU gradient layout
     // G[alpha, mu, b] = dK[A,b]/dR_A[alpha, mu].
     TORCH_CHECK(x1.dim() == 4 && x1.size(0) == 1, "kernel_gaussian_gradient requires nm1 == 1");
-    check_cuda_int32(n1, "n1");
+    check_cuda_int32(n1, "N1");
     const auto n1_host = n1.to(torch::kCPU);
-    TORCH_CHECK(n1_host.numel() == 1, "n1 must have length 1");
+    TORCH_CHECK(n1_host.numel() == 1, "N1 must have length 1");
     const int n_atoms = n1_host.data_ptr<int>()[0];
     TORCH_CHECK(n_atoms > 0, "kernel_gaussian_gradient: empty query molecule");
 
@@ -1131,26 +1131,26 @@ torch::Tensor kernel_gaussian_hessian_symm(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x, "x");
+    check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
-    check_cuda_int32(n, "n");
-    check_cuda_int32(nn, "nn");
-    check_cuda_int32(z, "z");
-    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "x and coords dtype must match");
-    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "x must be (nm, max_size, 5, max_size)");
+    check_cuda_int32(n, "N");
+    check_cuda_int32(nn, "NN");
+    check_cuda_int32(z, "Z");
+    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "X and coords dtype must match");
+    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "X must be (nm, max_size, 5, max_size)");
     TORCH_CHECK(n.dim() == 1 && nn.dim() == 2 && coords.dim() == 3 && z.dim() == 2);
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
 
     const int nm = static_cast<int>(x.size(0));
     const int max_size = static_cast<int>(x.size(1));
-    TORCH_CHECK(x.size(3) == max_size, "x trailing size mismatch");
-    TORCH_CHECK(n.size(0) == nm, "n size mismatch");
-    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "nn shape mismatch");
+    TORCH_CHECK(x.size(3) == max_size, "X trailing size mismatch");
+    TORCH_CHECK(n.size(0) == nm, "N size mismatch");
+    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "NN shape mismatch");
     TORCH_CHECK(
         coords.size(0) == nm && coords.size(1) == max_size && coords.size(2) == 3,
         "coords shape mismatch"
     );
-    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "z shape mismatch");
+    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "Z shape mismatch");
 
     const auto n_host = n.to(torch::kCPU);
     const int *n_ptr = n_host.data_ptr<int>();
@@ -1229,26 +1229,26 @@ torch::Tensor kernel_gaussian_hessian_symm_rfp(
     int fourier_order,
     bool use_atm
 ) {
-    check_cuda_floating(x, "x");
+    check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
-    check_cuda_int32(n, "n");
-    check_cuda_int32(nn, "nn");
-    check_cuda_int32(z, "z");
-    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "x and coords dtype must match");
-    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "x must be (nm, max_size, 5, max_size)");
+    check_cuda_int32(n, "N");
+    check_cuda_int32(nn, "NN");
+    check_cuda_int32(z, "Z");
+    TORCH_CHECK(x.scalar_type() == coords.scalar_type(), "X and coords dtype must match");
+    TORCH_CHECK(x.dim() == 4 && x.size(2) == 5, "X must be (nm, max_size, 5, max_size)");
     TORCH_CHECK(n.dim() == 1 && nn.dim() == 2 && coords.dim() == 3 && z.dim() == 2);
     TORCH_CHECK(sigma > 0.0, "sigma must be positive");
 
     const int nm = static_cast<int>(x.size(0));
     const int max_size = static_cast<int>(x.size(1));
-    TORCH_CHECK(x.size(3) == max_size, "x trailing size mismatch");
-    TORCH_CHECK(n.size(0) == nm, "n size mismatch");
-    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "nn shape mismatch");
+    TORCH_CHECK(x.size(3) == max_size, "X trailing size mismatch");
+    TORCH_CHECK(n.size(0) == nm, "N size mismatch");
+    TORCH_CHECK(nn.size(0) == nm && nn.size(1) == max_size, "NN shape mismatch");
     TORCH_CHECK(
         coords.size(0) == nm && coords.size(1) == max_size && coords.size(2) == 3,
         "coords shape mismatch"
     );
-    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "z shape mismatch");
+    TORCH_CHECK(z.size(0) == nm && z.size(1) == max_size, "Z shape mismatch");
 
     const auto n_host = n.to(torch::kCPU);
     const int *n_ptr = n_host.data_ptr<int>();
@@ -1333,12 +1333,12 @@ Current scope:
     m.def(
         "kernel_gaussian",
         &kernel_gaussian,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("n1"),
-        py::arg("n2"),
-        py::arg("nn1"),
-        py::arg("nn2"),
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1355,18 +1355,18 @@ Compute the rectangular FCHL18 Gaussian kernel matrix on GPU.
 
 Parameters
 ----------
-x1, x2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations. Dtypes must match.
-n1, n2 : torch.Tensor, shape (nm,), int32, CUDA
+N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn1, nn2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (nm1, nm2), same dtype as x1, CUDA
+torch.Tensor, shape (nm1, nm2), same dtype as X1, CUDA
     Rectangular energy-only kernel matrix.
 )doc"
     );
@@ -1374,9 +1374,9 @@ torch.Tensor, shape (nm1, nm2), same dtype as x1, CUDA
     m.def(
         "kernel_gaussian_symm",
         &kernel_gaussian_symm,
-        py::arg("x"),
-        py::arg("n"),
-        py::arg("nn"),
+        py::arg("X"),
+        py::arg("N"),
+        py::arg("NN"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1395,18 +1395,18 @@ Only upper-triangle molecule pairs (a <= b) are evaluated; K[b,a] is mirrored.
 
 Parameters
 ----------
-x : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations.
-n : torch.Tensor, shape (nm,), int32, CUDA
+N : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (nm, nm), same dtype as x, CUDA
+torch.Tensor, shape (nm, nm), same dtype as X, CUDA
     Symmetric energy-only kernel matrix.
 )doc"
     );
@@ -1414,9 +1414,9 @@ torch.Tensor, shape (nm, nm), same dtype as x, CUDA
     m.def(
         "kernel_gaussian_symm_rfp",
         &kernel_gaussian_symm_rfp,
-        py::arg("x"),
-        py::arg("n"),
-        py::arg("nn"),
+        py::arg("X"),
+        py::arg("N"),
+        py::arg("NN"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1440,18 +1440,18 @@ Unpack with: kernelmath.rfp_to_full(K_rfp, nm, uplo='L', transr='N')
 
 Parameters
 ----------
-x : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations.
-n : torch.Tensor, shape (nm,), int32, CUDA
+N : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (nm*(nm+1)//2,), same dtype as x, CUDA
+torch.Tensor, shape (nm*(nm+1)//2,), same dtype as X, CUDA
     Upper-triangle RFP-packed energy-only kernel.
 )doc"
     );
@@ -1459,14 +1459,14 @@ torch.Tensor, shape (nm*(nm+1)//2,), same dtype as x, CUDA
     m.def(
         "kernel_gaussian_jacobian",
         &kernel_gaussian_jacobian,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("n1"),
-        py::arg("n2"),
-        py::arg("nn1"),
-        py::arg("nn2"),
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
         py::arg("coords1"),
-        py::arg("z1"),
+        py::arg("Z1"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1482,33 +1482,33 @@ torch.Tensor, shape (nm*(nm+1)//2,), same dtype as x, CUDA
 Compute the FCHL18 Jacobian kernel dK/dR_A on GPU.
 
 J[row, b] = dK(A_a, B_b) / dR_{A_a}[alpha, mu]
-with row = row_offset[a] + alpha*3 + mu and row_offset[a] = 3 * sum_{a' < a} n1[a'].
+with row = row_offset[a] + alpha*3 + mu and row_offset[a] = 3 * sum_{a' < a} N1[a'].
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_jacobian.
 
 Unlike the CPU function, which takes raw coordinate lists and builds the query
-representation internally, this takes a precomputed x1 (as kernel_gaussian does)
-plus coords1/z1. The coordinates are needed to map each neighbour slot of the
+representation internally, this takes a precomputed X1 (as kernel_gaussian does)
+plus coords1/Z1. The coordinates are needed to map each neighbour slot of the
 representation back to an atom index for the chain rule; they must be the same
 padded coordinates the representation was generated from.
 
 Parameters
 ----------
-x1, x2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations. Dtypes must match.
-n1, n2 : torch.Tensor, shape (nm,), int32, CUDA
+N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn1, nn2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
-coords1 : torch.Tensor, shape (nm1, max_size1, 3), same dtype as x1, CUDA
+coords1 : torch.Tensor, shape (nm1, max_size1, 3), same dtype as X1, CUDA
     Padded Cartesian coordinates of the query molecules.
-z1 : torch.Tensor, shape (nm1, max_size1), int32, CUDA
+Z1 : torch.Tensor, shape (nm1, max_size1), int32, CUDA
     Padded nuclear charges of the query molecules.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (3 * sum(n1), nm2), same dtype as x1, CUDA
+torch.Tensor, shape (3 * sum(N1), nm2), same dtype as X1, CUDA
     Jacobian of the energy kernel with respect to the query coordinates.
 )doc"
     );
@@ -1516,14 +1516,14 @@ torch.Tensor, shape (3 * sum(n1), nm2), same dtype as x1, CUDA
     m.def(
         "kernel_gaussian_jacobian_t",
         &kernel_gaussian_jacobian_t,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("n1"),
-        py::arg("n2"),
-        py::arg("nn1"),
-        py::arg("nn2"),
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
         py::arg("coords1"),
-        py::arg("z1"),
+        py::arg("Z1"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1539,22 +1539,25 @@ torch.Tensor, shape (3 * sum(n1), nm2), same dtype as x1, CUDA
 Compute the FCHL18 Jacobian-T kernel on GPU.
 
 Same computation as kernel_gaussian_jacobian, but stores
-Jt[b, row] = dK(A_a, B_b) / dR_{A_a}[...] with shape (nm2, 3*sum(n1)).
-Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_jacobian_t.
+Jt[b, row] = dK(A_a, B_b) / dR_{A_a}[...] with shape (nm2, 3*sum(N1)).
+
+Numerically comparable to CPU fchl18_kernel.kernel_gaussian_jacobian_t after
+argument remapping; the CUDA keyword surface uses X1/X2/N1/N2/NN1/NN2/coords1/Z1
+rather than the CPU train/test list API.
 )doc"
     );
 
     m.def(
         "kernel_gaussian_gradient",
         &kernel_gaussian_gradient,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("n1"),
-        py::arg("n2"),
-        py::arg("nn1"),
-        py::arg("nn2"),
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
         py::arg("coords1"),
-        py::arg("z1"),
+        py::arg("Z1"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1578,16 +1581,16 @@ kernel_gaussian_jacobian.
     m.def(
         "kernel_gaussian_hessian",
         &kernel_gaussian_hessian,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("n1"),
-        py::arg("n2"),
-        py::arg("nn1"),
-        py::arg("nn2"),
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
         py::arg("coords1"),
-        py::arg("z1"),
+        py::arg("Z1"),
         py::arg("coords2"),
-        py::arg("z2"),
+        py::arg("Z2"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1604,7 +1607,7 @@ Compute the FCHL18 Hessian kernel d2K/dR_A dR_B on GPU.
 
 H[row, col] = d2K(A_a, B_b) / dR_{A_a}[alpha, mu] dR_{B_b}[beta, nu]
 with row = row_offset[a] + alpha*3 + mu, col = col_offset[b] + beta*3 + nu,
-row_offset[a] = 3 * sum_{a' < a} n1[a'] and col_offset[b] = 3 * sum_{b' < b} n2[b'].
+row_offset[a] = 3 * sum_{a' < a} N1[a'] and col_offset[b] = 3 * sum_{b' < b} N2[b'].
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian.
 
 Like kernel_gaussian_jacobian, both sides take a precomputed representation plus
@@ -1617,34 +1620,34 @@ use_atm is False, matching the CPU implementation.
 
 Parameters
 ----------
-x1, x2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
     Precomputed FCHL18 representations. Dtypes must match.
-n1, n2 : torch.Tensor, shape (nm,), int32, CUDA
+N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
     Number of real atoms per molecule.
-nn1, nn2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Number of neighbors per atom.
-coords1, coords2 : torch.Tensor, shape (nm, max_size, 3), same dtype as x1, CUDA
+coords1, coords2 : torch.Tensor, shape (nm, max_size, 3), same dtype as X1, CUDA
     Padded Cartesian coordinates of each side's molecules.
-z1, z2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+Z1, Z2 : torch.Tensor, shape (nm, max_size), int32, CUDA
     Padded nuclear charges of each side's molecules.
 sigma : float
     Gaussian kernel length-scale.
 
 Returns
 -------
-torch.Tensor, shape (3 * sum(n1), 3 * sum(n2)), same dtype as x1, CUDA
-    Force-force block matrix, one dense (3*n1[a], 3*n2[b]) block per molecule pair.
+torch.Tensor, shape (3 * sum(N1), 3 * sum(N2)), same dtype as X1, CUDA
+    Force-force block matrix, one dense (3*N1[a], 3*N2[b]) block per molecule pair.
 )doc"
     );
 
     m.def(
         "kernel_gaussian_hessian_symm",
         &kernel_gaussian_hessian_symm,
-        py::arg("x"),
-        py::arg("n"),
-        py::arg("nn"),
+        py::arg("X"),
+        py::arg("N"),
+        py::arg("NN"),
         py::arg("coords"),
-        py::arg("z"),
+        py::arg("Z"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1660,7 +1663,7 @@ torch.Tensor, shape (3 * sum(n1), 3 * sum(n2)), same dtype as x1, CUDA
 Compute the symmetric FCHL18 Hessian kernel on GPU.
 
 Evaluates lower-triangle molecule pairs once, mirrors off-diagonal blocks, and
-symmetrises diagonal blocks. Shape (D, D) with D = 3*sum(n).
+symmetrises diagonal blocks. Shape (D, D) with D = 3*sum(N).
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm.
 )doc"
     );
@@ -1668,11 +1671,11 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm.
     m.def(
         "kernel_gaussian_hessian_symm_rfp",
         &kernel_gaussian_hessian_symm_rfp,
-        py::arg("x"),
-        py::arg("n"),
-        py::arg("nn"),
+        py::arg("X"),
+        py::arg("N"),
+        py::arg("NN"),
         py::arg("coords"),
-        py::arg("z"),
+        py::arg("Z"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1687,7 +1690,7 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm.
         R"doc(
 Compute the symmetric FCHL18 Hessian kernel in RFP format on GPU.
 
-TRANSR='N', UPLO='U'. Length D*(D+1)/2 with D = 3*sum(n).
+TRANSR='N', UPLO='U'. Length D*(D+1)/2 with D = 3*sum(N).
 Unpack with: kernelmath.rfp_to_full(H_rfp, D, uplo='L', transr='N')
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm_rfp.
 )doc"
@@ -1696,16 +1699,16 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm_rfp.
     m.def(
         "kernel_gaussian_full",
         &kernel_gaussian_full,
-        py::arg("x1"),
-        py::arg("x2"),
-        py::arg("n1"),
-        py::arg("n2"),
-        py::arg("nn1"),
-        py::arg("nn2"),
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
         py::arg("coords1"),
-        py::arg("z1"),
+        py::arg("Z1"),
         py::arg("coords2"),
-        py::arg("z2"),
+        py::arg("Z2"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1720,7 +1723,7 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm_rfp.
         R"doc(
 Compute the full FCHL18 energy+force kernel matrix on GPU.
 
-Block layout (N_A=nm1, N_B=nm2, D_A=3*sum(n1), D_B=3*sum(n2)):
+Block layout (N_A=nm1, N_B=nm2, D_A=3*sum(N1), D_B=3*sum(N2)):
   K[0:N_A, 0:N_B]     scalar
   K[0:N_A, N_B:]      jacobian_t (dK/dR_B)
   K[N_A:,  0:N_B]     jacobian   (dK/dR_A)
@@ -1732,11 +1735,11 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full.
     m.def(
         "kernel_gaussian_full_symm",
         &kernel_gaussian_full_symm,
-        py::arg("x"),
-        py::arg("n"),
-        py::arg("nn"),
+        py::arg("X"),
+        py::arg("N"),
+        py::arg("NN"),
         py::arg("coords"),
-        py::arg("z"),
+        py::arg("Z"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,
@@ -1751,7 +1754,7 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full.
         R"doc(
 Compute the symmetric full FCHL18 energy+force kernel on GPU.
 
-Shape (N+D, N+D) with N=nm and D=3*sum(n). Hessian uses lower-triangle pairs
+Shape (N+D, N+D) with N=nm and D=3*sum(N). Hessian uses lower-triangle pairs
 only. Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full_symm.
 )doc"
     );
@@ -1759,11 +1762,11 @@ only. Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full_symm.
     m.def(
         "kernel_gaussian_full_symm_rfp",
         &kernel_gaussian_full_symm_rfp,
-        py::arg("x"),
-        py::arg("n"),
-        py::arg("nn"),
+        py::arg("X"),
+        py::arg("N"),
+        py::arg("NN"),
         py::arg("coords"),
-        py::arg("z"),
+        py::arg("Z"),
         py::arg("sigma"),
         py::arg("two_body_scaling") = 2.0,
         py::arg("two_body_width") = 0.1,

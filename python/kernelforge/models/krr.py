@@ -207,7 +207,7 @@ class LocalKRRModel(BaseModel):
             # Forces via transposed Jacobian kernel: dK/dR_te, shape (n_test*naq, n_train)
             # F = -dE/dR = -(K_jt @ alpha), flat (sum(N_te)*3,)
             K_jt = local_kernels.kernel_gaussian_jacobian_t(
-                X_te, X_tr, dX_te, Q_te, Q_tr, N_te, N_tr, self.sigma
+                X_te, dX_te, X_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
             )
             F_pred = K_jt @ alpha  # flat (sum(N_te)*3,)
 
@@ -226,7 +226,7 @@ class LocalKRRModel(BaseModel):
             else:
                 # Fallback for models loaded from files saved before alpha_desc was added.
                 K_hess = local_kernels.kernel_gaussian_hessian(
-                    X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
+                    X_te, dX_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
                 )
                 F_pred = K_hess @ alpha
                 K_j = local_kernels.kernel_gaussian_jacobian(
@@ -250,7 +250,7 @@ class LocalKRRModel(BaseModel):
             else:
                 # Fallback for models loaded from files saved before alpha_desc was added.
                 K_full = local_kernels.kernel_gaussian_full(
-                    X_te, X_tr, dX_te, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
+                    X_te, dX_te, X_tr, dX_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
                 )
                 y_pred = K_full @ alpha
                 E_pred = y_pred[:n_test]

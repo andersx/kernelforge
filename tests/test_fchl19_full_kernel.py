@@ -42,7 +42,7 @@ def test_full_scalar_block(seed: int) -> None:
     x1, dx1, q1, n1 = _make_dataset(nm1, max_atoms, rep_size, n_species, seed)
     x2, dx2, q2, n2 = _make_dataset(nm2, max_atoms, rep_size, n_species, seed + 1)
 
-    K_full = fchl.kernel_gaussian_full(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
+    K_full = fchl.kernel_gaussian_full(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
     K_scalar = fchl.kernel_gaussian(x1, x2, q1, q2, n1, n2, sigma)
 
     np.testing.assert_allclose(
@@ -56,7 +56,7 @@ def test_full_scalar_block(seed: int) -> None:
 
 @pytest.mark.parametrize("seed", [0, 42, 1234])
 def test_full_jacobian_block(seed: int) -> None:
-    """K_full[nm1:, 0:nm2] must match kernel_gaussian_jacobian_t(x1,dX1,x2,...) [naq1 x nm2]."""
+    """K_full[nm1:, 0:nm2] must match kernel_gaussian_jacobian_t(X1,dX1,X2,...) [naq1 x nm2]."""
     nm1, nm2 = 3, 4
     max_atoms, rep_size, n_species = 4, 7, 3
     sigma = 1.5
@@ -66,10 +66,10 @@ def test_full_jacobian_block(seed: int) -> None:
 
     naq1 = int(3 * np.sum(np.clip(n1, 0, max_atoms)))
 
-    K_full = fchl.kernel_gaussian_full(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
+    K_full = fchl.kernel_gaussian_full(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
     # The fe block uses -expdiag (dK/dR1 with opposite sign to the standalone jacobian_t).
     # kernel_gaussian_jacobian_t returns +dK/dR1, so the fe block equals -K_jact.
-    K_jact = fchl.kernel_gaussian_jacobian_t(x1, x2, dx1, q1, q2, n1, n2, sigma)
+    K_jact = fchl.kernel_gaussian_jacobian_t(x1, dx1, x2, q1, q2, n1, n2, sigma)
 
     assert K_full[nm1:, :nm2].shape == (naq1, nm2), (
         f"jac block shape wrong: {K_full[nm1:, :nm2].shape}"
@@ -96,12 +96,12 @@ def test_full_jacobian_t_block(seed: int) -> None:
     naq1 = int(3 * np.sum(np.clip(n1, 0, max_atoms)))
     naq2 = int(3 * np.sum(np.clip(n2, 0, max_atoms)))
 
-    K_full = fchl.kernel_gaussian_full(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
+    K_full = fchl.kernel_gaussian_full(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
     # The jac block K_full[nm1:, :nm2] has shape (naq1, nm2).
     # The jact block K_full[:nm1, nm2:] has shape (nm1, naq2).
     # They are transposes of each other when x1/x2 are swapped:
     #   K_full(x1,x2)[0:nm1, nm2:] == K_full(x2,x1)[nm2:, 0:nm1].T
-    K_full_swapped = fchl.kernel_gaussian_full(x2, x1, dx2, dx1, q2, q1, n2, n1, sigma)
+    K_full_swapped = fchl.kernel_gaussian_full(x2, dx2, x1, dx1, q2, q1, n2, n1, sigma)
 
     assert K_full[:nm1, nm2:].shape == (nm1, naq2), (
         f"jact block shape wrong: {K_full[:nm1, nm2:].shape}"
@@ -128,8 +128,8 @@ def test_full_hessian_block(seed: int) -> None:
     naq1 = int(3 * np.sum(np.clip(n1, 0, max_atoms)))
     naq2 = int(3 * np.sum(np.clip(n2, 0, max_atoms)))
 
-    K_full = fchl.kernel_gaussian_full(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
-    K_hess = fchl.kernel_gaussian_hessian(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
+    K_full = fchl.kernel_gaussian_full(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
+    K_hess = fchl.kernel_gaussian_hessian(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
 
     assert K_full[nm1:, nm2:].shape == (naq1, naq2), (
         f"hess block shape wrong: {K_full[nm1:, nm2:].shape}"
@@ -155,7 +155,7 @@ def test_full_output_shape() -> None:
     naq1 = int(3 * np.sum(np.clip(n1, 0, max_atoms)))
     naq2 = int(3 * np.sum(np.clip(n2, 0, max_atoms)))
 
-    K_full = fchl.kernel_gaussian_full(x1, x2, dx1, dx2, q1, q2, n1, n2, sigma)
+    K_full = fchl.kernel_gaussian_full(x1, dx1, x2, dx2, q1, q2, n1, n2, sigma)
     assert K_full.shape == (nm1 + naq1, nm2 + naq2), f"wrong shape: {K_full.shape}"
 
 
@@ -176,7 +176,7 @@ def test_full_symm_matches_asymm(seed: int) -> None:
     BIG = nm + naq
 
     K_symm = fchl.kernel_gaussian_full_symm(x, dx, q, n, sigma)
-    K_asymm = fchl.kernel_gaussian_full(x, x, dx, dx, q, q, n, n, sigma)
+    K_asymm = fchl.kernel_gaussian_full(x, dx, x, dx, q, q, n, n, sigma)
 
     assert K_symm.shape == (BIG, BIG), f"symm shape wrong: {K_symm.shape}"
     assert K_asymm.shape == (BIG, BIG), f"asymm shape wrong: {K_asymm.shape}"
@@ -258,7 +258,7 @@ def test_full_symm_rfp_matches_asymm(seed: int) -> None:
     BIG = nm + naq
 
     arf = fchl.kernel_gaussian_full_symm_rfp(x, dx, q, n, sigma)
-    K_asymm = fchl.kernel_gaussian_full(x, x, dx, dx, q, q, n, n, sigma)
+    K_asymm = fchl.kernel_gaussian_full(x, dx, x, dx, q, q, n, n, sigma)
 
     assert arf.shape == (BIG * (BIG + 1) // 2,), f"rfp length wrong: {arf.shape}"
     assert K_asymm.shape == (BIG, BIG), f"asymm shape wrong: {K_asymm.shape}"
@@ -306,11 +306,11 @@ def test_full_all_blocks_same_set(seed: int) -> None:
     x, dx, q, n = _make_dataset(nm, max_atoms, rep_size, n_species, seed)
     naq = int(3 * np.sum(np.clip(n, 0, max_atoms)))
 
-    K_full = fchl.kernel_gaussian_full(x, x, dx, dx, q, q, n, n, sigma)
+    K_full = fchl.kernel_gaussian_full(x, dx, x, dx, q, q, n, n, sigma)
 
     K_scalar = fchl.kernel_gaussian(x, x, q, q, n, n, sigma)
-    K_jact = fchl.kernel_gaussian_jacobian_t(x, x, dx, q, q, n, n, sigma)
-    K_hess = fchl.kernel_gaussian_hessian(x, x, dx, dx, q, q, n, n, sigma)
+    K_jact = fchl.kernel_gaussian_jacobian_t(x, dx, x, q, q, n, n, sigma)
+    K_hess = fchl.kernel_gaussian_hessian(x, dx, x, dx, q, q, n, n, sigma)
 
     # ee block
     np.testing.assert_allclose(
