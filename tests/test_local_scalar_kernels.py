@@ -274,7 +274,7 @@ def test_kernel_gaussian_symm_positive_semidefinite() -> None:
     x, q, n = _make_symm_dataset(nm, max_atoms, rep_size, 2, 55)
     K = lk.kernel_gaussian_symm(x, q, n, 1.0)
     eigvals = np.linalg.eigvalsh(K)
-    assert np.all(eigvals >= -1e-10), f"Min eigenvalue {eigvals.min():.3e} < -1e-10"
+    assert np.all(eigvals >= -1e-10), f"Min eigenvalue {np.min(eigvals):.3e} < -1e-10"
 
 
 def test_kernel_gaussian_symm_matches_asym_self() -> None:

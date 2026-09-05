@@ -120,7 +120,7 @@ def compute_fchl19(
 
     n_mols = len(coords_list)
     N = np.array([len(z) for z in z_list], dtype=np.int32)
-    max_atoms = int(N.max())
+    max_atoms = int(np.max(N))
     rep_size = X_list[0].shape[1]
 
     # Pad X to (n_mols, max_atoms, rep_size) — rows beyond N[i] are zero.

@@ -183,9 +183,9 @@ class CudaGlobalRFFModel(BaseModel):
         t0 = _t(step1, t0)
 
         rng = np.random.default_rng(self.seed)
-        W_np: NDArray[np.float32] = rng.standard_normal((self._M, self.d_rff)).astype(
-            np.float32
-        ) / np.float32(self.sigma)
+        W_np: NDArray[np.float32] = (
+            rng.standard_normal((self._M, self.d_rff)) / self.sigma
+        ).astype(np.float32)
         b_np: NDArray[np.float32] = rng.uniform(0.0, 2.0 * np.pi, self.d_rff).astype(np.float32)
 
         W_cuda = _to_cuda(W_np)

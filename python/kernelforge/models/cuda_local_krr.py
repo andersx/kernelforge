@@ -126,7 +126,7 @@ def _compute_fchl19_cuda(
     elem_to_idx = {e: i for i, e in enumerate(elements)}
     nm = len(coords_list)
     N_np = np.array([len(z) for z in z_list], dtype=np.int32)
-    max_atoms = int(N_np.max())
+    max_atoms = int(np.max(N_np))
 
     coords_np = np.zeros((nm, max_atoms, 3), dtype=np.float32)
     Q_idx_np = np.zeros((nm, max_atoms), dtype=np.int32)

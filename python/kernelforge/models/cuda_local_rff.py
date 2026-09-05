@@ -146,7 +146,7 @@ def _compute_fchl19_cuda_rff(
     elem_to_idx = {e: i for i, e in enumerate(elements)}
     nm = len(coords_list)
     N_np = np.array([len(z) for z in z_list], dtype=np.int32)
-    max_atoms = int(N_np.max())
+    max_atoms = int(np.max(N_np))
 
     coords_np = np.zeros((nm, max_atoms, 3), dtype=np.float32)
     Q_idx_np = np.zeros((nm, max_atoms), dtype=np.int32)
@@ -516,9 +516,9 @@ class CudaLocalRFFModel(BaseModel):
             t0 = _t(f"Step 1b fit+apply PCA  (n_pca={self.n_pca})", t0)
 
         rng = np.random.default_rng(self.seed)
-        W_np: NDArray[np.float32] = rng.standard_normal((nelements, rep_size, self.d_rff)).astype(
-            np.float32
-        ) / np.float32(self.sigma)
+        W_np: NDArray[np.float32] = (
+            rng.standard_normal((nelements, rep_size, self.d_rff)) / self.sigma
+        ).astype(np.float32)
         b_np: NDArray[np.float32] = rng.uniform(0.0, 2.0 * np.pi, (nelements, self.d_rff)).astype(
             np.float32
         )
