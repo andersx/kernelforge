@@ -542,7 +542,7 @@ def _print_data_summary(
     print(f"    train / test    : {n_tr} / {n_te}")
     print(f"    elements (Z)    : {unique_z}")
     print(f"    atoms/mol (tr)  : {min(sizes_tr)}-{max(sizes_tr)}")
-    print(f"    energy range(tr): {E_tr.min():.3f} .. {E_tr.max():.3f} kcal/mol")
+    print(f"    energy range(tr): {np.min(E_tr):.3f} .. {np.max(E_tr):.3f} kcal/mol")
 
 
 # ---------------------------------------------------------------------------

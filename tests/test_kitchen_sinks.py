@@ -228,7 +228,7 @@ class TestRffFeaturesElemental:
     ) -> tuple:
         """Helper to create random test data."""
         sizes = rng.integers(min_atoms, max_atoms_per_mol + 1, size=nmol)
-        max_atoms = int(sizes.max())
+        max_atoms = int(np.max(sizes))
 
         X = np.zeros((nmol, max_atoms, rep_size))
         Q = []
@@ -308,7 +308,7 @@ class TestRffFeaturesElemental:
         nmol, rep_size, D = 10, 20, 40
 
         sizes = rng.integers(2, 8, size=nmol)
-        max_atoms = int(sizes.max())
+        max_atoms = int(np.max(sizes))
         X = np.zeros((nmol, max_atoms, rep_size))
         Q = []
         for i in range(nmol):
@@ -330,7 +330,7 @@ class TestRffFeaturesElemental:
         nmol, rep_size, D, nelements = 6, 15, 30, 3
 
         sizes = rng.integers(2, 5, size=nmol)
-        max_atoms = int(sizes.max())
+        max_atoms = int(np.max(sizes))
         X = np.zeros((nmol, max_atoms, rep_size))
         Q = []
         for i in range(nmol):
@@ -586,7 +586,7 @@ class TestRffGramianElemental:
     ) -> tuple:
         """Create random test data."""
         sizes = rng.integers(min_atoms, max_atoms_per_mol + 1, size=nmol)
-        max_atoms = int(sizes.max())
+        max_atoms = int(np.max(sizes))
 
         X = np.zeros((nmol, max_atoms, rep_size))
         Q = []
