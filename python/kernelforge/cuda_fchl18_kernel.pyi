@@ -16,6 +16,12 @@ Current scope:
 
 import torch
 
+def set_three_body_weight_mode(mode: int) -> None:
+    """Set FCHL18 three-body radial weight mode (0=product, 1=bond_norm, 2=exp_sum)."""
+
+def get_three_body_weight_mode() -> int:
+    """Return the current three-body radial weight mode."""
+
 def kernel_gaussian(
     X1: torch.Tensor,
     X2: torch.Tensor,
@@ -454,3 +460,76 @@ def kernel_gaussian_full_symm_rfp(
         with ``BIG = nm + 3*sum(N)``.
     """
     ...
+
+def kernel_gaussian_full_matvec(
+    X1: torch.Tensor,
+    X2: torch.Tensor,
+    N1: torch.Tensor,
+    N2: torch.Tensor,
+    NN1: torch.Tensor,
+    NN2: torch.Tensor,
+    coords1: torch.Tensor,
+    Z1: torch.Tensor,
+    coords2: torch.Tensor,
+    Z2: torch.Tensor,
+    alpha_E: torch.Tensor,
+    alpha_F: torch.Tensor,
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+    compute_energy: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def kernel_gaussian_hessian_matvec(
+    X1: torch.Tensor,
+    X2: torch.Tensor,
+    N1: torch.Tensor,
+    N2: torch.Tensor,
+    NN1: torch.Tensor,
+    NN2: torch.Tensor,
+    coords1: torch.Tensor,
+    Z1: torch.Tensor,
+    coords2: torch.Tensor,
+    Z2: torch.Tensor,
+    alpha_F: torch.Tensor,
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+) -> torch.Tensor: ...
+def kernel_gaussian_jacobian_t_matvec(
+    X_train: torch.Tensor,
+    X_test: torch.Tensor,
+    N_train: torch.Tensor,
+    N_test: torch.Tensor,
+    NN_train: torch.Tensor,
+    NN_test: torch.Tensor,
+    coords_train: torch.Tensor,
+    Z_train: torch.Tensor,
+    alpha_F: torch.Tensor,
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 1.0,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = False,
+) -> torch.Tensor: ...

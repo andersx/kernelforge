@@ -3236,5 +3236,291 @@ void kernel_gaussian_hessian_symm_blocks(
     }
 }
 
+// =============================================================================
+// Contracted inference matvec kernels (no full H/J matrix materialisation)
+// =============================================================================
+
+void kernel_gaussian_hessian_matvec(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list,
+    const std::vector<std::vector<double>> &coords_B_list,
+    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &alpha_F,
+    double sigma, double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power,
+    double cut_start, double cut_distance, int fourier_order, bool use_atm, double *F_out
+) {
+    if (!F_out) throw std::invalid_argument("F_out is null");
+    if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    const int N_A = static_cast<int>(coords_A_list.size());
+    const int N_B = static_cast<int>(coords_B_list.size());
+    if (N_A == 0 || N_B == 0) throw std::invalid_argument("hessian_matvec: empty molecule list");
+    if (static_cast<int>(z_A_list.size()) != N_A || static_cast<int>(z_B_list.size()) != N_B)
+        throw std::invalid_argument("coords/z list size mismatch");
+
+    std::vector<int> off_A(static_cast<std::size_t>(N_A) + 1, 0);
+    for (int i = 0; i < N_A; ++i) {
+        const int na = static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size());
+        if (na <= 0) throw std::invalid_argument("n_atoms must be > 0");
+        off_A[static_cast<std::size_t>(i) + 1] = off_A[static_cast<std::size_t>(i)] + na * 3;
+    }
+    const int D_A = off_A[static_cast<std::size_t>(N_A)];
+
+    std::vector<int> off_B(static_cast<std::size_t>(N_B) + 1, 0);
+    for (int j = 0; j < N_B; ++j) {
+        const int nb = static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size());
+        if (nb <= 0) throw std::invalid_argument("n_atoms must be > 0");
+        off_B[static_cast<std::size_t>(j) + 1] = off_B[static_cast<std::size_t>(j)] + nb * 3;
+    }
+    const int D_B = off_B[static_cast<std::size_t>(N_B)];
+    if (static_cast<int>(alpha_F.size()) != D_B)
+        throw std::invalid_argument("alpha_F length must equal D_B");
+
+    std::vector<std::vector<int>> z_all = z_A_list;
+    z_all.insert(z_all.end(), z_B_list.begin(), z_B_list.end());
+    HessSharedParams P = build_hess_shared(
+        z_all, sigma, two_body_scaling, three_body_scaling, three_body_width, two_body_width,
+        fourier_order
+    );
+    if (P.pmax == 0) return;
+
+    std::vector<HessMolSide> sides_A(static_cast<std::size_t>(N_A));
+    std::vector<HessMolSide> sides_B(static_cast<std::size_t>(N_B));
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for (int i = 0; i < N_A + N_B; ++i) {
+        if (i < N_A) {
+            sides_A[static_cast<std::size_t>(i)] = build_hess_mol_side(
+                coords_A_list[static_cast<std::size_t>(i)],
+                z_A_list[static_cast<std::size_t>(i)],
+                static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size()),
+                P,
+                two_body_power,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                use_atm,
+                /*parallel_atoms=*/false
+            );
+        } else {
+            const int j = i - N_A;
+            sides_B[static_cast<std::size_t>(j)] = build_hess_mol_side(
+                coords_B_list[static_cast<std::size_t>(j)],
+                z_B_list[static_cast<std::size_t>(j)],
+                static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size()),
+                P,
+                two_body_power,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                use_atm,
+                /*parallel_atoms=*/false
+            );
+        }
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for collapse(2) schedule(dynamic)
+#endif
+    for (int i = 0; i < N_A; ++i) {
+        for (int j = 0; j < N_B; ++j) {
+            const int na3A = sides_A[static_cast<std::size_t>(i)].n_atoms * 3;
+            const int na3B = sides_B[static_cast<std::size_t>(j)].n_atoms * 3;
+            std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
+            hessian_pair_from_sides(
+                sides_A[static_cast<std::size_t>(i)],
+                sides_B[static_cast<std::size_t>(j)],
+                P,
+                block.data()
+            );
+            const int r0 = off_A[static_cast<std::size_t>(i)];
+            const int c0 = off_B[static_cast<std::size_t>(j)];
+            for (int amu = 0; amu < na3A; ++amu) {
+                double acc = 0.0;
+                for (int bnu = 0; bnu < na3B; ++bnu) {
+                    acc += block[static_cast<std::size_t>(amu) * na3B + bnu] *
+                           alpha_F[static_cast<std::size_t>(c0 + bnu)];
+                }
+#ifdef _OPENMP
+#pragma omp atomic
+#endif
+                F_out[r0 + amu] += acc;
+            }
+        }
+    }
+}
+
+void kernel_gaussian_jacobian_matvec(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
+    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2,
+    const std::vector<double> &alpha_E, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm, double *F_out
+) {
+    if (!F_out) throw std::invalid_argument("F_out is null");
+    if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    const int N_A = static_cast<int>(coords_A_list.size());
+    if (N_A == 0) throw std::invalid_argument("jacobian_matvec: empty query set");
+    if (static_cast<int>(z_A_list.size()) != N_A)
+        throw std::invalid_argument("coords_A_list and z_A_list size mismatch");
+    if (static_cast<int>(alpha_E.size()) != nm2)
+        throw std::invalid_argument("alpha_E length must equal nm2 (N_B)");
+
+    std::vector<int> atom_offset(static_cast<std::size_t>(N_A) + 1, 0);
+    for (int i = 0; i < N_A; ++i) {
+        const int na = static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size());
+        if (na <= 0) throw std::invalid_argument("n_atoms_A must be > 0");
+        atom_offset[static_cast<std::size_t>(i) + 1] =
+            atom_offset[static_cast<std::size_t>(i)] + na * 3;
+    }
+
+    std::vector<int> z_to_idx;
+    const int pmax =
+        build_element_map_zlists_and_repr(z_A_list, x2, n2, nn2, nm2, max_size2, z_to_idx);
+
+    GradBSide B = build_grad_b_side(
+        x2,
+        n2,
+        nn2,
+        nm2,
+        max_size2,
+        std::move(z_to_idx),
+        pmax,
+        sigma,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm
+    );
+
+#ifdef _OPENMP
+    const bool parallel_over_A = (N_A >= omp_get_max_threads());
+#else
+    const bool parallel_over_A = false;
+#endif
+    const bool parallel_over_B = !parallel_over_A;
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) if (parallel_over_A)
+#endif
+    for (int i = 0; i < N_A; ++i) {
+        const int na_i = static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size());
+        std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * nm2, 0.0);
+
+        gradient_one_A_against_B(
+            coords_A_list[static_cast<std::size_t>(i)],
+            z_A_list[static_cast<std::size_t>(i)],
+            na_i,
+            x2,
+            n2,
+            nn2,
+            nm2,
+            max_size2,
+            B,
+            two_body_width,
+            two_body_power,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            parallel_over_B,
+            grad.data()
+        );
+
+        const int flat0 = atom_offset[static_cast<std::size_t>(i)];
+        for (int alpha = 0; alpha < na_i; ++alpha) {
+            for (int mu = 0; mu < 3; ++mu) {
+                const int row = flat0 + alpha * 3 + mu;
+                double acc = 0.0;
+                for (int b = 0; b < nm2; ++b) {
+                    acc += alpha_E[static_cast<std::size_t>(b)] *
+                           grad[static_cast<std::size_t>(alpha) * 3 * nm2 + mu * nm2 + b];
+                }
+#ifdef _OPENMP
+#pragma omp atomic
+#endif
+                F_out[row] += acc;
+            }
+        }
+    }
+}
+
+void kernel_gaussian_jacobian_t_matvec(
+    const std::vector<std::vector<double>> &coords_B_list,
+    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &x_A,
+    const std::vector<int> &n_A, const std::vector<int> &nn_A, int nm_A, int max_size_A,
+    const std::vector<double> &alpha_F, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm, double *E_out
+) {
+    if (!E_out) throw std::invalid_argument("E_out is null");
+    if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
+    const int N_B = static_cast<int>(coords_B_list.size());
+    if (N_B == 0) throw std::invalid_argument("jacobian_t_matvec: empty training set");
+    if (static_cast<int>(z_B_list.size()) != N_B)
+        throw std::invalid_argument("coords_B_list and z_B_list size mismatch");
+
+    std::vector<int> off_B(static_cast<std::size_t>(N_B) + 1, 0);
+    for (int j = 0; j < N_B; ++j) {
+        const int nb = static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size());
+        if (nb <= 0) throw std::invalid_argument("n_atoms must be > 0");
+        off_B[static_cast<std::size_t>(j) + 1] = off_B[static_cast<std::size_t>(j)] + nb * 3;
+    }
+    const int D_B = off_B[static_cast<std::size_t>(N_B)];
+    if (static_cast<int>(alpha_F.size()) != D_B)
+        throw std::invalid_argument("alpha_F length must equal D_B");
+
+    for (int j = 0; j < N_B; ++j) {
+        const int nb = static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size());
+        const int c0 = off_B[static_cast<std::size_t>(j)];
+        std::vector<double> grad(static_cast<std::size_t>(nb) * 3 * nm_A, 0.0);
+
+        kernel_gaussian_gradient(
+            coords_B_list[static_cast<std::size_t>(j)],
+            z_B_list[static_cast<std::size_t>(j)],
+            x_A,
+            n_A,
+            nn_A,
+            nb,
+            nm_A,
+            max_size_A,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            grad.data()
+        );
+
+        for (int i = 0; i < nm_A; ++i) {
+            double acc = 0.0;
+            for (int alpha = 0; alpha < nb; ++alpha) {
+                for (int mu = 0; mu < 3; ++mu) {
+                    acc += alpha_F[static_cast<std::size_t>(c0 + alpha * 3 + mu)] *
+                           grad[static_cast<std::size_t>(alpha) * 3 * nm_A + mu * nm_A + i];
+                }
+            }
+            E_out[i] += acc;
+        }
+    }
+}
+
 }  // namespace fchl18
 }  // namespace kf

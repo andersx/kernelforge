@@ -62,6 +62,7 @@ struct JacParams {
     int fourier_order;
     int pmax;
     int use_atm;
+    int three_body_weight_mode;
 };
 
 // ---------------------------------------------------------------------------
@@ -202,6 +203,7 @@ __device__ void compute_threebody_fourier_and_grad_device(
     int order,
     const int *z_to_idx,
     bool use_atm,
+    int three_body_weight_mode,
     int centre_atom_idx,
     int na3,
     const int *nbr_atom_idx,
@@ -218,6 +220,7 @@ __device__ void compute_threebody_fourier_and_grad_device(
     const T *xc = atom_chan + 2 * max_size;
     const T *yc = atom_chan + 3 * max_size;
     const T *zc = atom_chan + 4 * max_size;
+    const int zi = static_cast<int>(z_chan[0]);
 
     for (int j = 1; j < n_neigh; ++j) {
         const T dj = dist_chan[j];
@@ -287,10 +290,19 @@ __device__ void compute_threebody_fourier_and_grad_device(
                 continue;
             }
 
-            const T dijk = dj * dk * di;
-            const T dijk_p = fast_pow(dijk, three_body_power);
+            const int zk = static_cast<int>(z_chan[k]);
+            const int zj = static_cast<int>(z_chan[j]);
+            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
+                continue;
+            }
+            const T r0_ij = static_cast<T>(pair_bond_r0(zi, zj));
+            const T r0_ik = static_cast<T>(pair_bond_r0(zi, zk));
+            const T r0_jk = static_cast<T>(pair_bond_r0(zj, zk));
+            const auto radial = three_body_radial_weight(
+                three_body_weight_mode, dj, dk, di, r0_ij, r0_ik, r0_jk, three_body_power
+            );
             const T cut_prod = cutj * cutk * cut_jk;
-            const T ksi3 = cut_prod * atm / dijk_p;
+            const T ksi3 = cut_prod * atm * radial.w;
             if (ksi3 == zero) {
                 continue;
             }
@@ -329,26 +341,25 @@ __device__ void compute_threebody_fourier_and_grad_device(
                 }
             }
 
-            const T fcp_j_over_p = (cutj > zero) ? (fcp_j * cutk * cut_jk) / dijk_p : zero;
-            const T fcp_k_over_p = (cutk > zero) ? (fcp_k * cutj * cut_jk) / dijk_p : zero;
-            const T fcp_jk_over_p = (cut_jk > zero) ? (fcp_jk * cutj * cutk) / dijk_p : zero;
-            const T beta3_ksi3_inv = three_body_power / dijk_p * cut_prod;
+            const T fcp_j_w = (cutj > zero) ? (fcp_j * cutk * cut_jk) * radial.w : zero;
+            const T fcp_k_w = (cutk > zero) ? (fcp_k * cutj * cut_jk) * radial.w : zero;
+            const T fcp_jk_w = (cut_jk > zero) ? (fcp_jk * cutj * cutk) * radial.w : zero;
+            const T cut_atm_w = cut_prod * atm * radial.w;
 
             T gksi3[3][3] = {};
             for (int mu = 0; mu < 3; ++mu) {
-                gksi3[0][mu] += atm * (-ui_j[mu] * fcp_j_over_p + -ui_k[mu] * fcp_k_over_p);
-                gksi3[1][mu] += atm * (ui_j[mu] * fcp_j_over_p + (-ukj[mu]) * fcp_jk_over_p);
-                gksi3[2][mu] += atm * (ui_k[mu] * fcp_k_over_p + (ukj[mu]) * fcp_jk_over_p);
+                gksi3[0][mu] += atm * (-ui_j[mu] * fcp_j_w + -ui_k[mu] * fcp_k_w);
+                gksi3[1][mu] += atm * (ui_j[mu] * fcp_j_w + (-ukj[mu]) * fcp_jk_w);
+                gksi3[2][mu] += atm * (ui_k[mu] * fcp_k_w + (ukj[mu]) * fcp_jk_w);
 
-                gksi3[0][mu] -=
-                    atm * beta3_ksi3_inv * (-ui_j[mu] * inv_dj + -ui_k[mu] * inv_dk);
-                gksi3[1][mu] -=
-                    atm * beta3_ksi3_inv * (ui_j[mu] * inv_dj + (-ukj[mu]) * inv_di);
-                gksi3[2][mu] -=
-                    atm * beta3_ksi3_inv * (ui_k[mu] * inv_dk + (ukj[mu]) * inv_di);
+                gksi3[0][mu] += cut_atm_w * (radial.dlog_dj * (-ui_j[mu]) + radial.dlog_dk * (-ui_k[mu]));
+                gksi3[1][mu] +=
+                    cut_atm_w * (radial.dlog_dj * (ui_j[mu]) + radial.dlog_di * (-ukj[mu]));
+                gksi3[2][mu] +=
+                    cut_atm_w * (radial.dlog_dk * (ui_k[mu]) + radial.dlog_di * (ukj[mu]));
 
                 if (use_atm) {
-                    const T scale = cut_prod / dijk_p;
+                    const T scale = cut_prod * radial.w;
                     for (int la = 0; la < 3; ++la) {
                         gksi3[la][mu] += scale * (datm_dcos_i * dcos_i_dR[la][mu] +
                                                   datm_dcos_j * dcos_j_dR[la][mu] +
@@ -357,11 +368,6 @@ __device__ void compute_threebody_fourier_and_grad_device(
                 }
             }
 
-            const int zk = static_cast<int>(z_chan[k]);
-            const int zj = static_cast<int>(z_chan[j]);
-            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
-                continue;
-            }
             const int pj = z_to_idx[zk];
             const int pk = z_to_idx[zj];
             if (pj < 0 || pk < 0) {
@@ -449,6 +455,7 @@ __device__ void compute_threebody_fourier_value_device(
     int order,
     const int *z_to_idx,
     bool use_atm,
+    int three_body_weight_mode,
     T *cosp,
     T *sinp
 ) {
@@ -460,6 +467,7 @@ __device__ void compute_threebody_fourier_value_device(
     const T *xc = atom_chan + 2 * max_size;
     const T *yc = atom_chan + 3 * max_size;
     const T *zc = atom_chan + 4 * max_size;
+    const int zi = static_cast<int>(z_chan[0]);
 
     for (int j = 1; j < n_neigh; ++j) {
         const T dj = dist_chan[j];
@@ -521,19 +529,24 @@ __device__ void compute_threebody_fourier_value_device(
                 continue;
             }
 
-            const T dijk = di * dj * dk;
-            const T ksi3 = cutj * cutk * cut_jk * atm / fast_pow(dijk, three_body_power);
+            const int zk = static_cast<int>(z_chan[k]);
+            const int zj = static_cast<int>(z_chan[j]);
+            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
+                continue;
+            }
+            const T r0_ij = static_cast<T>(pair_bond_r0(zi, zj));
+            const T r0_ik = static_cast<T>(pair_bond_r0(zi, zk));
+            const T r0_jk = static_cast<T>(pair_bond_r0(zj, zk));
+            const auto radial = three_body_radial_weight(
+                three_body_weight_mode, dj, dk, di, r0_ij, r0_ik, r0_jk, three_body_power
+            );
+            const T ksi3 = cutj * cutk * cut_jk * atm * radial.w;
             if (ksi3 == zero) {
                 continue;
             }
 
             const T theta = Math<T>::acos_(cos_i);
 
-            const int zk = static_cast<int>(z_chan[k]);
-            const int zj = static_cast<int>(z_chan[j]);
-            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
-                continue;
-            }
             const int pj = z_to_idx[zk];
             const int pk = z_to_idx[zj];
             if (pj < 0 || pk < 0) {
@@ -1111,6 +1124,7 @@ __global__ void jac_precompute_b_kernel(
         params.fourier_order,
         z_to_idx,
         params.use_atm != 0,
+        params.three_body_weight_mode,
         cosp_all + static_cast<long long>(flat_idx) * fstride,
         sinp_all + static_cast<long long>(flat_idx) * fstride
     );
@@ -1200,6 +1214,7 @@ __global__ void jac_precompute_a_kernel(
         params.fourier_order,
         z_to_idx,
         params.use_atm != 0,
+        params.three_body_weight_mode,
         i,
         na3,
         nbr,
@@ -1450,27 +1465,57 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
     const T *pack_cos2,
     const T *pack_sin2,
     T *jac_out,
+    const T *alpha_vec,
     int nm1,
     int nm2,
     int max_size1,
     int max_size2,
     int d_a_rows,
     int cols_are_coords,
+    int matvec_mode,
     JacParams<T> params,
-    const T *s_prefactor
+    const T *s_prefactor,
+    T *d_E_k
 ) {
     __shared__ T smem_grad[kMaxNa3Local];
+    __shared__ T smem_K;
 
-    const int pair = static_cast<int>(blockIdx.x);
-    if (pair >= nm1 * nm2) {
-        return;
+    int a;
+    int b;
+    int i_lo;
+    int i_hi;
+    if (matvec_mode != 0) {
+        // One block per (mol-pair, query atom) so MD grids fill SMs.
+        const int n_i = max_size1;
+        const int mol_pair = static_cast<int>(blockIdx.x) / n_i;
+        const int i_blk = static_cast<int>(blockIdx.x) - mol_pair * n_i;
+        if (mol_pair >= nm1 * nm2) {
+            return;
+        }
+        a = mol_pair / nm2;
+        b = mol_pair - a * nm2;
+        i_lo = i_blk;
+        i_hi = i_blk + 1;
+    } else {
+        const int pair = static_cast<int>(blockIdx.x);
+        if (pair >= nm1 * nm2) {
+            return;
+        }
+        a = pair / nm2;
+        b = pair - a * nm2;
+        i_lo = 0;
+        i_hi = 0;  // filled after na is known
     }
-    const int a = pair / nm2;
-    const int b = pair - a * nm2;
 
     const int na = n1[a];
     const int nb = n2[b];
     if (na <= 0) {
+        return;
+    }
+    if (matvec_mode == 0) {
+        i_lo = 0;
+        i_hi = na;
+    } else if (i_lo >= na) {
         return;
     }
 
@@ -1488,7 +1533,8 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
     if (!use_tiles) {
         for (int amu = tid; amu < na3; amu += static_cast<int>(blockDim.x)) {
             T acc = Math<T>::zero();
-            for (int i = 0; i < na; ++i) {
+            T ksum = Math<T>::zero();
+            for (int i = i_lo; i < i_hi; ++i) {
                 const int fi = a * max_size1 + i;
                 const T *x1_chan = atom_slice(x1, max_size1, a, i);
                 const int n_neigh_i = nn1[fi];
@@ -1523,9 +1569,19 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
                     const T kij =
                         Math<T>::exp_(-(sii + ss2[fj] - T(2) * sij) * params.inv_sigma2);
                     acc += kij * params.inv_sigma2 * (-dsii + T(2) * dsij);
+                    if (amu == 0) {
+                        ksum += kij;
+                    }
                 }
             }
-            if (cols_are_coords) {
+            if (matvec_mode == 1) {
+                atomicAdd(jac_out + (row0 + amu), acc * alpha_vec[b]);
+                if (d_E_k != nullptr && amu == 0) {
+                    atomicAdd(d_E_k + a, ksum * alpha_vec[b]);
+                }
+            } else if (matvec_mode == 2) {
+                atomicAdd(jac_out + b, acc * alpha_vec[row0 + amu]);
+            } else if (cols_are_coords) {
                 jac_out[static_cast<long long>(b) * d_a_rows + (row0 + amu)] = acc;
             } else {
                 jac_out[(row0 + amu) * nm2 + b] = acc;
@@ -1536,6 +1592,9 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
 
     for (int amu = tid; amu < na3; amu += static_cast<int>(blockDim.x)) {
         smem_grad[amu] = Math<T>::zero();
+    }
+    if (tid == 0) {
+        smem_K = Math<T>::zero();
     }
     __syncthreads();
 
@@ -1549,10 +1608,10 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
     const T dist_scale = params.true_distance_scale;
     const T ang_scale = params.true_angular_scale;
 
-    const int n_atom_pairs = na * nb;
+    const int n_atom_pairs = (i_hi - i_lo) * nb;
     for (int p = tid; p < n_atom_pairs; p += static_cast<int>(blockDim.x)) {
-        const int i = p / nb;
-        const int j = p - i * nb;
+        const int i = i_lo + p / nb;
+        const int j = p - (i - i_lo) * nb;
 
         const int fi = a * max_size1 + i;
         const int fj = b * max_size2 + j;
@@ -1697,6 +1756,7 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
 
         const T kij = Math<T>::exp_(-(sii + sjj - T(2) * aadist) * params.inv_sigma2);
         const T coeff = kij * params.inv_sigma2;
+        atomicAdd(&smem_K, kij);
 
 #pragma unroll
         for (int t = 0; t < kAmuTile; ++t) {
@@ -1729,11 +1789,18 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
     __syncthreads();
 
     for (int amu = tid; amu < na3; amu += static_cast<int>(blockDim.x)) {
-        if (cols_are_coords) {
+        if (matvec_mode == 1) {
+            atomicAdd(jac_out + (row0 + amu), smem_grad[amu] * alpha_vec[b]);
+        } else if (matvec_mode == 2) {
+            atomicAdd(jac_out + b, smem_grad[amu] * alpha_vec[row0 + amu]);
+        } else if (cols_are_coords) {
             jac_out[static_cast<long long>(b) * d_a_rows + (row0 + amu)] = smem_grad[amu];
         } else {
             jac_out[(row0 + amu) * nm2 + b] = smem_grad[amu];
         }
+    }
+    if (matvec_mode == 1 && d_E_k != nullptr && tid == 0) {
+        atomicAdd(d_E_k + a, smem_K * alpha_vec[b]);
     }
 }
 
@@ -1840,6 +1907,58 @@ struct JacWorkspace {
     size_t s_prefactor_cap = 0;
     size_t nbr1_cap = 0;
     size_t row_offset_cap = 0;
+
+    // Persistent train-as-A cache (jacobian_t / energy path).
+    T *tr_ksi1 = nullptr;
+    T *tr_dksi1 = nullptr;
+    T *tr_dri1 = nullptr;
+    T *tr_cosp1 = nullptr;
+    T *tr_sinp1 = nullptr;
+    T *tr_dcosp1 = nullptr;
+    T *tr_dsinp1 = nullptr;
+    T *tr_ss1 = nullptr;
+    T *tr_dss1 = nullptr;
+    int *tr_nbr1 = nullptr;
+    int *tr_row_offset = nullptr;
+    size_t tr_ksi1_cap = 0;
+    size_t tr_dksi1_cap = 0;
+    size_t tr_dri1_cap = 0;
+    size_t tr_cosp1_cap = 0;
+    size_t tr_sinp1_cap = 0;
+    size_t tr_dcosp1_cap = 0;
+    size_t tr_dsinp1_cap = 0;
+    size_t tr_ss1_cap = 0;
+    size_t tr_dss1_cap = 0;
+    size_t tr_nbr1_cap = 0;
+    size_t tr_row_offset_cap = 0;
+    const T *tr_A_x = nullptr;
+    int tr_A_nm = 0;
+    int tr_A_max = 0;
+    int tr_A_pmax = -1;
+
+    // Persistent train-as-B cache (jacobian / force path).
+    T *tr_ksi2 = nullptr;
+    T *tr_cosp2 = nullptr;
+    T *tr_sinp2 = nullptr;
+    T *tr_ss2 = nullptr;
+    T *tr_pack_dist2 = nullptr;
+    T *tr_pack_z2 = nullptr;
+    T *tr_pack_ksi2 = nullptr;
+    T *tr_pack_cos2 = nullptr;
+    T *tr_pack_sin2 = nullptr;
+    size_t tr_ksi2_cap = 0;
+    size_t tr_cosp2_cap = 0;
+    size_t tr_sinp2_cap = 0;
+    size_t tr_ss2_cap = 0;
+    size_t tr_pack_dist2_cap = 0;
+    size_t tr_pack_z2_cap = 0;
+    size_t tr_pack_ksi2_cap = 0;
+    size_t tr_pack_cos2_cap = 0;
+    size_t tr_pack_sin2_cap = 0;
+    const T *tr_B_x = nullptr;
+    int tr_B_nm = 0;
+    int tr_B_max = 0;
+    int tr_B_pmax = -1;
 };
 
 template <typename T>
@@ -1859,6 +1978,7 @@ void kernel_gaussian_jacobian_cu_impl(
     const T *d_coords1,
     const int *d_z1,
     T *d_jac_out,
+    const T *d_alpha,
     T sigma,
     int nm1,
     int nm2,
@@ -1875,7 +1995,9 @@ void kernel_gaussian_jacobian_cu_impl(
     T cut_distance,
     int fourier_order,
     bool use_atm,
-    bool cols_are_coords
+    bool cols_are_coords,
+    int matvec_mode,
+    T *d_E_k = nullptr
 ) {
     if (fourier_order <= 0 || fourier_order > kMaxFourierOrder) {
         throw std::invalid_argument("fourier_order must be in [1, 16] for cuda_fchl18_kernel");
@@ -1891,7 +2013,13 @@ void kernel_gaussian_jacobian_cu_impl(
     if (ws.z_to_idx == nullptr) {
         CUDA_CHECK(cudaMalloc(&ws.z_to_idx, 256 * sizeof(int)));
     }
-    CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
+
+    const bool cache_A = (nm1 > nm2);
+    const bool cache_B = (nm2 > nm1);
+    const bool hit_A =
+        cache_A && d_x1 == ws.tr_A_x && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max;
+    const bool hit_B =
+        cache_B && d_x2 == ws.tr_B_x && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max;
 
     const size_t n_atoms1 = static_cast<size_t>(nm1) * max_size1;
     const size_t n_atoms2 = static_cast<size_t>(nm2) * max_size2;
@@ -1900,37 +2028,49 @@ void kernel_gaussian_jacobian_cu_impl(
     const int grid2 =
         static_cast<int>((n_atoms2 + kPrecomputeBlockSize - 1) / kPrecomputeBlockSize);
 
-    jac_mark_elements_kernel<<<grid1, kPrecomputeBlockSize>>>(
-        d_x1, d_n1, d_nn1, nm1, max_size1, ws.z_present
-    );
-    CUDA_CHECK(cudaGetLastError());
-    jac_mark_elements_kernel<<<grid2, kPrecomputeBlockSize>>>(
-        d_x2, d_n2, d_nn2, nm2, max_size2, ws.z_present
-    );
-    CUDA_CHECK(cudaGetLastError());
+    int pmax = 0;
+    if (hit_A || hit_B) {
+        pmax = hit_A ? ws.tr_A_pmax : ws.tr_B_pmax;
+    } else {
+        CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
+        jac_mark_elements_kernel<<<grid1, kPrecomputeBlockSize>>>(
+            d_x1, d_n1, d_nn1, nm1, max_size1, ws.z_present
+        );
+        CUDA_CHECK(cudaGetLastError());
+        jac_mark_elements_kernel<<<grid2, kPrecomputeBlockSize>>>(
+            d_x2, d_n2, d_nn2, nm2, max_size2, ws.z_present
+        );
+        CUDA_CHECK(cudaGetLastError());
 
-    int h_z_present[256];
-    CUDA_CHECK(cudaMemcpy(h_z_present, ws.z_present, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+        int h_z_present[256];
+        CUDA_CHECK(cudaMemcpy(h_z_present, ws.z_present, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+        int h_z_to_idx[256];
+        pmax = build_element_map_from_flags(h_z_present, h_z_to_idx);
+        if (pmax > 0 && pmax <= kMaxElements) {
+            CUDA_CHECK(
+                cudaMemcpy(ws.z_to_idx, h_z_to_idx, 256 * sizeof(int), cudaMemcpyHostToDevice)
+            );
+        }
+    }
 
-    int h_z_to_idx[256];
-    const int pmax = build_element_map_from_flags(h_z_present, h_z_to_idx);
-
-    const size_t out_n = static_cast<size_t>(d_a_rows) * nm2;
-    CUDA_CHECK(cudaMemset(d_jac_out, 0, out_n * sizeof(T)));
+    const size_t out_n = (matvec_mode == 1) ? static_cast<size_t>(d_a_rows)
+                        : (matvec_mode == 2) ? static_cast<size_t>(nm2)
+                                             : static_cast<size_t>(d_a_rows) * nm2;
+    if (matvec_mode == 0) {
+        CUDA_CHECK(cudaMemset(d_jac_out, 0, out_n * sizeof(T)));
+    }
     if (pmax == 0) {
         return;
     }
     if (pmax > kMaxElements) {
         throw std::invalid_argument("too many distinct elements for cuda_fchl18_kernel");
     }
-    CUDA_CHECK(
-        cudaMemcpy(ws.z_to_idx, h_z_to_idx, 256 * sizeof(int), cudaMemcpyHostToDevice)
-    );
 
     JacParams<T> params{};
     params.two_body_width = two_body_width;
     params.two_body_power = two_body_power;
     params.three_body_power = three_body_power;
+    params.three_body_weight_mode = get_fchl18_three_body_weight_mode();
     params.cut_start = cut_start;
     params.cut_distance = cut_distance;
     params.true_distance_scale = two_body_scaling / static_cast<T>(16);
@@ -1957,26 +2097,31 @@ void kernel_gaussian_jacobian_cu_impl(
     ));
 
     // Row offsets: molecule a owns rows [offset[a], offset[a] + 3*n1[a]).
-    std::vector<int> h_n1(static_cast<size_t>(nm1));
-    CUDA_CHECK(
-        cudaMemcpy(h_n1.data(), d_n1, static_cast<size_t>(nm1) * sizeof(int),
-                   cudaMemcpyDeviceToHost)
-    );
-    std::vector<int> h_row_offset(static_cast<size_t>(nm1) + 1, 0);
-    for (int a = 0; a < nm1; ++a) {
-        h_row_offset[static_cast<size_t>(a) + 1] =
-            h_row_offset[static_cast<size_t>(a)] + h_n1[static_cast<size_t>(a)] * 3;
+    if (!hit_A) {
+        std::vector<int> h_row_offset(static_cast<size_t>(nm1) + 1, 0);
+        if (nm1 == 1) {
+            h_row_offset[1] = d_a_rows;
+        } else {
+            std::vector<int> h_n1(static_cast<size_t>(nm1));
+            CUDA_CHECK(cudaMemcpy(
+                h_n1.data(), d_n1, static_cast<size_t>(nm1) * sizeof(int), cudaMemcpyDeviceToHost
+            ));
+            for (int a = 0; a < nm1; ++a) {
+                h_row_offset[static_cast<size_t>(a) + 1] =
+                    h_row_offset[static_cast<size_t>(a)] + h_n1[static_cast<size_t>(a)] * 3;
+            }
+            if (h_row_offset[static_cast<size_t>(nm1)] != d_a_rows) {
+                throw std::invalid_argument("jacobian output rows must equal 3 * sum(n1)");
+            }
+        }
+        ensure_capacity(&ws.row_offset, &ws.row_offset_cap, static_cast<size_t>(nm1) + 1);
+        CUDA_CHECK(cudaMemcpy(
+            ws.row_offset,
+            h_row_offset.data(),
+            (static_cast<size_t>(nm1) + 1) * sizeof(int),
+            cudaMemcpyHostToDevice
+        ));
     }
-    if (h_row_offset[static_cast<size_t>(nm1)] != d_a_rows) {
-        throw std::invalid_argument("jacobian output rows must equal 3 * sum(n1)");
-    }
-    ensure_capacity(&ws.row_offset, &ws.row_offset_cap, static_cast<size_t>(nm1) + 1);
-    CUDA_CHECK(cudaMemcpy(
-        ws.row_offset,
-        h_row_offset.data(),
-        (static_cast<size_t>(nm1) + 1) * sizeof(int),
-        cudaMemcpyHostToDevice
-    ));
 
     const size_t na3_max = static_cast<size_t>(max_size1) * 3;
     const size_t fstride1 =
@@ -2019,28 +2164,440 @@ void kernel_gaussian_jacobian_cu_impl(
         ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
     }
 
-    // The precompute kernels accumulate, and padding atoms are never written.
-    CUDA_CHECK(cudaMemset(ws.dksi1, 0, dksi1_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.dri1, 0, dksi1_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.cosp1, 0, cosp1_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.sinp1, 0, cosp1_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.dcosp1, 0, dcosp1_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.dsinp1, 0, dcosp1_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.dss1, 0, dss1_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.cosp2, 0, cosp2_need * sizeof(T)));
-    CUDA_CHECK(cudaMemset(ws.sinp2, 0, cosp2_need * sizeof(T)));
+    T *ksi1 = ws.ksi1;
+    T *dksi1 = ws.dksi1;
+    T *dri1 = ws.dri1;
+    T *cosp1 = ws.cosp1;
+    T *sinp1 = ws.sinp1;
+    T *dcosp1 = ws.dcosp1;
+    T *dsinp1 = ws.dsinp1;
+    T *ss1 = ws.ss1;
+    T *dss1 = ws.dss1;
+    int *nbr1 = ws.nbr1;
+    int *row_off = ws.row_offset;
+    T *ksi2 = ws.ksi2;
+    T *cosp2 = ws.cosp2;
+    T *sinp2 = ws.sinp2;
+    T *ss2 = ws.ss2;
+    T *pack_dist2 = ws.pack_dist2;
+    T *pack_z2 = ws.pack_z2;
+    T *pack_ksi2 = ws.pack_ksi2;
+    T *pack_cos2 = ws.pack_cos2;
+    T *pack_sin2 = ws.pack_sin2;
 
-    jac_precompute_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-        d_x2, d_n2, d_nn2, ws.ksi2, ws.cosp2, ws.sinp2, nm2, max_size2, params, ws.z_to_idx
+    if (cache_A) {
+        ensure_capacity(&ws.tr_ksi1, &ws.tr_ksi1_cap, ksi1_need);
+        ensure_capacity(&ws.tr_dksi1, &ws.tr_dksi1_cap, dksi1_need);
+        ensure_capacity(&ws.tr_dri1, &ws.tr_dri1_cap, dksi1_need);
+        ensure_capacity(&ws.tr_cosp1, &ws.tr_cosp1_cap, cosp1_need);
+        ensure_capacity(&ws.tr_sinp1, &ws.tr_sinp1_cap, cosp1_need);
+        ensure_capacity(&ws.tr_dcosp1, &ws.tr_dcosp1_cap, dcosp1_need);
+        ensure_capacity(&ws.tr_dsinp1, &ws.tr_dsinp1_cap, dcosp1_need);
+        ensure_capacity(&ws.tr_ss1, &ws.tr_ss1_cap, n_atoms1);
+        ensure_capacity(&ws.tr_dss1, &ws.tr_dss1_cap, dss1_need);
+        ensure_capacity(&ws.tr_nbr1, &ws.tr_nbr1_cap, ksi1_need);
+        ensure_capacity(&ws.tr_row_offset, &ws.tr_row_offset_cap, static_cast<size_t>(nm1) + 1);
+        ksi1 = ws.tr_ksi1;
+        dksi1 = ws.tr_dksi1;
+        dri1 = ws.tr_dri1;
+        cosp1 = ws.tr_cosp1;
+        sinp1 = ws.tr_sinp1;
+        dcosp1 = ws.tr_dcosp1;
+        dsinp1 = ws.tr_dsinp1;
+        ss1 = ws.tr_ss1;
+        dss1 = ws.tr_dss1;
+        nbr1 = ws.tr_nbr1;
+        row_off = ws.tr_row_offset;
+        if (!hit_A) {
+            CUDA_CHECK(cudaMemcpy(
+                row_off,
+                ws.row_offset,
+                (static_cast<size_t>(nm1) + 1) * sizeof(int),
+                cudaMemcpyDeviceToDevice
+            ));
+        }
+    }
+    if (cache_B) {
+        ensure_capacity(&ws.tr_ksi2, &ws.tr_ksi2_cap, ksi2_need);
+        ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp2_need);
+        ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp2_need);
+        ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms2);
+        ksi2 = ws.tr_ksi2;
+        cosp2 = ws.tr_cosp2;
+        sinp2 = ws.tr_sinp2;
+        ss2 = ws.tr_ss2;
+        if (pack_b) {
+            ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_need);
+            ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_need);
+            ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_need);
+            ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_need);
+            ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_need);
+            pack_dist2 = ws.tr_pack_dist2;
+            pack_z2 = ws.tr_pack_z2;
+            pack_ksi2 = ws.tr_pack_ksi2;
+            pack_cos2 = ws.tr_pack_cos2;
+            pack_sin2 = ws.tr_pack_sin2;
+        }
+    }
+
+    if (!hit_A) {
+        CUDA_CHECK(cudaMemset(dksi1, 0, dksi1_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(dri1, 0, dksi1_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(cosp1, 0, cosp1_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(sinp1, 0, cosp1_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(dcosp1, 0, dcosp1_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(dsinp1, 0, dcosp1_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(dss1, 0, dss1_need * sizeof(T)));
+        jac_precompute_a_kernel<<<grid1, kPrecomputeBlockSize>>>(
+            d_x1,
+            d_n1,
+            d_nn1,
+            d_coords1,
+            d_z1,
+            nbr1,
+            ksi1,
+            dksi1,
+            dri1,
+            cosp1,
+            sinp1,
+            dcosp1,
+            dsinp1,
+            nm1,
+            max_size1,
+            params,
+            ws.z_to_idx
+        );
+        CUDA_CHECK(cudaGetLastError());
+        jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms1), kJacBlockSize>>>(
+            d_x1,
+            d_n1,
+            d_nn1,
+            ksi1,
+            dksi1,
+            dri1,
+            cosp1,
+            sinp1,
+            dcosp1,
+            dsinp1,
+            ss1,
+            dss1,
+            nm1,
+            max_size1,
+            params,
+            ws.s_prefactor
+        );
+        CUDA_CHECK(cudaGetLastError());
+        if (cache_A) {
+            ws.tr_A_x = d_x1;
+            ws.tr_A_nm = nm1;
+            ws.tr_A_max = max_size1;
+            ws.tr_A_pmax = pmax;
+        }
+    }
+
+    if (!hit_B) {
+        CUDA_CHECK(cudaMemset(cosp2, 0, cosp2_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(sinp2, 0, cosp2_need * sizeof(T)));
+        jac_precompute_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+            d_x2, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params, ws.z_to_idx
+        );
+        CUDA_CHECK(cudaGetLastError());
+        jac_self_scalar_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+            d_x2,
+            d_n2,
+            d_nn2,
+            ksi2,
+            cosp2,
+            sinp2,
+            ss2,
+            nm2,
+            max_size2,
+            params,
+            ws.s_prefactor
+        );
+        CUDA_CHECK(cudaGetLastError());
+        if (pack_b) {
+            jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+                d_x2,
+                d_n2,
+                ksi2,
+                cosp2,
+                sinp2,
+                pack_dist2,
+                pack_z2,
+                pack_ksi2,
+                pack_cos2,
+                pack_sin2,
+                nm2,
+                max_size2,
+                pmax,
+                fourier_order
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        if (cache_B) {
+            ws.tr_B_x = d_x2;
+            ws.tr_B_nm = nm2;
+            ws.tr_B_max = max_size2;
+            ws.tr_B_pmax = pmax;
+        }
+    }
+
+    const int n_hot =
+        (matvec_mode != 0) ? (nm1 * nm2 * max_size1) : (nm1 * nm2);
+    jac_hot_kernel<<<n_hot, kHotBlockSize>>>(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        row_off,
+        ksi1,
+        dksi1,
+        dri1,
+        cosp1,
+        sinp1,
+        dcosp1,
+        dsinp1,
+        ss1,
+        dss1,
+        ksi2,
+        cosp2,
+        sinp2,
+        ss2,
+        pack_b ? pack_dist2 : nullptr,
+        pack_b ? pack_z2 : nullptr,
+        pack_b ? pack_ksi2 : nullptr,
+        pack_b ? pack_cos2 : nullptr,
+        pack_b ? pack_sin2 : nullptr,
+        d_jac_out,
+        d_alpha,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        d_a_rows,
+        cols_are_coords ? 1 : 0,
+        matvec_mode,
+        params,
+        ws.s_prefactor,
+        d_E_k
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// One-shot EF full_matvec: shared element map + single query-side A precompute,
+// then Jt / J / H hot launches (train-side caches unchanged).
+template <typename T>
+void kernel_gaussian_full_matvec_fused_cu_impl(
+    const T *d_x_q,
+    const T *d_x_tr,
+    const int *d_n_q,
+    const int *d_n_tr,
+    const int *d_nn_q,
+    const int *d_nn_tr,
+    const T *d_coords_q,
+    const int *d_z_q,
+    const T *d_coords_tr,
+    const int *d_z_tr,
+    const T *d_alpha_E,
+    const T *d_alpha_F,
+    T *d_E,
+    T *d_F,
+    T sigma,
+    int nm_q,
+    int nm_tr,
+    int max_size_q,
+    int max_size_tr,
+    int d_a_rows,
+    int d_b_cols,
+    T two_body_scaling,
+    T two_body_width,
+    T two_body_power,
+    T three_body_scaling,
+    T three_body_width,
+    T three_body_power,
+    T cut_start,
+    T cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool compute_energy
+) {
+    if (nm_q <= 0 || nm_tr <= 0 || d_a_rows <= 0 || d_b_cols <= 0) {
+        return;
+    }
+
+    JacWorkspace<T> &ws = jac_workspace<T>();
+    if (ws.z_present == nullptr) {
+        CUDA_CHECK(cudaMalloc(&ws.z_present, 256 * sizeof(int)));
+    }
+    if (ws.z_to_idx == nullptr) {
+        CUDA_CHECK(cudaMalloc(&ws.z_to_idx, 256 * sizeof(int)));
+    }
+
+    const size_t n_atoms_q = static_cast<size_t>(nm_q) * max_size_q;
+    const size_t n_atoms_tr = static_cast<size_t>(nm_tr) * max_size_tr;
+    const int grid_q =
+        static_cast<int>((n_atoms_q + kPrecomputeBlockSize - 1) / kPrecomputeBlockSize);
+    const int grid_tr =
+        static_cast<int>((n_atoms_tr + kPrecomputeBlockSize - 1) / kPrecomputeBlockSize);
+
+    CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
+    jac_mark_elements_kernel<<<grid_q, kPrecomputeBlockSize>>>(
+        d_x_q, d_n_q, d_nn_q, nm_q, max_size_q, ws.z_present
+    );
+    CUDA_CHECK(cudaGetLastError());
+    jac_mark_elements_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
+        d_x_tr, d_n_tr, d_nn_tr, nm_tr, max_size_tr, ws.z_present
     );
     CUDA_CHECK(cudaGetLastError());
 
-    jac_precompute_a_kernel<<<grid1, kPrecomputeBlockSize>>>(
-        d_x1,
-        d_n1,
-        d_nn1,
-        d_coords1,
-        d_z1,
+    int h_z_present[256];
+    CUDA_CHECK(cudaMemcpy(h_z_present, ws.z_present, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+    int h_z_to_idx[256];
+    const int pmax = build_element_map_from_flags(h_z_present, h_z_to_idx);
+    if (pmax == 0) {
+        return;
+    }
+    if (pmax > kMaxElements) {
+        throw std::invalid_argument("too many distinct elements for cuda_fchl18_kernel");
+    }
+    CUDA_CHECK(
+        cudaMemcpy(ws.z_to_idx, h_z_to_idx, 256 * sizeof(int), cudaMemcpyHostToDevice)
+    );
+
+    JacParams<T> params{};
+    params.two_body_width = two_body_width;
+    params.two_body_power = two_body_power;
+    params.three_body_power = three_body_power;
+    params.three_body_weight_mode = get_fchl18_three_body_weight_mode();
+    params.cut_start = cut_start;
+    params.cut_distance = cut_distance;
+    params.true_distance_scale = two_body_scaling / static_cast<T>(16);
+    params.true_angular_scale = three_body_scaling / static_cast<T>(std::sqrt(8.0));
+    params.inv_sigma2 = static_cast<T>(0.5) / (sigma * sigma);
+    params.fourier_order = fourier_order;
+    params.pmax = pmax;
+    params.use_atm = use_atm ? 1 : 0;
+
+    T h_s_prefactor[kMaxFourierOrder] = {};
+    const double ang_norm2 = get_angular_norm2(static_cast<double>(three_body_width));
+    const double g1 = std::sqrt(2.0 * 3.14159265358979323846) / ang_norm2;
+    for (int m = 0; m < fourier_order; ++m) {
+        const double mf = static_cast<double>(m + 1);
+        const double tw = static_cast<double>(three_body_width);
+        h_s_prefactor[m] = static_cast<T>(g1 * std::exp(-(tw * mf) * (tw * mf) / 2.0));
+    }
+    ensure_capacity(&ws.s_prefactor, &ws.s_prefactor_cap, static_cast<size_t>(kMaxFourierOrder));
+    CUDA_CHECK(cudaMemcpy(
+        ws.s_prefactor,
+        h_s_prefactor,
+        static_cast<size_t>(kMaxFourierOrder) * sizeof(T),
+        cudaMemcpyHostToDevice
+    ));
+
+    {
+        int h_row_offset[2] = {0, d_a_rows};
+        ensure_capacity(&ws.row_offset, &ws.row_offset_cap, 2);
+        CUDA_CHECK(cudaMemcpy(
+            ws.row_offset, h_row_offset, 2 * sizeof(int), cudaMemcpyHostToDevice
+        ));
+    }
+
+    const size_t na3_max_q = static_cast<size_t>(max_size_q) * 3;
+    const size_t fstride_q =
+        static_cast<size_t>(pmax) * fourier_order * static_cast<size_t>(max_size_q);
+    const size_t fstride_tr =
+        static_cast<size_t>(pmax) * fourier_order * static_cast<size_t>(max_size_tr);
+    const size_t ksi_q_need = n_atoms_q * static_cast<size_t>(max_size_q);
+    const size_t dksi_q_need = ksi_q_need * na3_max_q;
+    const size_t cosp_q_need = n_atoms_q * fstride_q;
+    const size_t dcosp_q_need = cosp_q_need * na3_max_q;
+    const size_t dss_q_need = n_atoms_q * na3_max_q;
+    const size_t ksi_tr_need = n_atoms_tr * static_cast<size_t>(max_size_tr);
+    const size_t dksi_tr_need = ksi_tr_need * static_cast<size_t>(max_size_tr) * 3;
+    const size_t cosp_tr_need = n_atoms_tr * fstride_tr;
+    const size_t dcosp_tr_need = cosp_tr_need * static_cast<size_t>(max_size_tr) * 3;
+    const size_t dss_tr_need = n_atoms_tr * static_cast<size_t>(max_size_tr) * 3;
+
+    ensure_capacity(&ws.ksi1, &ws.ksi1_cap, ksi_q_need);
+    ensure_capacity(&ws.dksi1, &ws.dksi1_cap, dksi_q_need);
+    ensure_capacity(&ws.dri1, &ws.dri1_cap, dksi_q_need);
+    ensure_capacity(&ws.cosp1, &ws.cosp1_cap, cosp_q_need);
+    ensure_capacity(&ws.sinp1, &ws.sinp1_cap, cosp_q_need);
+    ensure_capacity(&ws.dcosp1, &ws.dcosp1_cap, dcosp_q_need);
+    ensure_capacity(&ws.dsinp1, &ws.dsinp1_cap, dcosp_q_need);
+    ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms_q);
+    ensure_capacity(&ws.dss1, &ws.dss1_cap, dss_q_need);
+    ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi_q_need);
+    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi_tr_need);
+    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp_tr_need);
+    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp_tr_need);
+    ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms_tr);
+
+    const bool pack_b = (sizeof(T) == 4);
+    const size_t pack_bj_tr =
+        static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * static_cast<size_t>(max_size_tr);
+    const size_t pack_f_tr = pack_bj_tr * static_cast<size_t>(pmax) * fourier_order;
+    if (pack_b) {
+        ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_tr);
+        ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_tr);
+        ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_tr);
+        ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_tr);
+        ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_tr);
+    }
+
+    const bool cache_tr_A = (nm_tr > nm_q);
+    const bool cache_tr_B = (nm_tr > nm_q);
+    const bool hit_tr_A =
+        cache_tr_A && d_x_tr == ws.tr_A_x && nm_tr == ws.tr_A_nm && max_size_tr == ws.tr_A_max &&
+        pmax == ws.tr_A_pmax;
+    const bool hit_tr_B =
+        cache_tr_B && d_x_tr == ws.tr_B_x && nm_tr == ws.tr_B_nm && max_size_tr == ws.tr_B_max &&
+        pmax == ws.tr_B_pmax;
+
+    if (cache_tr_A) {
+        ensure_capacity(&ws.tr_ksi1, &ws.tr_ksi1_cap, ksi_tr_need);
+        ensure_capacity(&ws.tr_dksi1, &ws.tr_dksi1_cap, dksi_tr_need);
+        ensure_capacity(&ws.tr_dri1, &ws.tr_dri1_cap, dksi_tr_need);
+        ensure_capacity(&ws.tr_cosp1, &ws.tr_cosp1_cap, cosp_tr_need);
+        ensure_capacity(&ws.tr_sinp1, &ws.tr_sinp1_cap, cosp_tr_need);
+        ensure_capacity(&ws.tr_dcosp1, &ws.tr_dcosp1_cap, dcosp_tr_need);
+        ensure_capacity(&ws.tr_dsinp1, &ws.tr_dsinp1_cap, dcosp_tr_need);
+        ensure_capacity(&ws.tr_ss1, &ws.tr_ss1_cap, n_atoms_tr);
+        ensure_capacity(&ws.tr_dss1, &ws.tr_dss1_cap, dss_tr_need);
+        ensure_capacity(&ws.tr_nbr1, &ws.tr_nbr1_cap, ksi_tr_need);
+        ensure_capacity(&ws.tr_row_offset, &ws.tr_row_offset_cap, static_cast<size_t>(nm_tr) + 1);
+    }
+    if (cache_tr_B) {
+        ensure_capacity(&ws.tr_ksi2, &ws.tr_ksi2_cap, ksi_tr_need);
+        ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp_tr_need);
+        ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp_tr_need);
+        ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms_tr);
+        if (pack_b) {
+            ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_tr);
+            ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_tr);
+            ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_tr);
+            ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_tr);
+            ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_tr);
+        }
+    }
+
+    // Query side A (shared by J + H).
+    CUDA_CHECK(cudaMemset(ws.dksi1, 0, dksi_q_need * sizeof(T)));
+    CUDA_CHECK(cudaMemset(ws.dri1, 0, dksi_q_need * sizeof(T)));
+    CUDA_CHECK(cudaMemset(ws.cosp1, 0, cosp_q_need * sizeof(T)));
+    CUDA_CHECK(cudaMemset(ws.sinp1, 0, cosp_q_need * sizeof(T)));
+    CUDA_CHECK(cudaMemset(ws.dcosp1, 0, dcosp_q_need * sizeof(T)));
+    CUDA_CHECK(cudaMemset(ws.dsinp1, 0, dcosp_q_need * sizeof(T)));
+    CUDA_CHECK(cudaMemset(ws.dss1, 0, dss_q_need * sizeof(T)));
+    jac_precompute_a_kernel<<<grid_q, kPrecomputeBlockSize>>>(
+        d_x_q,
+        d_n_q,
+        d_nn_q,
+        d_coords_q,
+        d_z_q,
         ws.nbr1,
         ws.ksi1,
         ws.dksi1,
@@ -2049,32 +2606,16 @@ void kernel_gaussian_jacobian_cu_impl(
         ws.sinp1,
         ws.dcosp1,
         ws.dsinp1,
-        nm1,
-        max_size1,
+        nm_q,
+        max_size_q,
         params,
         ws.z_to_idx
     );
     CUDA_CHECK(cudaGetLastError());
-
-    jac_self_scalar_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-        d_x2,
-        d_n2,
-        d_nn2,
-        ws.ksi2,
-        ws.cosp2,
-        ws.sinp2,
-        ws.ss2,
-        nm2,
-        max_size2,
-        params,
-        ws.s_prefactor
-    );
-    CUDA_CHECK(cudaGetLastError());
-
-    jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms1), kJacBlockSize>>>(
-        d_x1,
-        d_n1,
-        d_nn1,
+    jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms_q), kJacBlockSize>>>(
+        d_x_q,
+        d_n_q,
+        d_nn_q,
         ws.ksi1,
         ws.dksi1,
         ws.dri1,
@@ -2084,41 +2625,297 @@ void kernel_gaussian_jacobian_cu_impl(
         ws.dsinp1,
         ws.ss1,
         ws.dss1,
-        nm1,
-        max_size1,
+        nm_q,
+        max_size_q,
         params,
         ws.s_prefactor
     );
     CUDA_CHECK(cudaGetLastError());
 
-    if (pack_b) {
-        jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-            d_x2,
-            d_n2,
+    // Query side B light (Jt only): same molecule, no gradients.
+    if (compute_energy) {
+        CUDA_CHECK(cudaMemset(ws.cosp2, 0, n_atoms_q * fstride_q * sizeof(T)));
+        CUDA_CHECK(cudaMemset(ws.sinp2, 0, n_atoms_q * fstride_q * sizeof(T)));
+        jac_precompute_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
+            d_x_q,
+            d_n_q,
+            d_nn_q,
             ws.ksi2,
             ws.cosp2,
             ws.sinp2,
-            ws.pack_dist2,
-            ws.pack_z2,
-            ws.pack_ksi2,
-            ws.pack_cos2,
-            ws.pack_sin2,
-            nm2,
-            max_size2,
-            pmax,
-            fourier_order
+            nm_q,
+            max_size_q,
+            params,
+            ws.z_to_idx
+        );
+        CUDA_CHECK(cudaGetLastError());
+        jac_self_scalar_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
+            d_x_q,
+            d_n_q,
+            d_nn_q,
+            ws.ksi2,
+            ws.cosp2,
+            ws.sinp2,
+            ws.ss2,
+            nm_q,
+            max_size_q,
+            params,
+            ws.s_prefactor
+        );
+        CUDA_CHECK(cudaGetLastError());
+        if (pack_b) {
+            jac_pack_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
+                d_x_q,
+                d_n_q,
+                ws.ksi2,
+                ws.cosp2,
+                ws.sinp2,
+                ws.pack_dist2,
+                ws.pack_z2,
+                ws.pack_ksi2,
+                ws.pack_cos2,
+                ws.pack_sin2,
+                nm_q,
+                max_size_q,
+                pmax,
+                fourier_order
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+    }
+
+    T *tr_ksi1 = ws.ksi1;
+    T *tr_dksi1 = ws.dksi1;
+    T *tr_dri1 = ws.dri1;
+    T *tr_cosp1 = ws.cosp1;
+    T *tr_sinp1 = ws.sinp1;
+    T *tr_dcosp1 = ws.dcosp1;
+    T *tr_dsinp1 = ws.dsinp1;
+    T *tr_ss1 = ws.ss1;
+    T *tr_dss1 = ws.dss1;
+    int *tr_nbr1 = ws.nbr1;
+    int *tr_row_off = ws.row_offset;
+    T *tr_ksi2 = ws.ksi2;
+    T *tr_cosp2 = ws.cosp2;
+    T *tr_sinp2 = ws.sinp2;
+    T *tr_ss2 = ws.ss2;
+    T *tr_pack_dist2 = ws.pack_dist2;
+    T *tr_pack_z2 = ws.pack_z2;
+    T *tr_pack_ksi2 = ws.pack_ksi2;
+    T *tr_pack_cos2 = ws.pack_cos2;
+    T *tr_pack_sin2 = ws.pack_sin2;
+
+    if (cache_tr_A) {
+        tr_ksi1 = ws.tr_ksi1;
+        tr_dksi1 = ws.tr_dksi1;
+        tr_dri1 = ws.tr_dri1;
+        tr_cosp1 = ws.tr_cosp1;
+        tr_sinp1 = ws.tr_sinp1;
+        tr_dcosp1 = ws.tr_dcosp1;
+        tr_dsinp1 = ws.tr_dsinp1;
+        tr_ss1 = ws.tr_ss1;
+        tr_dss1 = ws.tr_dss1;
+        tr_nbr1 = ws.tr_nbr1;
+        tr_row_off = ws.tr_row_offset;
+    }
+    if (cache_tr_B) {
+        tr_ksi2 = ws.tr_ksi2;
+        tr_cosp2 = ws.tr_cosp2;
+        tr_sinp2 = ws.tr_sinp2;
+        tr_ss2 = ws.tr_ss2;
+        if (pack_b) {
+            tr_pack_dist2 = ws.tr_pack_dist2;
+            tr_pack_z2 = ws.tr_pack_z2;
+            tr_pack_ksi2 = ws.tr_pack_ksi2;
+            tr_pack_cos2 = ws.tr_pack_cos2;
+            tr_pack_sin2 = ws.tr_pack_sin2;
+        }
+    }
+
+    if (!hit_tr_A) {
+        CUDA_CHECK(cudaMemset(tr_dksi1, 0, dksi_tr_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(tr_dri1, 0, dksi_tr_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(tr_cosp1, 0, cosp_tr_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(tr_sinp1, 0, cosp_tr_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(tr_dcosp1, 0, dcosp_tr_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(tr_dsinp1, 0, dcosp_tr_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(tr_dss1, 0, dss_tr_need * sizeof(T)));
+        jac_precompute_a_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
+            d_x_tr,
+            d_n_tr,
+            d_nn_tr,
+            d_coords_tr,
+            d_z_tr,
+            tr_nbr1,
+            tr_ksi1,
+            tr_dksi1,
+            tr_dri1,
+            tr_cosp1,
+            tr_sinp1,
+            tr_dcosp1,
+            tr_dsinp1,
+            nm_tr,
+            max_size_tr,
+            params,
+            ws.z_to_idx
+        );
+        CUDA_CHECK(cudaGetLastError());
+        jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms_tr), kJacBlockSize>>>(
+            d_x_tr,
+            d_n_tr,
+            d_nn_tr,
+            tr_ksi1,
+            tr_dksi1,
+            tr_dri1,
+            tr_cosp1,
+            tr_sinp1,
+            tr_dcosp1,
+            tr_dsinp1,
+            tr_ss1,
+            tr_dss1,
+            nm_tr,
+            max_size_tr,
+            params,
+            ws.s_prefactor
+        );
+        CUDA_CHECK(cudaGetLastError());
+        if (cache_tr_A) {
+            if (!hit_tr_A) {
+                std::vector<int> h_row_offset(static_cast<size_t>(nm_tr) + 1, 0);
+                std::vector<int> h_n_tr(static_cast<size_t>(nm_tr));
+                CUDA_CHECK(cudaMemcpy(
+                    h_n_tr.data(),
+                    d_n_tr,
+                    static_cast<size_t>(nm_tr) * sizeof(int),
+                    cudaMemcpyDeviceToHost
+                ));
+                for (int a = 0; a < nm_tr; ++a) {
+                    h_row_offset[static_cast<size_t>(a) + 1] =
+                        h_row_offset[static_cast<size_t>(a)] + h_n_tr[static_cast<size_t>(a)] * 3;
+                }
+                CUDA_CHECK(cudaMemcpy(
+                    tr_row_off,
+                    h_row_offset.data(),
+                    (static_cast<size_t>(nm_tr) + 1) * sizeof(int),
+                    cudaMemcpyHostToDevice
+                ));
+            }
+            ws.tr_A_x = d_x_tr;
+            ws.tr_A_nm = nm_tr;
+            ws.tr_A_max = max_size_tr;
+            ws.tr_A_pmax = pmax;
+        }
+    }
+
+    if (!hit_tr_B) {
+        CUDA_CHECK(cudaMemset(tr_cosp2, 0, cosp_tr_need * sizeof(T)));
+        CUDA_CHECK(cudaMemset(tr_sinp2, 0, cosp_tr_need * sizeof(T)));
+        jac_precompute_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
+            d_x_tr,
+            d_n_tr,
+            d_nn_tr,
+            tr_ksi2,
+            tr_cosp2,
+            tr_sinp2,
+            nm_tr,
+            max_size_tr,
+            params,
+            ws.z_to_idx
+        );
+        CUDA_CHECK(cudaGetLastError());
+        jac_self_scalar_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
+            d_x_tr,
+            d_n_tr,
+            d_nn_tr,
+            tr_ksi2,
+            tr_cosp2,
+            tr_sinp2,
+            tr_ss2,
+            nm_tr,
+            max_size_tr,
+            params,
+            ws.s_prefactor
+        );
+        CUDA_CHECK(cudaGetLastError());
+        if (pack_b) {
+            jac_pack_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
+                d_x_tr,
+                d_n_tr,
+                tr_ksi2,
+                tr_cosp2,
+                tr_sinp2,
+                tr_pack_dist2,
+                tr_pack_z2,
+                tr_pack_ksi2,
+                tr_pack_cos2,
+                tr_pack_sin2,
+                nm_tr,
+                max_size_tr,
+                pmax,
+                fourier_order
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+        if (cache_tr_B) {
+            ws.tr_B_x = d_x_tr;
+            ws.tr_B_nm = nm_tr;
+            ws.tr_B_max = max_size_tr;
+            ws.tr_B_pmax = pmax;
+        }
+    }
+
+    if (compute_energy) {
+        const int n_hot_jt = nm_tr * nm_q * max_size_tr;
+        jac_hot_kernel<<<n_hot_jt, kHotBlockSize>>>(
+            d_x_tr,
+            d_x_q,
+            d_n_tr,
+            d_n_q,
+            d_nn_tr,
+            d_nn_q,
+            tr_row_off,
+            tr_ksi1,
+            tr_dksi1,
+            tr_dri1,
+            tr_cosp1,
+            tr_sinp1,
+            tr_dcosp1,
+            tr_dsinp1,
+            tr_ss1,
+            tr_dss1,
+            ws.ksi2,
+            ws.cosp2,
+            ws.sinp2,
+            ws.ss2,
+            pack_b ? ws.pack_dist2 : nullptr,
+            pack_b ? ws.pack_z2 : nullptr,
+            pack_b ? ws.pack_ksi2 : nullptr,
+            pack_b ? ws.pack_cos2 : nullptr,
+            pack_b ? ws.pack_sin2 : nullptr,
+            d_E,
+            d_alpha_F,
+            nm_tr,
+            nm_q,
+            max_size_tr,
+            max_size_q,
+            d_b_cols,
+            0,
+            2,
+            params,
+            ws.s_prefactor,
+            static_cast<T *>(nullptr)
         );
         CUDA_CHECK(cudaGetLastError());
     }
 
-
-    jac_hot_kernel<<<nm1 * nm2, kHotBlockSize>>>(
-        d_x1,
-        d_x2,
-        d_n1,
-        d_n2,
-        d_nn1,
-        d_nn2,
+    const int n_hot_j = nm_q * nm_tr * max_size_q;
+    jac_hot_kernel<<<n_hot_j, kHotBlockSize>>>(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
         ws.row_offset,
         ws.ksi1,
         ws.dksi1,
@@ -2129,30 +2926,216 @@ void kernel_gaussian_jacobian_cu_impl(
         ws.dsinp1,
         ws.ss1,
         ws.dss1,
-        ws.ksi2,
-        ws.cosp2,
-        ws.sinp2,
-        ws.ss2,
-        pack_b ? ws.pack_dist2 : nullptr,
-        pack_b ? ws.pack_z2 : nullptr,
-        pack_b ? ws.pack_ksi2 : nullptr,
-        pack_b ? ws.pack_cos2 : nullptr,
-        pack_b ? ws.pack_sin2 : nullptr,
-        d_jac_out,
-        nm1,
-        nm2,
-        max_size1,
-        max_size2,
+        tr_ksi2,
+        tr_cosp2,
+        tr_sinp2,
+        tr_ss2,
+        pack_b ? tr_pack_dist2 : nullptr,
+        pack_b ? tr_pack_z2 : nullptr,
+        pack_b ? tr_pack_ksi2 : nullptr,
+        pack_b ? tr_pack_cos2 : nullptr,
+        pack_b ? tr_pack_sin2 : nullptr,
+        d_F,
+        d_alpha_E,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
         d_a_rows,
-        cols_are_coords ? 1 : 0,
+        0,
+        1,
         params,
-        ws.s_prefactor
+        ws.s_prefactor,
+        compute_energy ? d_E : nullptr
     );
     CUDA_CHECK(cudaGetLastError());
+
+    kernel_gaussian_hessian_matvec_fused_cu(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
+        d_coords_tr,
+        d_z_tr,
+        d_alpha_F,
+        d_F,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
+        d_a_rows,
+        d_b_cols,
+        ws.row_offset,
+        ws.ksi1,
+        ws.dksi1,
+        ws.dri1,
+        ws.cosp1,
+        ws.sinp1,
+        ws.dcosp1,
+        ws.dsinp1,
+        ws.ss1,
+        ws.dss1,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        sigma,
+        fourier_order,
+        use_atm,
+        pmax,
+        ws.z_to_idx,
+        ws.s_prefactor
+    );
 }
 
 }  // namespace
 
+void kernel_gaussian_full_matvec_fused_cu(
+    const float *d_x_q,
+    const float *d_x_tr,
+    const int *d_n_q,
+    const int *d_n_tr,
+    const int *d_nn_q,
+    const int *d_nn_tr,
+    const float *d_coords_q,
+    const int *d_z_q,
+    const float *d_coords_tr,
+    const int *d_z_tr,
+    const float *d_alpha_E,
+    const float *d_alpha_F,
+    float *d_E,
+    float *d_F,
+    float sigma,
+    int nm_q,
+    int nm_tr,
+    int max_size_q,
+    int max_size_tr,
+    int d_a_rows,
+    int d_b_cols,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool compute_energy
+) {
+    kernel_gaussian_full_matvec_fused_cu_impl(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
+        d_coords_q,
+        d_z_q,
+        d_coords_tr,
+        d_z_tr,
+        d_alpha_E,
+        d_alpha_F,
+        d_E,
+        d_F,
+        sigma,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
+        d_a_rows,
+        d_b_cols,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        compute_energy
+    );
+}
+
+void kernel_gaussian_full_matvec_fused_cu(
+    const double *d_x_q,
+    const double *d_x_tr,
+    const int *d_n_q,
+    const int *d_n_tr,
+    const int *d_nn_q,
+    const int *d_nn_tr,
+    const double *d_coords_q,
+    const int *d_z_q,
+    const double *d_coords_tr,
+    const int *d_z_tr,
+    const double *d_alpha_E,
+    const double *d_alpha_F,
+    double *d_E,
+    double *d_F,
+    double sigma,
+    int nm_q,
+    int nm_tr,
+    int max_size_q,
+    int max_size_tr,
+    int d_a_rows,
+    int d_b_cols,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool compute_energy
+) {
+    kernel_gaussian_full_matvec_fused_cu_impl(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
+        d_coords_q,
+        d_z_q,
+        d_coords_tr,
+        d_z_tr,
+        d_alpha_E,
+        d_alpha_F,
+        d_E,
+        d_F,
+        sigma,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
+        d_a_rows,
+        d_b_cols,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        compute_energy
+    );
+}
+
 void kernel_gaussian_jacobian_cu(
     const float *d_x1,
     const float *d_x2,
@@ -2190,6 +3173,7 @@ void kernel_gaussian_jacobian_cu(
         d_coords1,
         d_z1,
         d_jac_out,
+        /*d_alpha=*/static_cast<const float *>(nullptr),
         sigma,
         nm1,
         nm2,
@@ -2206,7 +3190,8 @@ void kernel_gaussian_jacobian_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*cols_are_coords=*/false
+        /*cols_are_coords=*/false,
+        /*matvec_mode=*/0
     );
 }
 
@@ -2247,6 +3232,7 @@ void kernel_gaussian_jacobian_cu(
         d_coords1,
         d_z1,
         d_jac_out,
+        /*d_alpha=*/static_cast<const double *>(nullptr),
         sigma,
         nm1,
         nm2,
@@ -2263,7 +3249,8 @@ void kernel_gaussian_jacobian_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*cols_are_coords=*/false
+        /*cols_are_coords=*/false,
+        /*matvec_mode=*/0
     );
 }
 
@@ -2304,6 +3291,7 @@ void kernel_gaussian_jacobian_t_cu(
         d_coords1,
         d_z1,
         d_jac_out,
+        /*d_alpha=*/static_cast<const float *>(nullptr),
         sigma,
         nm1,
         nm2,
@@ -2320,7 +3308,8 @@ void kernel_gaussian_jacobian_t_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*cols_are_coords=*/true
+        /*cols_are_coords=*/true,
+        /*matvec_mode=*/0
     );
 }
 
@@ -2361,6 +3350,7 @@ void kernel_gaussian_jacobian_t_cu(
         d_coords1,
         d_z1,
         d_jac_out,
+        /*d_alpha=*/static_cast<const double *>(nullptr),
         sigma,
         nm1,
         nm2,
@@ -2377,7 +3367,252 @@ void kernel_gaussian_jacobian_t_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*cols_are_coords=*/true
+        /*cols_are_coords=*/true,
+        /*matvec_mode=*/0
+    );
+}
+
+void kernel_gaussian_jacobian_matvec_cu(
+    const float *d_x1,
+    const float *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const float *d_coords1,
+    const int *d_z1,
+    const float *d_alpha_E,
+    float *d_F_out,
+    float *d_E_out,
+    float sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    int d_a_rows,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    kernel_gaussian_jacobian_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_coords1,
+        d_z1,
+        d_F_out,
+        d_alpha_E,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        d_a_rows,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        /*cols_are_coords=*/false,
+        /*matvec_mode=*/1,
+        d_E_out
+    );
+}
+
+void kernel_gaussian_jacobian_matvec_cu(
+    const double *d_x1,
+    const double *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const double *d_coords1,
+    const int *d_z1,
+    const double *d_alpha_E,
+    double *d_F_out,
+    double *d_E_out,
+    double sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    int d_a_rows,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    kernel_gaussian_jacobian_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_coords1,
+        d_z1,
+        d_F_out,
+        d_alpha_E,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        d_a_rows,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        /*cols_are_coords=*/false,
+        /*matvec_mode=*/1,
+        d_E_out
+    );
+}
+
+void kernel_gaussian_jacobian_t_matvec_cu(
+    const float *d_x1,
+    const float *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const float *d_coords1,
+    const int *d_z1,
+    const float *d_alpha_F,
+    float *d_E_out,
+    float sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    int d_a_rows,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    kernel_gaussian_jacobian_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_coords1,
+        d_z1,
+        d_E_out,
+        d_alpha_F,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        d_a_rows,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        /*cols_are_coords=*/false,
+        /*matvec_mode=*/2
+    );
+}
+
+void kernel_gaussian_jacobian_t_matvec_cu(
+    const double *d_x1,
+    const double *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const double *d_coords1,
+    const int *d_z1,
+    const double *d_alpha_F,
+    double *d_E_out,
+    double sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    int d_a_rows,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    kernel_gaussian_jacobian_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_coords1,
+        d_z1,
+        d_E_out,
+        d_alpha_F,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        d_a_rows,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        /*cols_are_coords=*/false,
+        /*matvec_mode=*/2
     );
 }
 

@@ -67,6 +67,11 @@ class FCHL18KRRModel(BaseModel):
     >>> model2 = FCHL18KRRModel.load("fchl18_model.npz")
     """
 
+    # Trained dual coefficients. Annotated explicitly so that the mixed
+    # return types of the solvers (np.linalg.solve vs.
+    # kernelmath.cho_solve_rfp) do not widen the inferred dtype union.
+    _alpha: NDArray[np.float64]
+
     def __init__(
         self,
         sigma: float = 2.5,
@@ -128,7 +133,9 @@ class FCHL18KRRModel(BaseModel):
             # Use kernelmath Cholesky for consistency; fall back to np.linalg.solve on failure
             K_tr[np.diag_indices_from(K_tr)] += self.l2
             self._y_train = energies
-            self._alpha = np.linalg.solve(K_tr, energies)
+            # np.linalg.solve is stubbed as returning dtype[floating[Any]];
+            # asarray is a no-op here but fixes up the declared dtype.
+            self._alpha = np.asarray(np.linalg.solve(K_tr, energies), dtype=np.float64)
 
         elif mode == "force_only":
             if forces is None:
@@ -218,28 +225,44 @@ class FCHL18KRRModel(BaseModel):
             F_pred = np.concatenate(F_parts)
 
         elif mode == "force_only":
-            K_hess = fchl18_kernel.kernel_gaussian_hessian(
-                coords_te, z_te, self._R_tr, self._Z_tr, sigma=self.sigma, **kp
+            F_block = fchl18_kernel.kernel_gaussian_hessian_matvec(
+                coords_te, z_te, self._R_tr, self._Z_tr, alpha, sigma=self.sigma, **kp
             )
-            F_pred = K_hess @ alpha  # flat (sum(N_te)*3,)
+            F_pred = F_block  # flat (sum(N_te)*3,)
 
-            # Energy via Jacobian-transpose kernel: K_jt (n_test, n_train*naq)
-            x_te, n_te, nn_te = fchl18_repr.generate(
-                coords_te, z_te, max_size=self.max_size, cut_distance=cut_distance
-            )
-            K_jt = fchl18_kernel.kernel_gaussian_jacobian_t(
-                self._R_tr, self._Z_tr, x_te, n_te, nn_te, sigma=self.sigma, **kp
-            )
-            E_pred = K_jt @ alpha
+            if compute_energy:
+                x_te, n_te, nn_te = fchl18_repr.generate(
+                    coords_te, z_te, max_size=self.max_size, cut_distance=cut_distance
+                )
+                E_pred = fchl18_kernel.kernel_gaussian_jacobian_t_matvec(
+                    self._R_tr,
+                    self._Z_tr,
+                    x_te,
+                    n_te,
+                    nn_te,
+                    alpha,
+                    sigma=self.sigma,
+                    **kp,
+                )
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
 
         else:  # energy_and_force
-            K_full = fchl18_kernel.kernel_gaussian_full(
-                coords_te, z_te, self._R_tr, self._Z_tr, sigma=self.sigma, **kp
+            alpha_E = alpha[: self._n_train]
+            alpha_F = alpha[self._n_train :]
+            E_pred, F_block = fchl18_kernel.kernel_gaussian_full_matvec(
+                coords_te,
+                z_te,
+                self._R_tr,
+                self._Z_tr,
+                alpha_E,
+                alpha_F,
+                sigma=self.sigma,
+                compute_energy=compute_energy,
+                **kp,
             )
-            y_pred = K_full @ alpha
-            E_pred = y_pred[:n_test]
             # Negate back: training used -F as labels. Flat (sum(N_te)*3,).
-            F_pred = -y_pred[n_test:]
+            F_pred = -F_block
 
         return E_pred, F_pred
 

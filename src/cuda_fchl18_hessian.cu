@@ -37,9 +37,45 @@ constexpr int kHessSelfBlockSize = 128;
 constexpr int kHessBlockSize = 128;
 // Shared scratch for per-atom-pair gradients / dV vectors.
 constexpr int kHessMaxNa3 = 384;  // up to 128 atoms per molecule
-// Cap on shared Hij tile (float/double elements). Above this, Hij is
-// accumulated with global atomics after coeff is known (two-pass).
-constexpr int kHessSharedHMax = 4096;
+// Cap on shared Hij tile (elements). 8192 covers square molecules up to
+// 30 atoms (90*90=8100). Above this, or if the tile would exceed the default
+// 48 KiB dynamic-shared limit, Hij falls back to global atomics.
+constexpr int kHessSharedHMax = 8192;
+constexpr size_t kHessMaxShmemBytes = 48 * 1024;
+
+template <typename T>
+__host__ __device__ inline int hess_shared_h_cap(int strideA, int strideB) {
+    const int n = strideA * strideB;
+    if (n <= 0 || n > kHessSharedHMax) {
+        return 0;
+    }
+    const size_t bytes =
+        sizeof(T) * static_cast<size_t>(2 * strideA + 2 * strideB + n + 1);
+    if (bytes > kHessMaxShmemBytes) {
+        return 0;
+    }
+    return n;
+}
+
+// Write H[row,col] into a dense matrix, or F[row] += H[row,col] * alpha_F[col].
+template <typename T>
+__device__ inline void hess_accum(
+    T *hess_out,
+    const T *alpha_B,
+    long long row0,
+    long long col0,
+    int amu,
+    int bnu,
+    long long d_b_cols,
+    int matvec_mode,
+    T value
+) {
+    if (matvec_mode != 0) {
+        atomicAdd(hess_out + (row0 + amu), value * alpha_B[bnu]);
+    } else {
+        atomicAdd(hess_out + (row0 + amu) * d_b_cols + (col0 + bnu), value);
+    }
+}
 
 // Flat index into the CPU-layout Fourier arrays: [p][m][neigh].
 __device__ inline long long hess_fourier_idx(int p, int m, int neigh, int order, int max_size) {
@@ -59,6 +95,7 @@ struct HessParams {
     int fourier_order;
     int pmax;
     int use_atm;
+    int three_body_weight_mode;
 };
 
 // ---------------------------------------------------------------------------
@@ -198,6 +235,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
     int order,
     const int *z_to_idx,
     bool use_atm,
+    int three_body_weight_mode,
     int centre_atom_idx,
     int na3,
     const int *nbr_atom_idx,
@@ -214,6 +252,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
     const T *xc = atom_chan + 2 * max_size;
     const T *yc = atom_chan + 3 * max_size;
     const T *zc = atom_chan + 4 * max_size;
+    const int zi = static_cast<int>(z_chan[0]);
 
     for (int j = 1; j < n_neigh; ++j) {
         const T dj = dist_chan[j];
@@ -282,10 +321,19 @@ __device__ void hess_compute_threebody_fourier_and_grad(
                 continue;
             }
 
-            const T dijk = dj * dk * di;
-            const T dijk_p = fast_pow(dijk, three_body_power);
+            const int zk = static_cast<int>(z_chan[k]);
+            const int zj = static_cast<int>(z_chan[j]);
+            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
+                continue;
+            }
+            const T r0_ij = static_cast<T>(pair_bond_r0(zi, zj));
+            const T r0_ik = static_cast<T>(pair_bond_r0(zi, zk));
+            const T r0_jk = static_cast<T>(pair_bond_r0(zj, zk));
+            const auto radial = three_body_radial_weight(
+                three_body_weight_mode, dj, dk, di, r0_ij, r0_ik, r0_jk, three_body_power
+            );
             const T cut_prod = cutj * cutk * cut_jk;
-            const T ksi3 = cut_prod * atm / dijk_p;
+            const T ksi3 = cut_prod * atm * radial.w;
             if (ksi3 == zero) {
                 continue;
             }
@@ -324,23 +372,26 @@ __device__ void hess_compute_threebody_fourier_and_grad(
                 }
             }
 
-            const T fcp_j_over_p = (cutj > zero) ? (fcp_j * cutk * cut_jk) / dijk_p : zero;
-            const T fcp_k_over_p = (cutk > zero) ? (fcp_k * cutj * cut_jk) / dijk_p : zero;
-            const T fcp_jk_over_p = (cut_jk > zero) ? (fcp_jk * cutj * cutk) / dijk_p : zero;
-            const T beta3_ksi3_inv = three_body_power / dijk_p * cut_prod;
+            const T fcp_j_w = (cutj > zero) ? (fcp_j * cutk * cut_jk) * radial.w : zero;
+            const T fcp_k_w = (cutk > zero) ? (fcp_k * cutj * cut_jk) * radial.w : zero;
+            const T fcp_jk_w = (cut_jk > zero) ? (fcp_jk * cutj * cutk) * radial.w : zero;
+            const T cut_atm_w = cut_prod * atm * radial.w;
 
             T gksi3[3][3] = {};
             for (int mu = 0; mu < 3; ++mu) {
-                gksi3[0][mu] += atm * (-ui_j[mu] * fcp_j_over_p + -ui_k[mu] * fcp_k_over_p);
-                gksi3[1][mu] += atm * (ui_j[mu] * fcp_j_over_p + (-ukj[mu]) * fcp_jk_over_p);
-                gksi3[2][mu] += atm * (ui_k[mu] * fcp_k_over_p + (ukj[mu]) * fcp_jk_over_p);
+                gksi3[0][mu] += atm * (-ui_j[mu] * fcp_j_w + -ui_k[mu] * fcp_k_w);
+                gksi3[1][mu] += atm * (ui_j[mu] * fcp_j_w + (-ukj[mu]) * fcp_jk_w);
+                gksi3[2][mu] += atm * (ui_k[mu] * fcp_k_w + (ukj[mu]) * fcp_jk_w);
 
-                gksi3[0][mu] -= atm * beta3_ksi3_inv * (-ui_j[mu] * inv_dj + -ui_k[mu] * inv_dk);
-                gksi3[1][mu] -= atm * beta3_ksi3_inv * (ui_j[mu] * inv_dj + (-ukj[mu]) * inv_di);
-                gksi3[2][mu] -= atm * beta3_ksi3_inv * (ui_k[mu] * inv_dk + (ukj[mu]) * inv_di);
+                gksi3[0][mu] +=
+                    cut_atm_w * (radial.dlog_dj * (-ui_j[mu]) + radial.dlog_dk * (-ui_k[mu]));
+                gksi3[1][mu] +=
+                    cut_atm_w * (radial.dlog_dj * (ui_j[mu]) + radial.dlog_di * (-ukj[mu]));
+                gksi3[2][mu] +=
+                    cut_atm_w * (radial.dlog_dk * (ui_k[mu]) + radial.dlog_di * (ukj[mu]));
 
                 if (use_atm) {
-                    const T scale = cut_prod / dijk_p;
+                    const T scale = cut_prod * radial.w;
                     for (int la = 0; la < 3; ++la) {
                         gksi3[la][mu] += scale * (datm_dcos_i * dcos_i_dR[la][mu] +
                                                   datm_dcos_j * dcos_j_dR[la][mu] +
@@ -349,11 +400,6 @@ __device__ void hess_compute_threebody_fourier_and_grad(
                 }
             }
 
-            const int zk = static_cast<int>(z_chan[k]);
-            const int zj = static_cast<int>(z_chan[j]);
-            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
-                continue;
-            }
             const int pj = z_to_idx[zk];
             const int pk = z_to_idx[zj];
             if (pj < 0 || pk < 0) {
@@ -559,19 +605,21 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
     const T *ss2,
     const T *dss2,
     T *hess_out,
+    const T *alpha_F,
     int nm1,
     int nm2,
     int max_size1,
     int max_size2,
     long long d_b_cols,
     int lower_triangle,
+    int matvec_mode,
     HessParams<T> params,
     const T *s_prefactor
 ) {
     extern __shared__ unsigned char hess_smem[];
     const int strideA = 3 * max_size1;
     const int strideB = 3 * max_size2;
-    const int h_cap = (strideA * strideB <= kHessSharedHMax) ? (strideA * strideB) : 0;
+    const int h_cap = hess_shared_h_cap<T>(strideA, strideB);
     T *s_dsA = reinterpret_cast<T *>(hess_smem);
     T *s_dsB = s_dsA + strideA;
     T *s_dVA = s_dsB + strideB;
@@ -659,6 +707,7 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
     const T *sin_j = sinp2 + static_cast<long long>(fj) * fstride2;
     const T *dcos_j = dcosp2 + static_cast<long long>(fj) * fstride2 * na3_max2;
     const T *dsin_j = dsinp2 + static_cast<long long>(fj) * fstride2 * na3_max2;
+    const T *alpha_B = (matvec_mode != 0) ? (alpha_F + col0) : nullptr;
 
     for (int amu = tid; amu < na3A; amu += nthreads) {
         s_dsA[amu] = Math<T>::zero();
@@ -848,15 +897,38 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
     const T coeff_g = coeff * params.inv_sigma2;
 
     if (use_sh_H) {
-        for (int flat = tid; flat < n_entries; flat += nthreads) {
-            const int amu = flat / na3B;
-            const int bnu = flat - amu * na3B;
-            const T gA = -dsii[amu] + T(2) * s_dsA[amu];
-            const T gB = -dsjj[bnu] + T(2) * s_dsB[bnu];
-            atomicAdd(
-                hess_out + (row0 + amu) * d_b_cols + (col0 + bnu),
-                coeff_g * gA * gB + coeff_hess * s_H[flat]
-            );
+        if (matvec_mode != 0) {
+            // Contract the shared Hij tile with alpha_B in-block so each
+            // block issues na3A atomics instead of na3A*na3B.
+            for (int amu = tid; amu < na3A; amu += nthreads) {
+                const T gA = -dsii[amu] + T(2) * s_dsA[amu];
+                T acc = Math<T>::zero();
+                for (int bnu = 0; bnu < na3B; ++bnu) {
+                    const T gB = -dsjj[bnu] + T(2) * s_dsB[bnu];
+                    const T hval =
+                        coeff_g * gA * gB + coeff_hess * s_H[amu * na3B + bnu];
+                    acc += hval * alpha_B[bnu];
+                }
+                atomicAdd(hess_out + (row0 + amu), acc);
+            }
+        } else {
+            for (int flat = tid; flat < n_entries; flat += nthreads) {
+                const int amu = flat / na3B;
+                const int bnu = flat - amu * na3B;
+                const T gA = -dsii[amu] + T(2) * s_dsA[amu];
+                const T gB = -dsjj[bnu] + T(2) * s_dsB[bnu];
+                hess_accum(
+                    hess_out,
+                    alpha_B,
+                    row0,
+                    col0,
+                    amu,
+                    bnu,
+                    d_b_cols,
+                    matvec_mode,
+                    coeff_g * gA * gB + coeff_hess * s_H[flat]
+                );
+            }
         }
         return;
     }
@@ -866,7 +938,9 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
         const int bnu = flat - amu * na3B;
         const T gA = -dsii[amu] + T(2) * s_dsA[amu];
         const T gB = -dsjj[bnu] + T(2) * s_dsB[bnu];
-        atomicAdd(hess_out + (row0 + amu) * d_b_cols + (col0 + bnu), coeff_g * gA * gB);
+        hess_accum(
+            hess_out, alpha_B, row0, col0, amu, bnu, d_b_cols, matvec_mode, coeff_g * gA * gB
+        );
     }
     __syncthreads();
 
@@ -1006,8 +1080,9 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
                 const T d2V = dksi_A * dksi_B * dist_scale + dang_AB * ang_scale;
                 const T hij = dG_drp * dri_A * s_dVB[bnu] + dG_drq * dri_B * s_dVA[amu] +
                               d2G_drpq * dri_A * dri_B * V + G * d2V;
-                atomicAdd(
-                    hess_out + (row0 + amu) * d_b_cols + (col0 + bnu), coeff_hess * hij
+                hess_accum(
+                    hess_out, alpha_B, row0, col0, amu, bnu, d_b_cols, matvec_mode,
+                    coeff_hess * hij
                 );
             }
             __syncthreads();
@@ -1182,6 +1257,7 @@ __global__ void hess_precompute_kernel(
         params.fourier_order,
         z_to_idx,
         params.use_atm != 0,
+        params.three_body_weight_mode,
         i,
         na3,
         nbr,
@@ -1312,6 +1388,11 @@ template <typename T>
 struct HessWorkspace {
     HessSideBuffers<T> a;
     HessSideBuffers<T> b;
+    HessSideBuffers<T> b_train;
+    const T *b_train_x = nullptr;
+    int b_train_nm = 0;
+    int b_train_max = 0;
+    int b_train_pmax = -1;
     T *s_prefactor = nullptr;
     size_t s_prefactor_cap = 0;
     int *z_present = nullptr;
@@ -1422,6 +1503,12 @@ template <typename T>
 void hess_upload_offsets(
     HessSideBuffers<T> &buf, const int *d_n, int nm, int expected_dim, const char *what
 ) {
+    if (nm == 1) {
+        int h_offset[2] = {0, expected_dim};
+        ensure_capacity(&buf.offset, &buf.offset_cap, 2);
+        CUDA_CHECK(cudaMemcpy(buf.offset, h_offset, 2 * sizeof(int), cudaMemcpyHostToDevice));
+        return;
+    }
     std::vector<int> h_n(static_cast<size_t>(nm));
     CUDA_CHECK(cudaMemcpy(
         h_n.data(), d_n, static_cast<size_t>(nm) * sizeof(int), cudaMemcpyDeviceToHost
@@ -1456,6 +1543,7 @@ void kernel_gaussian_hessian_cu_impl(
     const T *d_coords2,
     const int *d_z2,
     T *d_hess_out,
+    const T *d_alpha_F,
     T sigma,
     int nm1,
     int nm2,
@@ -1473,7 +1561,8 @@ void kernel_gaussian_hessian_cu_impl(
     T cut_distance,
     int fourier_order,
     bool use_atm,
-    bool lower_triangle
+    bool lower_triangle,
+    bool matvec_mode
 ) {
     if (fourier_order <= 0 || fourier_order > kMaxFourierOrder) {
         throw std::invalid_argument("fourier_order must be in [1, 16] for cuda_fchl18_kernel");
@@ -1499,44 +1588,61 @@ void kernel_gaussian_hessian_cu_impl(
     if (ws.z_to_idx == nullptr) {
         CUDA_CHECK(cudaMalloc(&ws.z_to_idx, 256 * sizeof(int)));
     }
-    CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
 
-    const size_t n_atoms1 = static_cast<size_t>(nm1) * max_size1;
-    const size_t n_atoms2 = static_cast<size_t>(nm2) * max_size2;
-    const int grid1 =
-        static_cast<int>((n_atoms1 + kHessPrecomputeBlockSize - 1) / kHessPrecomputeBlockSize);
-    const int grid2 =
-        static_cast<int>((n_atoms2 + kHessPrecomputeBlockSize - 1) / kHessPrecomputeBlockSize);
+    const bool train_hit = !lower_triangle && d_x2 == ws.b_train_x && nm2 == ws.b_train_nm &&
+                           max_size2 == ws.b_train_max;
+    int pmax = 0;
+    if (train_hit) {
+        pmax = ws.b_train_pmax;
+    } else {
+        CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
 
-    hess_mark_elements_kernel<<<grid1, kHessPrecomputeBlockSize>>>(
-        d_x1, d_n1, d_nn1, nm1, max_size1, ws.z_present
-    );
-    CUDA_CHECK(cudaGetLastError());
-    hess_mark_elements_kernel<<<grid2, kHessPrecomputeBlockSize>>>(
-        d_x2, d_n2, d_nn2, nm2, max_size2, ws.z_present
-    );
-    CUDA_CHECK(cudaGetLastError());
+        const size_t n_atoms1 = static_cast<size_t>(nm1) * max_size1;
+        const size_t n_atoms2 = static_cast<size_t>(nm2) * max_size2;
+        const int grid1 =
+            static_cast<int>((n_atoms1 + kHessPrecomputeBlockSize - 1) / kHessPrecomputeBlockSize);
+        const int grid2 =
+            static_cast<int>((n_atoms2 + kHessPrecomputeBlockSize - 1) / kHessPrecomputeBlockSize);
 
-    int h_z_present[256];
-    CUDA_CHECK(cudaMemcpy(h_z_present, ws.z_present, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+        hess_mark_elements_kernel<<<grid1, kHessPrecomputeBlockSize>>>(
+            d_x1, d_n1, d_nn1, nm1, max_size1, ws.z_present
+        );
+        CUDA_CHECK(cudaGetLastError());
+        hess_mark_elements_kernel<<<grid2, kHessPrecomputeBlockSize>>>(
+            d_x2, d_n2, d_nn2, nm2, max_size2, ws.z_present
+        );
+        CUDA_CHECK(cudaGetLastError());
 
-    int h_z_to_idx[256];
-    const int pmax = build_element_map_from_flags(h_z_present, h_z_to_idx);
+        int h_z_present[256];
+        CUDA_CHECK(cudaMemcpy(h_z_present, ws.z_present, 256 * sizeof(int), cudaMemcpyDeviceToHost));
 
-    const size_t out_n = static_cast<size_t>(d_a_rows) * static_cast<size_t>(d_b_cols);
-    CUDA_CHECK(cudaMemset(d_hess_out, 0, out_n * sizeof(T)));
+        int h_z_to_idx[256];
+        pmax = build_element_map_from_flags(h_z_present, h_z_to_idx);
+        if (pmax > 0 && pmax <= kMaxElements) {
+            CUDA_CHECK(
+                cudaMemcpy(ws.z_to_idx, h_z_to_idx, 256 * sizeof(int), cudaMemcpyHostToDevice)
+            );
+        }
+    }
+
     if (pmax == 0) {
         return;
     }
     if (pmax > kMaxElements) {
         throw std::invalid_argument("too many distinct elements for cuda_fchl18_kernel");
     }
-    CUDA_CHECK(cudaMemcpy(ws.z_to_idx, h_z_to_idx, 256 * sizeof(int), cudaMemcpyHostToDevice));
+
+    const size_t out_n = matvec_mode ? static_cast<size_t>(d_a_rows)
+                                    : static_cast<size_t>(d_a_rows) * static_cast<size_t>(d_b_cols);
+    if (!matvec_mode) {
+        CUDA_CHECK(cudaMemset(d_hess_out, 0, out_n * sizeof(T)));
+    }
 
     HessParams<T> params{};
     params.two_body_width = two_body_width;
     params.two_body_power = two_body_power;
     params.three_body_power = three_body_power;
+    params.three_body_weight_mode = get_fchl18_three_body_weight_mode();
     params.cut_start = cut_start;
     params.cut_distance = cut_distance;
     params.true_distance_scale = two_body_scaling / static_cast<T>(16);
@@ -1563,7 +1669,6 @@ void kernel_gaussian_hessian_cu_impl(
     ));
 
     hess_upload_offsets(ws.a, d_n1, nm1, d_a_rows, "hessian output rows must equal 3 * sum(n1)");
-    hess_upload_offsets(ws.b, d_n2, nm2, d_b_cols, "hessian output cols must equal 3 * sum(n2)");
 
     hess_prepare_side(
         ws.a,
@@ -1580,21 +1685,53 @@ void kernel_gaussian_hessian_cu_impl(
         ws.z_to_idx,
         ws.s_prefactor
     );
-    hess_prepare_side(
-        ws.b,
-        d_x2,
-        d_n2,
-        d_nn2,
-        d_coords2,
-        d_z2,
-        nm2,
-        max_size2,
-        pmax,
-        fourier_order,
-        params,
-        ws.z_to_idx,
-        ws.s_prefactor
-    );
+    HessSideBuffers<T> *b_side = &ws.b;
+    if (!lower_triangle) {
+        if (!train_hit) {
+            hess_upload_offsets(
+                ws.b_train, d_n2, nm2, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
+            );
+            hess_prepare_side(
+                ws.b_train,
+                d_x2,
+                d_n2,
+                d_nn2,
+                d_coords2,
+                d_z2,
+                nm2,
+                max_size2,
+                pmax,
+                fourier_order,
+                params,
+                ws.z_to_idx,
+                ws.s_prefactor
+            );
+            ws.b_train_x = d_x2;
+            ws.b_train_nm = nm2;
+            ws.b_train_max = max_size2;
+            ws.b_train_pmax = pmax;
+        }
+        b_side = &ws.b_train;
+    } else {
+        hess_upload_offsets(
+            ws.b, d_n2, nm2, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
+        );
+        hess_prepare_side(
+            ws.b,
+            d_x2,
+            d_n2,
+            d_nn2,
+            d_coords2,
+            d_z2,
+            nm2,
+            max_size2,
+            pmax,
+            fourier_order,
+            params,
+            ws.z_to_idx,
+            ws.s_prefactor
+        );
+    }
 
     const int n_ij_slots = max_size1 * max_size2;
     const int n_mol_pairs =
@@ -1602,8 +1739,7 @@ void kernel_gaussian_hessian_cu_impl(
     const int n_hot_blocks = n_mol_pairs * n_ij_slots;
     const int strideA = 3 * max_size1;
     const int strideB = 3 * max_size2;
-    const int h_cap =
-        (strideA * strideB <= kHessSharedHMax) ? (strideA * strideB) : 0;
+    const int h_cap = hess_shared_h_cap<T>(strideA, strideB);
     const size_t hot_shmem =
         sizeof(T) * (static_cast<size_t>(2 * strideA + 2 * strideB + h_cap + 1));
     hess_hot_kernel<<<n_hot_blocks, kHessBlockSize, hot_shmem>>>(
@@ -1614,7 +1750,7 @@ void kernel_gaussian_hessian_cu_impl(
         d_nn1,
         d_nn2,
         ws.a.offset,
-        ws.b.offset,
+        b_side->offset,
         ws.a.ksi,
         ws.a.dksi,
         ws.a.dri,
@@ -1624,28 +1760,30 @@ void kernel_gaussian_hessian_cu_impl(
         ws.a.dsinp,
         ws.a.ss,
         ws.a.dss,
-        ws.b.ksi,
-        ws.b.dksi,
-        ws.b.dri,
-        ws.b.cosp,
-        ws.b.sinp,
-        ws.b.dcosp,
-        ws.b.dsinp,
-        ws.b.ss,
-        ws.b.dss,
+        b_side->ksi,
+        b_side->dksi,
+        b_side->dri,
+        b_side->cosp,
+        b_side->sinp,
+        b_side->dcosp,
+        b_side->dsinp,
+        b_side->ss,
+        b_side->dss,
         d_hess_out,
+        d_alpha_F,
         nm1,
         nm2,
         max_size1,
         max_size2,
         static_cast<long long>(d_b_cols),
         lower_triangle ? 1 : 0,
+        matvec_mode ? 1 : 0,
         params,
         ws.s_prefactor
     );
     CUDA_CHECK(cudaGetLastError());
 
-    if (lower_triangle) {
+    if (lower_triangle && !matvec_mode) {
         hess_symm_finalize_kernel<<<n_mol_pairs, kHessBlockSize>>>(
             d_hess_out,
             ws.a.offset,
@@ -1655,6 +1793,211 @@ void kernel_gaussian_hessian_cu_impl(
         );
         CUDA_CHECK(cudaGetLastError());
     }
+}
+
+// Fused full_matvec: train-B prepare + hot launch using external query-A buffers
+// (already filled by the jacobian precompute path).
+template <typename T>
+void hess_full_matvec_fused_launch(
+    const T *d_x_q,
+    const T *d_x_tr,
+    const int *d_n_q,
+    const int *d_n_tr,
+    const int *d_nn_q,
+    const int *d_nn_tr,
+    const T *d_coords_tr,
+    const int *d_z_tr,
+    const T *d_alpha_F,
+    T *d_F_out,
+    int nm_q,
+    int nm_tr,
+    int max_size_q,
+    int max_size_tr,
+    int d_a_rows,
+    int d_b_cols,
+    const int *d_row_offset_q,
+    const T *d_ksi_q,
+    const T *d_dksi_q,
+    const T *d_dri_q,
+    const T *d_cosp_q,
+    const T *d_sinp_q,
+    const T *d_dcosp_q,
+    const T *d_dsinp_q,
+    const T *d_ss_q,
+    const T *d_dss_q,
+    int pmax,
+    int fourier_order,
+    const HessParams<T> &params,
+    const T *d_s_prefactor,
+    const int *d_z_to_idx
+) {
+    HessWorkspace<T> &ws = hess_workspace<T>();
+
+    const bool train_hit = d_x_tr == ws.b_train_x && nm_tr == ws.b_train_nm &&
+                           max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax;
+    if (!train_hit) {
+        hess_upload_offsets(
+            ws.b_train, d_n_tr, nm_tr, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
+        );
+        hess_prepare_side(
+            ws.b_train,
+            d_x_tr,
+            d_n_tr,
+            d_nn_tr,
+            d_coords_tr,
+            d_z_tr,
+            nm_tr,
+            max_size_tr,
+            pmax,
+            fourier_order,
+            params,
+            d_z_to_idx,
+            d_s_prefactor
+        );
+        ws.b_train_x = d_x_tr;
+        ws.b_train_nm = nm_tr;
+        ws.b_train_max = max_size_tr;
+        ws.b_train_pmax = pmax;
+    }
+
+    const int n_ij_slots = max_size_q * max_size_tr;
+    const int n_hot_blocks = nm_q * nm_tr * n_ij_slots;
+    const int strideA = 3 * max_size_q;
+    const int strideB = 3 * max_size_tr;
+    const int h_cap = hess_shared_h_cap<T>(strideA, strideB);
+    const size_t hot_shmem =
+        sizeof(T) * (static_cast<size_t>(2 * strideA + 2 * strideB + h_cap + 1));
+    hess_hot_kernel<<<n_hot_blocks, kHessBlockSize, hot_shmem>>>(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
+        d_row_offset_q,
+        ws.b_train.offset,
+        d_ksi_q,
+        d_dksi_q,
+        d_dri_q,
+        d_cosp_q,
+        d_sinp_q,
+        d_dcosp_q,
+        d_dsinp_q,
+        d_ss_q,
+        d_dss_q,
+        ws.b_train.ksi,
+        ws.b_train.dksi,
+        ws.b_train.dri,
+        ws.b_train.cosp,
+        ws.b_train.sinp,
+        ws.b_train.dcosp,
+        ws.b_train.dsinp,
+        ws.b_train.ss,
+        ws.b_train.dss,
+        d_F_out,
+        d_alpha_F,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
+        static_cast<long long>(d_b_cols),
+        0,
+        1,
+        params,
+        d_s_prefactor
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+template <typename T>
+void kernel_gaussian_hessian_matvec_fused_cu_impl(
+    const T *d_x_q,
+    const T *d_x_tr,
+    const int *d_n_q,
+    const int *d_n_tr,
+    const int *d_nn_q,
+    const int *d_nn_tr,
+    const T *d_coords_tr,
+    const int *d_z_tr,
+    const T *d_alpha_F,
+    T *d_F_out,
+    int nm_q,
+    int nm_tr,
+    int max_size_q,
+    int max_size_tr,
+    int d_a_rows,
+    int d_b_cols,
+    const int *d_row_offset_q,
+    const T *d_ksi_q,
+    const T *d_dksi_q,
+    const T *d_dri_q,
+    const T *d_cosp_q,
+    const T *d_sinp_q,
+    const T *d_dcosp_q,
+    const T *d_dsinp_q,
+    const T *d_ss_q,
+    const T *d_dss_q,
+    T two_body_scaling,
+    T two_body_width,
+    T two_body_power,
+    T three_body_scaling,
+    T three_body_width,
+    T three_body_power,
+    T cut_start,
+    T cut_distance,
+    T sigma,
+    int fourier_order,
+    bool use_atm,
+    int pmax,
+    const int *d_z_to_idx,
+    const T *d_s_prefactor
+) {
+    HessParams<T> params{};
+    params.two_body_width = two_body_width;
+    params.two_body_power = two_body_power;
+    params.three_body_power = three_body_power;
+    params.three_body_weight_mode = get_fchl18_three_body_weight_mode();
+    params.cut_start = cut_start;
+    params.cut_distance = cut_distance;
+    params.true_distance_scale = two_body_scaling / static_cast<T>(16);
+    params.true_angular_scale = three_body_scaling / static_cast<T>(std::sqrt(8.0));
+    params.inv_sigma2 = static_cast<T>(0.5) / (sigma * sigma);
+    params.fourier_order = fourier_order;
+    params.pmax = pmax;
+    params.use_atm = use_atm ? 1 : 0;
+    hess_full_matvec_fused_launch(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
+        d_coords_tr,
+        d_z_tr,
+        d_alpha_F,
+        d_F_out,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
+        d_a_rows,
+        d_b_cols,
+        d_row_offset_q,
+        d_ksi_q,
+        d_dksi_q,
+        d_dri_q,
+        d_cosp_q,
+        d_sinp_q,
+        d_dcosp_q,
+        d_dsinp_q,
+        d_ss_q,
+        d_dss_q,
+        pmax,
+        fourier_order,
+        params,
+        d_s_prefactor,
+        d_z_to_idx
+    );
 }
 
 }  // namespace
@@ -1701,6 +2044,7 @@ void kernel_gaussian_hessian_cu(
         d_coords2,
         d_z2,
         d_hess_out,
+        /*d_alpha_F=*/static_cast<const float *>(nullptr),
         sigma,
         nm1,
         nm2,
@@ -1718,7 +2062,8 @@ void kernel_gaussian_hessian_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*lower_triangle=*/false
+        /*lower_triangle=*/false,
+        /*matvec_mode=*/false
     );
 }
 
@@ -1764,6 +2109,7 @@ void kernel_gaussian_hessian_cu(
         d_coords2,
         d_z2,
         d_hess_out,
+        /*d_alpha_F=*/static_cast<const double *>(nullptr),
         sigma,
         nm1,
         nm2,
@@ -1781,7 +2127,8 @@ void kernel_gaussian_hessian_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*lower_triangle=*/false
+        /*lower_triangle=*/false,
+        /*matvec_mode=*/false
     );
 }
 
@@ -1914,6 +2261,7 @@ void kernel_gaussian_hessian_symm_cu(
         d_coords,
         d_z,
         d_hess_out,
+        /*d_alpha_F=*/static_cast<const float *>(nullptr),
         sigma,
         nm,
         nm,
@@ -1931,7 +2279,8 @@ void kernel_gaussian_hessian_symm_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*lower_triangle=*/true
+        /*lower_triangle=*/true,
+        /*matvec_mode=*/false
     );
 }
 
@@ -1969,6 +2318,7 @@ void kernel_gaussian_hessian_symm_cu(
         d_coords,
         d_z,
         d_hess_out,
+        /*d_alpha_F=*/static_cast<const double *>(nullptr),
         sigma,
         nm,
         nm,
@@ -1986,7 +2336,8 @@ void kernel_gaussian_hessian_symm_cu(
         cut_distance,
         fourier_order,
         use_atm,
-        /*lower_triangle=*/true
+        /*lower_triangle=*/true,
+        /*matvec_mode=*/false
     );
 }
 
@@ -2079,6 +2430,310 @@ void kernel_gaussian_hessian_symm_rfp_cu(
         cut_distance,
         fourier_order,
         use_atm
+    );
+}
+
+void kernel_gaussian_hessian_matvec_cu(
+    const float *d_x1,
+    const float *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const float *d_coords1,
+    const int *d_z1,
+    const float *d_coords2,
+    const int *d_z2,
+    const float *d_alpha_F,
+    float *d_F_out,
+    float sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    int d_a_rows,
+    int d_b_cols,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    kernel_gaussian_hessian_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_coords1,
+        d_z1,
+        d_coords2,
+        d_z2,
+        d_F_out,
+        d_alpha_F,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        d_a_rows,
+        d_b_cols,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        /*lower_triangle=*/false,
+        /*matvec_mode=*/true
+    );
+}
+
+void kernel_gaussian_hessian_matvec_cu(
+    const double *d_x1,
+    const double *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const double *d_coords1,
+    const int *d_z1,
+    const double *d_coords2,
+    const int *d_z2,
+    const double *d_alpha_F,
+    double *d_F_out,
+    double sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    int d_a_rows,
+    int d_b_cols,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    kernel_gaussian_hessian_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_coords1,
+        d_z1,
+        d_coords2,
+        d_z2,
+        d_F_out,
+        d_alpha_F,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        d_a_rows,
+        d_b_cols,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        /*lower_triangle=*/false,
+        /*matvec_mode=*/true
+    );
+}
+
+void kernel_gaussian_hessian_matvec_fused_cu(
+    const float *d_x_q,
+    const float *d_x_tr,
+    const int *d_n_q,
+    const int *d_n_tr,
+    const int *d_nn_q,
+    const int *d_nn_tr,
+    const float *d_coords_tr,
+    const int *d_z_tr,
+    const float *d_alpha_F,
+    float *d_F_out,
+    int nm_q,
+    int nm_tr,
+    int max_size_q,
+    int max_size_tr,
+    int d_a_rows,
+    int d_b_cols,
+    const int *d_row_offset_q,
+    const float *d_ksi_q,
+    const float *d_dksi_q,
+    const float *d_dri_q,
+    const float *d_cosp_q,
+    const float *d_sinp_q,
+    const float *d_dcosp_q,
+    const float *d_dsinp_q,
+    const float *d_ss_q,
+    const float *d_dss_q,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    float sigma,
+    int fourier_order,
+    bool use_atm,
+    int pmax,
+    const int *d_z_to_idx,
+    const float *d_s_prefactor
+) {
+    kernel_gaussian_hessian_matvec_fused_cu_impl(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
+        d_coords_tr,
+        d_z_tr,
+        d_alpha_F,
+        d_F_out,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
+        d_a_rows,
+        d_b_cols,
+        d_row_offset_q,
+        d_ksi_q,
+        d_dksi_q,
+        d_dri_q,
+        d_cosp_q,
+        d_sinp_q,
+        d_dcosp_q,
+        d_dsinp_q,
+        d_ss_q,
+        d_dss_q,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        sigma,
+        fourier_order,
+        use_atm,
+        pmax,
+        d_z_to_idx,
+        d_s_prefactor
+    );
+}
+
+void kernel_gaussian_hessian_matvec_fused_cu(
+    const double *d_x_q,
+    const double *d_x_tr,
+    const int *d_n_q,
+    const int *d_n_tr,
+    const int *d_nn_q,
+    const int *d_nn_tr,
+    const double *d_coords_tr,
+    const int *d_z_tr,
+    const double *d_alpha_F,
+    double *d_F_out,
+    int nm_q,
+    int nm_tr,
+    int max_size_q,
+    int max_size_tr,
+    int d_a_rows,
+    int d_b_cols,
+    const int *d_row_offset_q,
+    const double *d_ksi_q,
+    const double *d_dksi_q,
+    const double *d_dri_q,
+    const double *d_cosp_q,
+    const double *d_sinp_q,
+    const double *d_dcosp_q,
+    const double *d_dsinp_q,
+    const double *d_ss_q,
+    const double *d_dss_q,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    double sigma,
+    int fourier_order,
+    bool use_atm,
+    int pmax,
+    const int *d_z_to_idx,
+    const double *d_s_prefactor
+) {
+    kernel_gaussian_hessian_matvec_fused_cu_impl(
+        d_x_q,
+        d_x_tr,
+        d_n_q,
+        d_n_tr,
+        d_nn_q,
+        d_nn_tr,
+        d_coords_tr,
+        d_z_tr,
+        d_alpha_F,
+        d_F_out,
+        nm_q,
+        nm_tr,
+        max_size_q,
+        max_size_tr,
+        d_a_rows,
+        d_b_cols,
+        d_row_offset_q,
+        d_ksi_q,
+        d_dksi_q,
+        d_dri_q,
+        d_cosp_q,
+        d_sinp_q,
+        d_dcosp_q,
+        d_dsinp_q,
+        d_ss_q,
+        d_dss_q,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        sigma,
+        fourier_order,
+        use_atm,
+        pmax,
+        d_z_to_idx,
+        d_s_prefactor
     );
 }
 

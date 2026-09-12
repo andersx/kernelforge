@@ -37,3 +37,15 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm
 );
+
+// Contracted EF inference: returns (E, F_block) without materialising K_full.
+// E shape (N_A,), F_block shape (D_A,) matching K_full @ [alpha_E; alpha_F].
+// Set compute_energy=False to skip energy terms (K@alpha_E and J^T@alpha_F).
+py::tuple kernel_gaussian_full_matvec_py(
+    const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
+    const py::list &z_B_list, const py::array_t<double> &alpha_E,
+    const py::array_t<double> &alpha_F, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm, bool compute_energy
+);

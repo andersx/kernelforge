@@ -16,6 +16,28 @@ namespace fchl18 {
 
 namespace {
 
+int &fchl18_three_body_weight_mode_storage() {
+    static int mode = kTbWeightProduct;
+    return mode;
+}
+
+void set_fchl18_three_body_weight_mode_impl(int mode) {
+    if (mode < kTbWeightProduct || mode > kTbWeightBondNormExpSum) {
+        mode = kTbWeightProduct;
+    }
+    fchl18_three_body_weight_mode_storage() = mode;
+}
+
+int get_fchl18_three_body_weight_mode_impl() { return fchl18_three_body_weight_mode_storage(); }
+
+}  // namespace
+
+void set_fchl18_three_body_weight_mode(int mode) { set_fchl18_three_body_weight_mode_impl(mode); }
+
+int get_fchl18_three_body_weight_mode() { return get_fchl18_three_body_weight_mode_impl(); }
+
+namespace {
+
 constexpr int kPairBlockSize = 128;
 
 // Slim params for hot scalar/rect kernels — no z_to_idx[256] by value
@@ -75,6 +97,7 @@ struct KernelParams {
     int fourier_order;
     int pmax;
     int use_atm;
+    int three_body_weight_mode;
     T s_prefactor[kMaxFourierOrder];
     int z_to_idx[256];
 
@@ -167,6 +190,7 @@ __device__ void compute_threebody_fourier_device(
     int pmax,
     const int *z_to_idx,
     bool use_atm,
+    int three_body_weight_mode,
     T *cosp,
     T *sinp
 ) {
@@ -181,6 +205,7 @@ __device__ void compute_threebody_fourier_device(
     const T *xc = atom_chan + 2 * max_size;
     const T *yc = atom_chan + 3 * max_size;
     const T *zc = atom_chan + 4 * max_size;
+    const int zi = static_cast<int>(z_chan[0]);
 
     for (int j = 1; j < n_neigh; ++j) {
         const T dj = dist_chan[j];
@@ -246,20 +271,24 @@ __device__ void compute_threebody_fourier_device(
                 continue;
             }
 
-            const T dijk = di * dj * dk;
-            const T denom = fast_pow(dijk, three_body_power);
-            const T ksi3 = cutj * cutk * cut_jk * atm / denom;
+            const int zk = static_cast<int>(z_chan[k]);
+            const int zj = static_cast<int>(z_chan[j]);
+            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
+                continue;
+            }
+            const T r0_ij = static_cast<T>(pair_bond_r0(zi, zj));
+            const T r0_ik = static_cast<T>(pair_bond_r0(zi, zk));
+            const T r0_jk = static_cast<T>(pair_bond_r0(zj, zk));
+            const auto radial = three_body_radial_weight(
+                three_body_weight_mode, dj, dk, di, r0_ij, r0_ik, r0_jk, three_body_power
+            );
+            const T ksi3 = cutj * cutk * cut_jk * atm * radial.w;
             if (ksi3 == Math<T>::zero()) {
                 continue;
             }
 
             const T theta = Math<T>::acos_(cos_i);
 
-            const int zk = static_cast<int>(z_chan[k]);
-            const int zj = static_cast<int>(z_chan[j]);
-            if (zk <= 0 || zk >= 256 || zj <= 0 || zj >= 256) {
-                continue;
-            }
             const int pj = z_to_idx[zk];
             const int pk = z_to_idx[zj];
             if (pj < 0 || pk < 0) {
@@ -573,6 +602,7 @@ __global__ void precompute_atom_data_kernel(
         params.pmax,
         params.z_to_idx,
         params.use_atm != 0,
+        params.three_body_weight_mode,
         cosp_out,
         sinp_out
     );
@@ -1032,6 +1062,7 @@ void kernel_gaussian_rect_cu_impl(
     params.three_body_scaling = three_body_scaling;
     params.three_body_width = three_body_width;
     params.three_body_power = three_body_power;
+    params.three_body_weight_mode = get_fchl18_three_body_weight_mode();
     params.cut_start = cut_start;
     params.cut_distance = cut_distance;
     params.true_distance_scale = two_body_scaling / static_cast<T>(16);
@@ -1214,6 +1245,7 @@ void kernel_gaussian_symm_cu_impl(
     params.three_body_scaling = three_body_scaling;
     params.three_body_width = three_body_width;
     params.three_body_power = three_body_power;
+    params.three_body_weight_mode = get_fchl18_three_body_weight_mode();
     params.cut_start = cut_start;
     params.cut_distance = cut_distance;
     params.true_distance_scale = two_body_scaling / static_cast<T>(16);

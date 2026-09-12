@@ -103,6 +103,92 @@ __device__ inline T cut_function(T r, T cut_start, T cut_distance) {
     return T(10) * x * x * x - T(15) * x * x * x * x + T(6) * x * x * x * x * x;
 }
 
+// Three-body radial weight modes (ATM is independent and usually off for EF).
+// 0 = legacy product power:          (r_ij r_ik r_jk)^(-p)
+// 1 = bond-normalized product power: (r'_ij r'_ik r'_jk)^(-p), r'=r/r0
+// 2 = bond-normalized exp-sum:       exp(-α (r'_ij + r'_ik + r'_jk))
+constexpr int kTbWeightProduct = 0;
+constexpr int kTbWeightBondNormProduct = 1;
+constexpr int kTbWeightBondNormExpSum = 2;
+
+// Host-side mode used when packing KernelParams (defined in cuda_fchl18_kernel.cu).
+void set_fchl18_three_body_weight_mode(int mode);
+int get_fchl18_three_body_weight_mode();
+
+// Cordero et al. single-bond covalent radii (Å). Unknown Z falls back to 1.5 Å.
+__host__ __device__ inline float covalent_radius_angstrom(int z) {
+    // clang-format off
+    constexpr float kRad[37] = {
+        0.00f,
+        0.31f, 0.28f, 1.28f, 0.96f, 0.84f, 0.76f, 0.71f, 0.66f, 0.57f, 0.58f,  // 1-10
+        1.66f, 1.41f, 1.21f, 1.11f, 1.07f, 1.05f, 1.02f, 1.06f, 2.03f, 1.76f,  // 11-20
+        1.70f, 1.60f, 1.53f, 1.39f, 1.39f, 1.32f, 1.26f, 1.24f, 1.32f, 1.22f,  // 21-30
+        1.22f, 1.20f, 1.19f, 1.20f, 1.20f, 1.16f                                // 31-36
+    };
+    // clang-format on
+    if (z > 0 && z <= 36) {
+        return kRad[z];
+    }
+    return 1.50f;
+}
+
+__host__ __device__ inline float pair_bond_r0(int za, int zb) {
+    return covalent_radius_angstrom(za) + covalent_radius_angstrom(zb);
+}
+
+// Radial three-body weight and d(log w)/dr for the three triangle edges.
+// Edges: dj = r_ij (centre-j), dk = r_ik (centre-k), di = r_jk (j-k).
+template <typename T>
+struct ThreeBodyRadial {
+    T w;
+    T dlog_dj;
+    T dlog_dk;
+    T dlog_di;
+};
+
+template <typename T>
+__device__ inline ThreeBodyRadial<T> three_body_radial_weight(
+    int mode,
+    T dj,
+    T dk,
+    T di,
+    T r0_ij,
+    T r0_ik,
+    T r0_jk,
+    T power_or_alpha
+) {
+    ThreeBodyRadial<T> out;
+    const T one = Math<T>::one();
+    const T eps = Math<T>::eps();
+    if (dj < eps || dk < eps || di < eps) {
+        out.w = Math<T>::zero();
+        out.dlog_dj = out.dlog_dk = out.dlog_di = Math<T>::zero();
+        return out;
+    }
+    if (mode == kTbWeightBondNormExpSum) {
+        const T a = power_or_alpha;
+        const T s = dj / r0_ij + dk / r0_ik + di / r0_jk;
+        out.w = Math<T>::exp_(-a * s);
+        out.dlog_dj = -a / r0_ij;
+        out.dlog_dk = -a / r0_ik;
+        out.dlog_di = -a / r0_jk;
+        return out;
+    }
+    // Product power: w = scale / (dj*dk*di)^p with scale=1 (legacy) or (r0ij r0ik r0jk)^p.
+    const T p = power_or_alpha;
+    const T dijk = dj * dk * di;
+    T scale = one;
+    if (mode == kTbWeightBondNormProduct) {
+        scale = fast_pow(r0_ij * r0_ik * r0_jk, p);
+    }
+    const T dijk_p = fast_pow(dijk, p);
+    out.w = scale / dijk_p;
+    out.dlog_dj = -p / dj;
+    out.dlog_dk = -p / dk;
+    out.dlog_di = -p / di;
+    return out;
+}
+
 // d(cut_function)/dr — mirrors kf::fchl18::cut_function_deriv on the CPU side.
 template <typename T>
 __device__ inline T cut_function_deriv(T r, T cut_start, T cut_distance) {

@@ -376,6 +376,7 @@ def _build_model(
     pca_center: bool = False,
     pca_whiten: bool = False,
     dtype: str = "float64",
+    infer_dtype: str = "float32",
 ) -> (
     LocalKRRModel
     | LocalRFFModel
@@ -425,6 +426,7 @@ def _build_model(
                 max_size=max_size,
                 kernel_params=repr_params or None,
                 dtype=cast(Literal["float32", "float64"], dtype),
+                infer_dtype=cast(Literal["float32", "float64"], infer_dtype),
             )
         return FCHL18KRRModel(
             sigma=sigma, l2=l2, max_size=max_size, kernel_params=repr_params or None
@@ -738,8 +740,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default="float64",
         choices=["float32", "float64"],
         help=(
-            "Floating-point precision for --cuda --representation fchl18 "
-            "(default: float64). float32 uses GPU rfp_potrf end-to-end."
+            "Training floating-point precision for --cuda --representation fchl18 "
+            "(default: float64). float32 uses GPU rfp_potrf for the fit."
+        ),
+    )
+    p.add_argument(
+        "--infer-dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "float64"],
+        help=(
+            "Inference floating-point precision for --cuda --representation fchl18 "
+            "(default: float32). Independent of --dtype; train in float64 and "
+            "predict/MD in float32."
         ),
     )
     p.add_argument(
@@ -823,6 +836,11 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 "--dtype is only supported with --cuda --representation fchl18 "
                 f"(got --representation {args.representation})."
             )
+        if args.infer_dtype != "float32" and args.representation != "fchl18":
+            parser.error(
+                "--infer-dtype is only supported with --cuda --representation fchl18 "
+                f"(got --representation {args.representation})."
+            )
         if args.representation != "fchl19" and args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only configurable for --cuda --representation fchl19.")
         if (
@@ -872,6 +890,8 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
     else:
         if args.dtype != "float64":
             parser.error("--dtype is only supported with --cuda --representation fchl18.")
+        if args.infer_dtype != "float32":
+            parser.error("--infer-dtype is only supported with --cuda --representation fchl18.")
         if args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only supported with --cuda --representation fchl19.")
         if args.preprocessing != _DEFAULT_CUDA_LOCAL_PREPROCESSING:
@@ -987,6 +1007,7 @@ def run(args: argparse.Namespace) -> None:
         pca_center=args.pca_center,
         pca_whiten=args.pca_whiten,
         dtype=args.dtype,
+        infer_dtype=args.infer_dtype,
     )
     print(f"\n[2] Model: {type(model).__name__}")
 

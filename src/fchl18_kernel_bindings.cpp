@@ -500,6 +500,138 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
 }
 
 // ---------------------------------------------------------------------------
+// kernel_gaussian_hessian_matvec: F += H @ alpha_F
+// ---------------------------------------------------------------------------
+static py::array_t<double> kernel_gaussian_hessian_matvec_py(
+    const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
+    const py::list &z_B_list, const py::array_t<double> &alpha_F, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power,
+    double cut_start, double cut_distance, int fourier_order, bool use_atm
+) {
+    const int N_A = static_cast<int>(coords_A_list.size());
+    const int N_B = static_cast<int>(coords_B_list.size());
+    if (static_cast<int>(z_A_list.size()) != N_A || static_cast<int>(z_B_list.size()) != N_B)
+        throw std::invalid_argument("coords/z list size mismatch");
+
+    std::vector<std::vector<double>> coords_A(N_A), coords_B(N_B);
+    std::vector<std::vector<int>> z_A(N_A), z_B(N_B);
+    int D_A = 0, D_B = 0;
+    for (int a = 0; a < N_A; ++a) {
+        kf::fchl18::MolData m = kf::fchl18::parse_mol(coords_A_list[a], z_A_list[a]);
+        D_A += m.n_atoms * 3;
+        coords_A[a] = std::move(m.coords);
+        z_A[a] = std::move(m.z);
+    }
+    for (int b = 0; b < N_B; ++b) {
+        kf::fchl18::MolData m = kf::fchl18::parse_mol(coords_B_list[b], z_B_list[b]);
+        D_B += m.n_atoms * 3;
+        coords_B[b] = std::move(m.coords);
+        z_B[b] = std::move(m.z);
+    }
+    if (alpha_F.ndim() != 1 || alpha_F.shape(0) != D_B)
+        throw std::invalid_argument("alpha_F must have shape (D_B,)");
+
+    py::array_t<double> F({(py::ssize_t)D_A});
+    std::memset(F.mutable_data(), 0, sizeof(double) * D_A);
+    auto alpha_vec = std::vector<double>(alpha_F.data(), alpha_F.data() + D_B);
+
+    {
+        py::gil_scoped_release release;
+        kf::fchl18::kernel_gaussian_hessian_matvec(
+            coords_A,
+            z_A,
+            coords_B,
+            z_B,
+            alpha_vec,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            F.mutable_data()
+        );
+    }
+    return F;
+}
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_jacobian_t_matvec: E += J^T @ alpha_F
+// ---------------------------------------------------------------------------
+static py::array_t<double> kernel_gaussian_jacobian_t_matvec_py(
+    const py::list &coords_train_list, const py::list &z_train_list,
+    const py::array_t<double, py::array::c_style | py::array::forcecast> &x_test,
+    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &n_test,
+    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn_test,
+    const py::array_t<double> &alpha_F, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm
+) {
+    const int N_train = static_cast<int>(coords_train_list.size());
+    if (static_cast<int>(z_train_list.size()) != N_train)
+        throw std::invalid_argument("coords_train_list and z_train_list size mismatch");
+    if (x_test.ndim() != 4 || x_test.shape(2) != 5)
+        throw std::invalid_argument("X_test must be 4-D with shape (N_test, max_size, 5, max_size)");
+
+    const int N_test = static_cast<int>(x_test.shape(0));
+    const int max_size = static_cast<int>(x_test.shape(1));
+
+    std::vector<std::vector<double>> coords_B(N_train);
+    std::vector<std::vector<int>> z_B(N_train);
+    int D_B = 0;
+    for (int j = 0; j < N_train; ++j) {
+        kf::fchl18::MolData m = kf::fchl18::parse_mol(coords_train_list[j], z_train_list[j]);
+        D_B += m.n_atoms * 3;
+        coords_B[j] = std::move(m.coords);
+        z_B[j] = std::move(m.z);
+    }
+    if (alpha_F.ndim() != 1 || alpha_F.shape(0) != D_B)
+        throw std::invalid_argument("alpha_F must have shape (D_B,)");
+
+    auto x_te_flat = as_double_vector(x_test);
+    auto n_te_flat = as_int_vector_1d(n_test);
+    auto nn_te_flat = as_int_vector_2d(nn_test);
+    auto alpha_vec = std::vector<double>(alpha_F.data(), alpha_F.data() + D_B);
+
+    py::array_t<double> E({(py::ssize_t)N_test});
+    std::memset(E.mutable_data(), 0, sizeof(double) * N_test);
+
+    {
+        py::gil_scoped_release release;
+        kf::fchl18::kernel_gaussian_jacobian_t_matvec(
+            coords_B,
+            z_B,
+            x_te_flat,
+            n_te_flat,
+            nn_te_flat,
+            N_test,
+            max_size,
+            alpha_vec,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            E.mutable_data()
+        );
+    }
+    return E;
+}
+
+// ---------------------------------------------------------------------------
 // Module definition
 // ---------------------------------------------------------------------------
 PYBIND11_MODULE(fchl18_kernel, m) {
@@ -907,6 +1039,89 @@ Returns
 -------
 ndarray, shape (BIG*(BIG+1)//2,), float64
     Upper-triangle RFP-packed full kernel.
+)pbdoc"
+    );
+
+    m.def(
+        "kernel_gaussian_full_matvec",
+        &kernel_gaussian_full_matvec_py,
+        py::arg("coords_A_list"),
+        py::arg("Z_A_list"),
+        py::arg("coords_B_list"),
+        py::arg("Z_B_list"),
+        py::arg("alpha_E"),
+        py::arg("alpha_F"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
+        py::arg("compute_energy") = true,
+        R"pbdoc(
+Contracted energy+force inference without materialising the full kernel matrix.
+
+Returns (E, F_block) where E has shape (N_A,) and F_block has shape (D_A,)
+matching ``K_full @ [alpha_E; alpha_F]`` with the same block layout as
+``kernel_gaussian_full``.  Pass ``compute_energy=False`` to skip energy terms.
+)pbdoc"
+    );
+
+    m.def(
+        "kernel_gaussian_hessian_matvec",
+        &kernel_gaussian_hessian_matvec_py,
+        py::arg("coords_A_list"),
+        py::arg("Z_A_list"),
+        py::arg("coords_B_list"),
+        py::arg("Z_B_list"),
+        py::arg("alpha_F"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
+        R"pbdoc(
+Compute F = H @ alpha_F without materialising the Hessian matrix.
+
+Returns ndarray of shape (D_A,) where D_A = sum_i n_atoms_i * 3 for query molecules.
+)pbdoc"
+    );
+
+    m.def(
+        "kernel_gaussian_jacobian_t_matvec",
+        &kernel_gaussian_jacobian_t_matvec_py,
+        py::arg("coords_train_list"),
+        py::arg("Z_train_list"),
+        py::arg("X_test"),
+        py::arg("N_test"),
+        py::arg("NN_test"),
+        py::arg("alpha_F"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
+        R"pbdoc(
+Compute E = J^T @ alpha_F without materialising the Jacobian-transpose block.
+
+Returns ndarray of shape (N_test,).
 )pbdoc"
     );
 }

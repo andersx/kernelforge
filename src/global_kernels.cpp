@@ -36,10 +36,12 @@ void kernel_gaussian_symm(
     );
 
     // 2) diag = -0.5 * diag(K)
+    // All element indexing is done in std::size_t: under LP64 blas_int is a 32-bit
+    // int, so expressions like i * n + i would overflow (UB) for n > ~46340.
     const std::size_t n_size = static_cast<std::size_t>(n);
     std::vector<double> diag(n_size);
-    for (blas_int i = 0; i < n; ++i) {
-        diag[i] = -0.5 * Kptr[i * n + i];
+    for (std::size_t i = 0; i < n_size; ++i) {
+        diag[i] = -0.5 * Kptr[i * n_size + i];
     }
 
     // 3) K += 1 * (1*diag^T + diag*1^T) on LOWER via dsyr2
@@ -48,17 +50,19 @@ void kernel_gaussian_symm(
 
     // 4) Elementwise exp on the lower triangle (row j >= col i)
 #pragma omp parallel for schedule(guided)
-    for (blas_int j = 0; j < n; ++j) {
-        for (blas_int i = 0; i <= j; ++i) {
-            Kptr[j * n + i] = std::exp(Kptr[j * n + i]);
+    for (std::size_t j = 0; j < n_size; ++j) {
+        double *row_j = Kptr + j * n_size;
+        for (std::size_t i = 0; i <= j; ++i) {
+            row_j[i] = std::exp(row_j[i]);
         }
     }
 
     // 5) Mirror lower triangle to upper triangle
 #pragma omp parallel for schedule(static)
-    for (blas_int j = 0; j < n; ++j) {
-        for (blas_int i = 0; i < j; ++i) {
-            Kptr[i * n + j] = Kptr[j * n + i];
+    for (std::size_t j = 0; j < n_size; ++j) {
+        const double *row_j = Kptr + j * n_size;
+        for (std::size_t i = 0; i < j; ++i) {
+            Kptr[i * n_size + j] = row_j[i];
         }
     }
 }

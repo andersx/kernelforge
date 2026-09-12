@@ -860,6 +860,524 @@ torch::Tensor kernel_gaussian_full(
     return K;
 }
 
+static long long fchl18_sum_d(torch::Tensor n, int nm, int max_size) {
+    const auto n_host = n.to(torch::kCPU);
+    const int *n_ptr = n_host.data_ptr<int>();
+    long long D = 0;
+    for (int a = 0; a < nm; ++a) {
+        TORCH_CHECK(
+            n_ptr[a] >= 0 && n_ptr[a] <= max_size, "N entries must be in [0, max_size]"
+        );
+        D += 3LL * n_ptr[a];
+    }
+    return D;
+}
+
+std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
+    torch::Tensor x1,
+    torch::Tensor x2,
+    torch::Tensor n1,
+    torch::Tensor n2,
+    torch::Tensor nn1,
+    torch::Tensor nn2,
+    torch::Tensor coords1,
+    torch::Tensor z1,
+    torch::Tensor coords2,
+    torch::Tensor z2,
+    torch::Tensor alpha_E,
+    torch::Tensor alpha_F,
+    double sigma,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool compute_energy
+) {
+    const int nm1 = static_cast<int>(x1.size(0));
+    const int nm2 = static_cast<int>(x2.size(0));
+    const int max_size1 = static_cast<int>(x1.size(1));
+    const int max_size2 = static_cast<int>(x2.size(1));
+    const long long d_a_rows = fchl18_sum_d(n1, nm1, max_size1);
+    const long long d_b_cols = fchl18_sum_d(n2, nm2, max_size2);
+    TORCH_CHECK(d_a_rows > 0 && d_b_cols > 0, "kernel_gaussian_full_matvec: empty molecule set");
+    TORCH_CHECK(alpha_E.dim() == 1 && alpha_E.size(0) == nm2, "alpha_E must have shape (N_B,)");
+    TORCH_CHECK(
+        alpha_F.dim() == 1 && alpha_F.size(0) == d_b_cols, "alpha_F must have shape (D_B,)"
+    );
+
+    auto E = torch::zeros({nm1}, x1.options());
+    auto F = torch::zeros({d_a_rows}, x1.options());
+    const bool fp32 = x1.scalar_type() == torch::kFloat32;
+
+    if (nm2 > nm1) {
+        if (fp32) {
+            kf::fchl18::kernel_gaussian_full_matvec_fused_cu(
+                x1.data_ptr<float>(),
+                x2.data_ptr<float>(),
+                n1.data_ptr<int>(),
+                n2.data_ptr<int>(),
+                nn1.data_ptr<int>(),
+                nn2.data_ptr<int>(),
+                coords1.data_ptr<float>(),
+                z1.data_ptr<int>(),
+                coords2.data_ptr<float>(),
+                z2.data_ptr<int>(),
+                alpha_E.data_ptr<float>(),
+                alpha_F.data_ptr<float>(),
+                E.data_ptr<float>(),
+                F.data_ptr<float>(),
+                static_cast<float>(sigma),
+                nm1,
+                nm2,
+                max_size1,
+                max_size2,
+                static_cast<int>(d_a_rows),
+                static_cast<int>(d_b_cols),
+                static_cast<float>(two_body_scaling),
+                static_cast<float>(two_body_width),
+                static_cast<float>(two_body_power),
+                static_cast<float>(three_body_scaling),
+                static_cast<float>(three_body_width),
+                static_cast<float>(three_body_power),
+                static_cast<float>(cut_start),
+                static_cast<float>(cut_distance),
+                fourier_order,
+                use_atm,
+                compute_energy
+            );
+        } else {
+            kf::fchl18::kernel_gaussian_full_matvec_fused_cu(
+                x1.data_ptr<double>(),
+                x2.data_ptr<double>(),
+                n1.data_ptr<int>(),
+                n2.data_ptr<int>(),
+                nn1.data_ptr<int>(),
+                nn2.data_ptr<int>(),
+                coords1.data_ptr<double>(),
+                z1.data_ptr<int>(),
+                coords2.data_ptr<double>(),
+                z2.data_ptr<int>(),
+                alpha_E.data_ptr<double>(),
+                alpha_F.data_ptr<double>(),
+                E.data_ptr<double>(),
+                F.data_ptr<double>(),
+                sigma,
+                nm1,
+                nm2,
+                max_size1,
+                max_size2,
+                static_cast<int>(d_a_rows),
+                static_cast<int>(d_b_cols),
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
+                compute_energy
+            );
+        }
+        return {E, F};
+    }
+
+    if (compute_energy) {
+        if (fp32) {
+            kf::fchl18::kernel_gaussian_jacobian_t_matvec_cu(
+                x2.data_ptr<float>(),
+                x1.data_ptr<float>(),
+                n2.data_ptr<int>(),
+                n1.data_ptr<int>(),
+                nn2.data_ptr<int>(),
+                nn1.data_ptr<int>(),
+                coords2.data_ptr<float>(),
+                z2.data_ptr<int>(),
+                alpha_F.data_ptr<float>(),
+                E.data_ptr<float>(),
+                static_cast<float>(sigma),
+                nm2,
+                nm1,
+                max_size2,
+                max_size1,
+                static_cast<int>(d_b_cols),
+                static_cast<float>(two_body_scaling),
+                static_cast<float>(two_body_width),
+                static_cast<float>(two_body_power),
+                static_cast<float>(three_body_scaling),
+                static_cast<float>(three_body_width),
+                static_cast<float>(three_body_power),
+                static_cast<float>(cut_start),
+                static_cast<float>(cut_distance),
+                fourier_order,
+                use_atm
+            );
+        } else {
+            kf::fchl18::kernel_gaussian_jacobian_t_matvec_cu(
+                x2.data_ptr<double>(),
+                x1.data_ptr<double>(),
+                n2.data_ptr<int>(),
+                n1.data_ptr<int>(),
+                nn2.data_ptr<int>(),
+                nn1.data_ptr<int>(),
+                coords2.data_ptr<double>(),
+                z2.data_ptr<int>(),
+                alpha_F.data_ptr<double>(),
+                E.data_ptr<double>(),
+                sigma,
+                nm2,
+                nm1,
+                max_size2,
+                max_size1,
+                static_cast<int>(d_b_cols),
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm
+            );
+        }
+    }
+
+    if (fp32) {
+        kf::fchl18::kernel_gaussian_jacobian_matvec_cu(
+            x1.data_ptr<float>(),
+            x2.data_ptr<float>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            coords1.data_ptr<float>(),
+            z1.data_ptr<int>(),
+            alpha_E.data_ptr<float>(),
+            F.data_ptr<float>(),
+            compute_energy ? E.data_ptr<float>() : nullptr,
+            static_cast<float>(sigma),
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<int>(d_a_rows),
+            static_cast<float>(two_body_scaling),
+            static_cast<float>(two_body_width),
+            static_cast<float>(two_body_power),
+            static_cast<float>(three_body_scaling),
+            static_cast<float>(three_body_width),
+            static_cast<float>(three_body_power),
+            static_cast<float>(cut_start),
+            static_cast<float>(cut_distance),
+            fourier_order,
+            use_atm
+        );
+        kf::fchl18::kernel_gaussian_hessian_matvec_cu(
+            x1.data_ptr<float>(),
+            x2.data_ptr<float>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            coords1.data_ptr<float>(),
+            z1.data_ptr<int>(),
+            coords2.data_ptr<float>(),
+            z2.data_ptr<int>(),
+            alpha_F.data_ptr<float>(),
+            F.data_ptr<float>(),
+            static_cast<float>(sigma),
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<int>(d_a_rows),
+            static_cast<int>(d_b_cols),
+            static_cast<float>(two_body_scaling),
+            static_cast<float>(two_body_width),
+            static_cast<float>(two_body_power),
+            static_cast<float>(three_body_scaling),
+            static_cast<float>(three_body_width),
+            static_cast<float>(three_body_power),
+            static_cast<float>(cut_start),
+            static_cast<float>(cut_distance),
+            fourier_order,
+            use_atm
+        );
+    } else {
+        kf::fchl18::kernel_gaussian_jacobian_matvec_cu(
+            x1.data_ptr<double>(),
+            x2.data_ptr<double>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            coords1.data_ptr<double>(),
+            z1.data_ptr<int>(),
+            alpha_E.data_ptr<double>(),
+            F.data_ptr<double>(),
+            compute_energy ? E.data_ptr<double>() : nullptr,
+            sigma,
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<int>(d_a_rows),
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm
+        );
+        kf::fchl18::kernel_gaussian_hessian_matvec_cu(
+            x1.data_ptr<double>(),
+            x2.data_ptr<double>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            coords1.data_ptr<double>(),
+            z1.data_ptr<int>(),
+            coords2.data_ptr<double>(),
+            z2.data_ptr<int>(),
+            alpha_F.data_ptr<double>(),
+            F.data_ptr<double>(),
+            sigma,
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<int>(d_a_rows),
+            static_cast<int>(d_b_cols),
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm
+        );
+    }
+
+    return {E, F};
+}
+
+torch::Tensor kernel_gaussian_hessian_matvec(
+    torch::Tensor x1,
+    torch::Tensor x2,
+    torch::Tensor n1,
+    torch::Tensor n2,
+    torch::Tensor nn1,
+    torch::Tensor nn2,
+    torch::Tensor coords1,
+    torch::Tensor z1,
+    torch::Tensor coords2,
+    torch::Tensor z2,
+    torch::Tensor alpha_F,
+    double sigma,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    const int nm1 = static_cast<int>(x1.size(0));
+    const int nm2 = static_cast<int>(x2.size(0));
+    const int max_size1 = static_cast<int>(x1.size(1));
+    const int max_size2 = static_cast<int>(x2.size(1));
+    const long long d_a_rows = fchl18_sum_d(n1, nm1, max_size1);
+    const long long d_b_cols = fchl18_sum_d(n2, nm2, max_size2);
+    TORCH_CHECK(d_a_rows > 0 && d_b_cols > 0, "kernel_gaussian_hessian_matvec: empty molecule set");
+    TORCH_CHECK(
+        alpha_F.dim() == 1 && alpha_F.size(0) == d_b_cols, "alpha_F must have shape (D_B,)"
+    );
+
+    auto F = torch::zeros({d_a_rows}, x1.options());
+    if (x1.scalar_type() == torch::kFloat32) {
+        kf::fchl18::kernel_gaussian_hessian_matvec_cu(
+            x1.data_ptr<float>(),
+            x2.data_ptr<float>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            coords1.data_ptr<float>(),
+            z1.data_ptr<int>(),
+            coords2.data_ptr<float>(),
+            z2.data_ptr<int>(),
+            alpha_F.data_ptr<float>(),
+            F.data_ptr<float>(),
+            static_cast<float>(sigma),
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<int>(d_a_rows),
+            static_cast<int>(d_b_cols),
+            static_cast<float>(two_body_scaling),
+            static_cast<float>(two_body_width),
+            static_cast<float>(two_body_power),
+            static_cast<float>(three_body_scaling),
+            static_cast<float>(three_body_width),
+            static_cast<float>(three_body_power),
+            static_cast<float>(cut_start),
+            static_cast<float>(cut_distance),
+            fourier_order,
+            use_atm
+        );
+    } else {
+        kf::fchl18::kernel_gaussian_hessian_matvec_cu(
+            x1.data_ptr<double>(),
+            x2.data_ptr<double>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            coords1.data_ptr<double>(),
+            z1.data_ptr<int>(),
+            coords2.data_ptr<double>(),
+            z2.data_ptr<int>(),
+            alpha_F.data_ptr<double>(),
+            F.data_ptr<double>(),
+            sigma,
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<int>(d_a_rows),
+            static_cast<int>(d_b_cols),
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm
+        );
+    }
+    return F;
+}
+
+torch::Tensor kernel_gaussian_jacobian_t_matvec(
+    torch::Tensor x_train,
+    torch::Tensor x_test,
+    torch::Tensor n_train,
+    torch::Tensor n_test,
+    torch::Tensor nn_train,
+    torch::Tensor nn_test,
+    torch::Tensor coords_train,
+    torch::Tensor z_train,
+    torch::Tensor alpha_F,
+    double sigma,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm
+) {
+    const int nm_train = static_cast<int>(x_train.size(0));
+    const int nm_test = static_cast<int>(x_test.size(0));
+    const int max_train = static_cast<int>(x_train.size(1));
+    const int max_test = static_cast<int>(x_test.size(1));
+    const long long d_train = fchl18_sum_d(n_train, nm_train, max_train);
+    TORCH_CHECK(d_train > 0, "kernel_gaussian_jacobian_t_matvec: empty molecule set");
+    TORCH_CHECK(
+        alpha_F.dim() == 1 && alpha_F.size(0) == d_train, "alpha_F must have shape (D_train,)"
+    );
+
+    auto E = torch::zeros({nm_test}, x_test.options());
+    if (x_train.scalar_type() == torch::kFloat32) {
+        kf::fchl18::kernel_gaussian_jacobian_t_matvec_cu(
+            x_train.data_ptr<float>(),
+            x_test.data_ptr<float>(),
+            n_train.data_ptr<int>(),
+            n_test.data_ptr<int>(),
+            nn_train.data_ptr<int>(),
+            nn_test.data_ptr<int>(),
+            coords_train.data_ptr<float>(),
+            z_train.data_ptr<int>(),
+            alpha_F.data_ptr<float>(),
+            E.data_ptr<float>(),
+            static_cast<float>(sigma),
+            nm_train,
+            nm_test,
+            max_train,
+            max_test,
+            static_cast<int>(d_train),
+            static_cast<float>(two_body_scaling),
+            static_cast<float>(two_body_width),
+            static_cast<float>(two_body_power),
+            static_cast<float>(three_body_scaling),
+            static_cast<float>(three_body_width),
+            static_cast<float>(three_body_power),
+            static_cast<float>(cut_start),
+            static_cast<float>(cut_distance),
+            fourier_order,
+            use_atm
+        );
+    } else {
+        kf::fchl18::kernel_gaussian_jacobian_t_matvec_cu(
+            x_train.data_ptr<double>(),
+            x_test.data_ptr<double>(),
+            n_train.data_ptr<int>(),
+            n_test.data_ptr<int>(),
+            nn_train.data_ptr<int>(),
+            nn_test.data_ptr<int>(),
+            coords_train.data_ptr<double>(),
+            z_train.data_ptr<int>(),
+            alpha_F.data_ptr<double>(),
+            E.data_ptr<double>(),
+            sigma,
+            nm_train,
+            nm_test,
+            max_train,
+            max_test,
+            static_cast<int>(d_train),
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm
+        );
+    }
+    return E;
+}
+
 torch::Tensor kernel_gaussian_full_symm(
     torch::Tensor x,
     torch::Tensor n,
@@ -1331,6 +1849,29 @@ Current scope:
 )doc";
 
     m.def(
+        "set_three_body_weight_mode",
+        [](int mode) { kf::fchl18::set_fchl18_three_body_weight_mode(mode); },
+        py::arg("mode"),
+        R"doc(
+Set the host-side FCHL18 three-body radial weight mode.
+
+Modes
+-----
+0 : product power ``(r_ij * r_ik * r_jk)^(-p)`` (legacy / qml)
+1 : bond-normalized product ``(r'_ij * r'_ik * r'_jk)^(-p)`` with ``r' = r / r0``
+2 : bond-normalized exp-sum ``exp(-α * (r'_ij + r'_ik + r'_jk))``
+    (``three_body_power`` is used as α)
+
+Applies to subsequent CUDA FCHL18 kernel / Jacobian / Hessian / full calls.
+)doc"
+    );
+    m.def(
+        "get_three_body_weight_mode",
+        []() { return kf::fchl18::get_fchl18_three_body_weight_mode(); },
+        R"doc(Return the current three-body radial weight mode (0, 1, or 2).)doc"
+    );
+
+    m.def(
         "kernel_gaussian",
         &kernel_gaussian,
         py::arg("X1"),
@@ -1783,6 +2324,98 @@ Compute the symmetric full FCHL18 kernel in RFP packed format on GPU.
 
 TRANSR='N', UPLO='U'. Unpack with kernelmath.rfp_to_full(..., uplo='L', transr='N').
 Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full_symm_rfp.
+)doc"
+    );
+
+    m.def(
+        "kernel_gaussian_full_matvec",
+        &kernel_gaussian_full_matvec,
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
+        py::arg("coords1"),
+        py::arg("Z1"),
+        py::arg("coords2"),
+        py::arg("Z2"),
+        py::arg("alpha_E"),
+        py::arg("alpha_F"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
+        py::arg("compute_energy") = true,
+        R"doc(
+Contracted EF inference on GPU without materialising the full kernel matrix.
+
+Returns (E, F_block) with the same layout as CPU kernel_gaussian_full_matvec.
+)doc"
+    );
+
+    m.def(
+        "kernel_gaussian_hessian_matvec",
+        &kernel_gaussian_hessian_matvec,
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
+        py::arg("coords1"),
+        py::arg("Z1"),
+        py::arg("coords2"),
+        py::arg("Z2"),
+        py::arg("alpha_F"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
+        R"doc(
+Compute F = H @ alpha_F on GPU without materialising the full combined kernel.
+)doc"
+    );
+
+    m.def(
+        "kernel_gaussian_jacobian_t_matvec",
+        &kernel_gaussian_jacobian_t_matvec,
+        py::arg("X_train"),
+        py::arg("X_test"),
+        py::arg("N_train"),
+        py::arg("N_test"),
+        py::arg("NN_train"),
+        py::arg("NN_test"),
+        py::arg("coords_train"),
+        py::arg("Z_train"),
+        py::arg("alpha_F"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 1.0,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = false,
+        R"doc(
+Compute E = J^T @ alpha_F on GPU without materialising the full combined kernel.
 )doc"
     );
 }
