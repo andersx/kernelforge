@@ -233,3 +233,8 @@ uv.lock
 /test_ncu.sh
 /sdf
 
+# Profiler output and experiment scratch (not source)
+/ncu_reports/
+*.ncu-rep
+/scripts/*.jsonl
+
