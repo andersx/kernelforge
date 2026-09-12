@@ -239,6 +239,45 @@ class TestValidation:
         )
         _validate(args, parser)
 
+    def test_infer_dtype_float64_requires_cuda_fchl18(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """--infer-dtype float64 is only valid with --cuda --representation fchl18."""
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "qm7b",
+                "--representation",
+                "fchl18",
+                "--mode",
+                "energy_only",
+                "--infer-dtype",
+                "float64",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "qm7b",
+                "--cuda",
+                "--representation",
+                "fchl18",
+                "--mode",
+                "energy_only",
+                "--dtype",
+                "float64",
+                "--infer-dtype",
+                "float32",
+            ]
+        )
+        _validate(args, parser)
+
 
 # ---------------------------------------------------------------------------
 # Model factory
@@ -505,6 +544,8 @@ def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
         "n_pca": None,
         "pca_center": False,
         "pca_whiten": False,
+        "dtype": "float64",
+        "infer_dtype": "float32",
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)

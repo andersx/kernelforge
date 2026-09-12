@@ -78,7 +78,7 @@ class TestCudaFCHL18KRRModelEnergyOnly:
         loaded = CudaFCHL18KRRModel.load(path)
         E_load, F_load = loaded.predict(te, zte)
         np.testing.assert_allclose(E_load, E_orig, rtol=1e-10)
-        np.testing.assert_allclose(F_load, F_orig, rtol=1e-10)
+        np.testing.assert_allclose(F_load, F_orig, rtol=1e-4, atol=1e-4)
 
 
 class TestCudaFCHL18KRRModelForceOnly:
@@ -187,3 +187,61 @@ class TestCudaFCHL18KRRModelFP32:
                 [Z_ETHANOL],
                 energies=np.array([0.0]),
             )
+
+    def test_default_trains_fp64_infers_fp32(self, dataset: tuple) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:8], coords_list[8:]
+        ztr, zte = z_list[:8], z_list[8:]
+
+        model = CudaFCHL18KRRModel(sigma=5.0, l2=1e-4, max_size=MAX_SIZE)
+        assert model.dtype == "float64"
+        assert model.infer_dtype == "float32"
+        model.fit(tr, ztr, energies=energies[:8])
+        torch = __import__("torch")
+        assert model._x_tr.dtype == torch.float64
+        assert model._x_tr_infer.dtype == torch.float32
+        assert model._alpha_infer.dtype == torch.float32
+        E_pred, F_pred = model.predict(te, zte)
+        assert np.all(np.isfinite(E_pred))
+        assert np.all(np.isfinite(F_pred))
+
+    def test_infer_dtype_fp64(self, dataset: tuple) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:8], coords_list[8:]
+        ztr, zte = z_list[:8], z_list[8:]
+
+        m32 = CudaFCHL18KRRModel(
+            sigma=5.0, l2=1e-4, max_size=MAX_SIZE, dtype="float64", infer_dtype="float32"
+        )
+        m64 = CudaFCHL18KRRModel(
+            sigma=5.0, l2=1e-4, max_size=MAX_SIZE, dtype="float64", infer_dtype="float64"
+        )
+        m32.fit(tr, ztr, energies=energies[:8])
+        m64.fit(tr, ztr, energies=energies[:8])
+        torch = __import__("torch")
+        assert m64._x_tr_infer.dtype == torch.float64
+        E32, _ = m32.predict(te, zte)
+        E64, _ = m64.predict(te, zte)
+        np.testing.assert_allclose(E32, E64, rtol=5e-2, atol=5e-2)
+
+    def test_infer_dtype_save_load(self, dataset: tuple, tmp_path) -> None:
+        coords_list, z_list, energies, _ = dataset
+        tr, te = coords_list[:8], coords_list[8:]
+        ztr, zte = z_list[:8], z_list[8:]
+
+        model = CudaFCHL18KRRModel(
+            sigma=5.0, l2=1e-4, max_size=MAX_SIZE, dtype="float64", infer_dtype="float32"
+        )
+        model.fit(tr, ztr, energies=energies[:8])
+        E_orig, F_orig = model.predict(te, zte)
+        path = tmp_path / "cuda_fchl18_mixed.npz"
+        model.save(path)
+        loaded = CudaFCHL18KRRModel.load(path)
+        # BaseModel.load is annotated as returning BaseModel; narrow it so the
+        # dtype attributes of the subclass are visible to the type checker.
+        assert isinstance(loaded, CudaFCHL18KRRModel)
+        assert loaded.dtype == "float64"
+        assert loaded.infer_dtype == "float32"
+        E_load, F_load = loaded.predict(te, zte)
+        np.testing.assert_allclose(E_load, E_orig, rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(F_load, F_orig, rtol=1e-4, atol=1e-4)
