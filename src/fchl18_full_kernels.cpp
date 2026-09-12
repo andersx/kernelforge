@@ -598,3 +598,175 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
 
     return K_rfp;
 }
+
+// ---------------------------------------------------------------------------
+// kernel_gaussian_full_matvec: contracted EF inference
+// ---------------------------------------------------------------------------
+py::tuple kernel_gaussian_full_matvec_py(
+    const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
+    const py::list &z_B_list, const py::array_t<double> &alpha_E,
+    const py::array_t<double> &alpha_F, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm, bool compute_energy
+) {
+    const int N_A = static_cast<int>(coords_A_list.size());
+    const int N_B = static_cast<int>(coords_B_list.size());
+    if (static_cast<int>(z_A_list.size()) != N_A || static_cast<int>(z_B_list.size()) != N_B)
+        throw std::invalid_argument("coords/z list size mismatch");
+    if (N_A == 0 || N_B == 0)
+        throw std::invalid_argument("kernel_gaussian_full_matvec: empty molecule list");
+    if (alpha_E.ndim() != 1 || alpha_E.shape(0) != N_B)
+        throw std::invalid_argument("alpha_E must have shape (N_B,)");
+
+    std::vector<kf::fchl18::MolData> mols_A(N_A), mols_B(N_B);
+    int D_A = 0;
+    for (int a = 0; a < N_A; ++a) {
+        mols_A[a] = kf::fchl18::parse_mol(coords_A_list[a], z_A_list[a]);
+        D_A += mols_A[a].n_atoms * 3;
+    }
+    int D_B = 0;
+    for (int b = 0; b < N_B; ++b) {
+        mols_B[b] = kf::fchl18::parse_mol(coords_B_list[b], z_B_list[b]);
+        D_B += mols_B[b].n_atoms * 3;
+    }
+    if (alpha_F.ndim() != 1 || alpha_F.shape(0) != D_B)
+        throw std::invalid_argument("alpha_F must have shape (D_B,)");
+
+    py::array_t<double> E({(py::ssize_t)N_A});
+    py::array_t<double> F({(py::ssize_t)D_A});
+    std::memset(E.mutable_data(), 0, sizeof(double) * N_A);
+    std::memset(F.mutable_data(), 0, sizeof(double) * D_A);
+
+    std::vector<std::vector<double>> coords_A_vecs(N_A), coords_B_vecs(N_B);
+    std::vector<std::vector<int>> z_A_vecs(N_A), z_B_vecs(N_B);
+    for (int a = 0; a < N_A; ++a) {
+        coords_A_vecs[a] = mols_A[a].coords;
+        z_A_vecs[a] = mols_A[a].z;
+    }
+    for (int b = 0; b < N_B; ++b) {
+        coords_B_vecs[b] = mols_B[b].coords;
+        z_B_vecs[b] = mols_B[b].z;
+    }
+
+    auto alpha_E_vec = std::vector<double>(
+        alpha_E.data(), alpha_E.data() + alpha_E.shape(0)
+    );
+    auto alpha_F_vec = std::vector<double>(
+        alpha_F.data(), alpha_F.data() + alpha_F.shape(0)
+    );
+
+    int max_size_A = 0, max_size_B = 0;
+    std::vector<double> x_A, x_B;
+    std::vector<int> n_A_v, n_B_v, nn_A, nn_B;
+    build_repr(mols_A, N_A, cut_distance, max_size_A, x_A, n_A_v, nn_A);
+    build_repr(mols_B, N_B, cut_distance, max_size_B, x_B, n_B_v, nn_B);
+
+    {
+        py::gil_scoped_release release;
+
+        if (compute_energy) {
+            std::vector<double> K_scalar(static_cast<std::size_t>(N_A) * N_B, 0.0);
+            kf::fchl18::kernel_gaussian(
+                x_A,
+                x_B,
+                n_A_v,
+                n_B_v,
+                nn_A,
+                nn_B,
+                N_A,
+                N_B,
+                max_size_A,
+                max_size_B,
+                sigma,
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
+                K_scalar.data()
+            );
+            double *E_ptr = E.mutable_data();
+            for (int a = 0; a < N_A; ++a) {
+                double acc = 0.0;
+                for (int b = 0; b < N_B; ++b) {
+                    acc += K_scalar[static_cast<std::size_t>(a) * N_B + b] * alpha_E_vec[b];
+                }
+                E_ptr[a] += acc;
+            }
+
+            kf::fchl18::kernel_gaussian_jacobian_t_matvec(
+                coords_B_vecs,
+                z_B_vecs,
+                x_A,
+                n_A_v,
+                nn_A,
+                N_A,
+                max_size_A,
+                alpha_F_vec,
+                sigma,
+                two_body_scaling,
+                two_body_width,
+                two_body_power,
+                three_body_scaling,
+                three_body_width,
+                three_body_power,
+                cut_start,
+                cut_distance,
+                fourier_order,
+                use_atm,
+                E.mutable_data()
+            );
+        }
+
+        kf::fchl18::kernel_gaussian_jacobian_matvec(
+            coords_A_vecs,
+            z_A_vecs,
+            x_B,
+            n_B_v,
+            nn_B,
+            N_B,
+            max_size_B,
+            alpha_E_vec,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            F.mutable_data()
+        );
+
+        kf::fchl18::kernel_gaussian_hessian_matvec(
+            coords_A_vecs,
+            z_A_vecs,
+            coords_B_vecs,
+            z_B_vecs,
+            alpha_F_vec,
+            sigma,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            F.mutable_data()
+        );
+    }
+
+    return py::make_tuple(E, F);
+}

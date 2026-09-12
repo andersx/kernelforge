@@ -143,5 +143,41 @@ void kernel_gaussian_hessian_symm_blocks(
     double *H_out  // (D, D) row-major OUT
 );
 
+// Contracted inference: F_out += H @ alpha_F without materialising H.
+void kernel_gaussian_hessian_matvec(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list,
+    const std::vector<std::vector<double>> &coords_B_list,
+    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &alpha_F,
+    double sigma, double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power,
+    double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    double *F_out  // (D_A,) row-major OUT (accumulated into)
+);
+
+// F_out += J @ alpha_E where J is (D_A, N_B) Jacobian block.
+void kernel_gaussian_jacobian_matvec(
+    const std::vector<std::vector<double>> &coords_A_list,
+    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
+    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2,
+    const std::vector<double> &alpha_E, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
+    double *F_out  // (D_A,) OUT (accumulated into)
+);
+
+// E_out += J^T @ alpha_F where J^T is (N_A, D_B) block of the full kernel.
+void kernel_gaussian_jacobian_t_matvec(
+    const std::vector<std::vector<double>> &coords_B_list,
+    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &x_A,
+    const std::vector<int> &n_A, const std::vector<int> &nn_A, int nm_A, int max_size_A,
+    const std::vector<double> &alpha_F, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
+    double *E_out  // (N_A,) OUT (accumulated into)
+);
+
 }  // namespace fchl18
 }  // namespace kf
