@@ -46,6 +46,16 @@ void kernel_gaussian_symm(
     double *kernel_out  // (nm, nm) row-major OUT
 );
 
+// Symmetric kernel written directly in RFP-packed format (TRANSR='N', UPLO='U'),
+// no dense (nm x nm) intermediate.  rfp_out has length nm*(nm+1)/2.
+void kernel_gaussian_symm_rfp_core(
+    const std::vector<double> &x, const std::vector<int> &n, const std::vector<int> &nn, int nm,
+    int max_size, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    double *rfp_out
+);
+
 // Gradient of the FCHL18 Gaussian kernel w.r.t. Cartesian coordinates of
 // molecule A (the query molecule).
 //
@@ -79,11 +89,10 @@ void kernel_gaussian_gradient(
 void kernel_gaussian_jacobian(
     const std::vector<std::vector<double>> &coords_A_list,  // each (n_atoms_i * 3)
     const std::vector<std::vector<int>> &z_A_list,          // each (n_atoms_i)
-    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2,
-    int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
+    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2, int nm2,
+    int max_size2, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order,
-    bool use_atm,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
     double *J_out  // (D_A, nm2) row-major OUT
 );
 
@@ -93,11 +102,10 @@ void kernel_gaussian_jacobian(
 void kernel_gaussian_jacobian_t(
     const std::vector<std::vector<double>> &coords_A_list,  // each (n_atoms_i * 3)
     const std::vector<std::vector<int>> &z_A_list,          // each (n_atoms_i)
-    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2,
-    int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
+    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2, int nm2,
+    int max_size2, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order,
-    bool use_atm,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
     double *K_jt_out  // (nm2, D_A) row-major OUT
 );
 
@@ -143,15 +151,29 @@ void kernel_gaussian_hessian_symm_blocks(
     double *H_out  // (D, D) row-major OUT
 );
 
+// Same as hessian_symm_blocks but writes upper-triangle RFP directly (no D×D temp).
+void kernel_gaussian_hessian_symm_rfp_blocks(
+    const std::vector<std::vector<double>> &coords_list,
+    const std::vector<std::vector<int>> &z_list, double sigma, double two_body_scaling,
+    double two_body_width, double two_body_power, double three_body_scaling,
+    double three_body_width, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm,
+    double *rfp_out  // D*(D+1)/2 OUT
+);
+
+// Phase timers for KF_HESS_PHASE=1 (stderr report). No-ops when unset.
+void hess_phase_reset();
+void hess_phase_report(const char *tag);
+
 // Contracted inference: F_out += H @ alpha_F without materialising H.
 void kernel_gaussian_hessian_matvec(
     const std::vector<std::vector<double>> &coords_A_list,
     const std::vector<std::vector<int>> &z_A_list,
     const std::vector<std::vector<double>> &coords_B_list,
-    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &alpha_F,
-    double sigma, double two_body_scaling, double two_body_width, double two_body_power,
-    double three_body_scaling, double three_body_width, double three_body_power,
-    double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &alpha_F, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm,
     double *F_out  // (D_A,) row-major OUT (accumulated into)
 );
 
