@@ -10,7 +10,6 @@
 
 // Project headers
 #include "aligned_alloc64.hpp"
-#include "array_view.hpp"
 #include "local_kernels.hpp"
 
 namespace py = pybind11;
@@ -62,13 +61,6 @@ static py::array_t<double> flocal_kernel_py(
     const size_t q1N = (size_t)max_atoms1 * nm1;
     const size_t q2N = (size_t)max_atoms2 * nm2;
 
-    kf::ConstArray<double> x1v(x1.data(), x1N);
-    kf::ConstArray<double> x2v(x2.data(), x2N);
-    kf::ConstArray<int> q1v(q1.data(), q1N);
-    kf::ConstArray<int> q2v(q2.data(), q2N);
-    kf::ConstArray<int> n1v(n1.data(), nm1);
-    kf::ConstArray<int> n2v(n2.data(), nm2);
-
     // Make aligned (n2 x n1) output
     const std::size_t nelems = nm2 * nm1;
     double *Kptr = aligned_alloc_64(nelems);
@@ -82,12 +74,12 @@ static py::array_t<double> flocal_kernel_py(
     );
 
     kf::fchl19::kernel_gaussian(
-        x1v,
-        x2v,
-        q1v,
-        q2v,
-        n1v,
-        n2v,
+        x1.data(),
+        x2.data(),
+        q1.data(),
+        q2.data(),
+        n1.data(),
+        n2.data(),
         nm1,
         nm2,
         max_atoms1,
@@ -122,10 +114,6 @@ static py::array_t<double> flocal_kernel_symm_py(
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
     const size_t q1N = (size_t)max_atoms1 * nm1;
 
-    kf::ConstArray<double> x1v(x1.data(), x1N);
-    kf::ConstArray<int> q1v(q1.data(), q1N);
-    kf::ConstArray<int> n1v(n1.data(), nm1);
-
     // Make aligned (n2 x n1) output
     const std::size_t nelems = nm1 * nm1;
     double *Kptr = aligned_alloc_64(nelems);
@@ -138,7 +126,16 @@ static py::array_t<double> flocal_kernel_symm_py(
         capsule
     );
 
-    kf::fchl19::kernel_gaussian_symm(x1v, q1v, n1v, nm1, max_atoms1, rep_size, sigma, Kptr);
+    kf::fchl19::kernel_gaussian_symm(
+        x1.data(),
+        q1.data(),
+        n1.data(),
+        nm1,
+        max_atoms1,
+        rep_size,
+        sigma,
+        Kptr
+    );
 
     return K;
 }
@@ -192,18 +189,10 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     const std::size_t q1N = static_cast<std::size_t>(nm1) * max_atoms1;
     const std::size_t q2N = static_cast<std::size_t>(nm2) * max_atoms2;
 
-    kf::ConstArray<double> x1v(x1.data(), x1N);
-    kf::ConstArray<double> x2v(x2.data(), x2N);
-    kf::ConstArray<double> dX2v(dX2.data(), dXN);
-    kf::ConstArray<int> q1v(q1.data(), q1N);
-    kf::ConstArray<int> q2v(q2.data(), q2N);
-    kf::ConstArray<int> n1v(n1.data(), nm1);
-    kf::ConstArray<int> n2v(n2.data(), nm2);
-
     // Compute naq2 = 3 * sum(n2)
     long long naq2_ll = 0;
     for (int b = 0; b < nm2; ++b) {
-        int nb = n2v[b];
+        int nb = n2.data()[b];
         if (nb < 0) nb = 0;
         if (nb > max_atoms2) nb = max_atoms2;
         naq2_ll += 3ll * nb;
@@ -233,13 +222,13 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     {
         py::gil_scoped_release release;
         kf::fchl19::kernel_gaussian_jacobian(
-            x1v,
-            x2v,
-            dX2v,
-            q1v,
-            q2v,
-            n1v,
-            n2v,
+            x1.data(),
+            x2.data(),
+            dX2.data(),
+            q1.data(),
+            q2.data(),
+            n1.data(),
+            n2.data(),
             nm1,
             nm2,
             max_atoms1,
@@ -301,18 +290,10 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     const std::size_t q1N = static_cast<std::size_t>(nm1) * max_atoms1;
     const std::size_t q2N = static_cast<std::size_t>(nm2) * max_atoms2;
 
-    kf::ConstArray<double> x1v(x1.data(), x1N);
-    kf::ConstArray<double> x2v(x2.data(), x2N);
-    kf::ConstArray<double> dX1v(dX1.data(), dXN);
-    kf::ConstArray<int> q1v(q1.data(), q1N);
-    kf::ConstArray<int> q2v(q2.data(), q2N);
-    kf::ConstArray<int> n1v(n1.data(), nm1);
-    kf::ConstArray<int> n2v(n2.data(), nm2);
-
     // Compute naq1 = 3 * sum(n1)
     long long naq1_ll = 0;
     for (int a = 0; a < nm1; ++a) {
-        int na = n1v[a];
+        int na = n1.data()[a];
         if (na < 0) na = 0;
         if (na > max_atoms1) na = max_atoms1;
         naq1_ll += 3ll * na;
@@ -345,13 +326,13 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     {
         py::gil_scoped_release release;
         kf::fchl19::kernel_gaussian_jacobian_t(
-            x1v,
-            x2v,
-            dX1v,
-            q1v,
-            q2v,
-            n1v,
-            n2v,
+            x1.data(),
+            x2.data(),
+            dX1.data(),
+            q1.data(),
+            q2.data(),
+            n1.data(),
+            n2.data(),
             nm1,
             nm2,
             max_atoms1,
@@ -417,25 +398,16 @@ static py::array_t<double> fgdml_kernel_py(
     const std::size_t q1N = (std::size_t)nm1 * max_atoms1;
     const std::size_t q2N = (std::size_t)nm2 * max_atoms2;
 
-    kf::ConstArray<double> x1v(x1.data(), x1N);
-    kf::ConstArray<double> x2v(x2.data(), x2N);
-    kf::ConstArray<double> dx1v(dx1.data(), dx1N);
-    kf::ConstArray<double> dx2v(dx2.data(), dx2N);
-    kf::ConstArray<int> q1v(q1.data(), q1N);
-    kf::ConstArray<int> q2v(q2.data(), q2N);
-    kf::ConstArray<int> n1v(n1.data(), nm1);
-    kf::ConstArray<int> n2v(n2.data(), nm2);
-
     // ---- compute naq1 = 3*sum_a min(max(n1[a],0), max_atoms1), naq2 analogously ----
     long long naq1_ll = 0, naq2_ll = 0;
     for (int a = 0; a < nm1; ++a) {
-        int na = n1v[a];
+        int na = n1.data()[a];
         if (na < 0) na = 0;
         if (na > max_atoms1) na = max_atoms1;
         naq1_ll += 3ll * na;
     }
     for (int b = 0; b < nm2; ++b) {
-        int nb = n2v[b];
+        int nb = n2.data()[b];
         if (nb < 0) nb = 0;
         if (nb > max_atoms2) nb = max_atoms2;
         naq2_ll += 3ll * nb;
@@ -478,14 +450,14 @@ static py::array_t<double> fgdml_kernel_py(
     {
         py::gil_scoped_release release;
         kf::fchl19::kernel_gaussian_hessian(
-            x1v,
-            x2v,
-            dx1v,
-            dx2v,
-            q1v,
-            q2v,
-            n1v,
-            n2v,
+            x1.data(),
+            x2.data(),
+            dx1.data(),
+            dx2.data(),
+            q1.data(),
+            q2.data(),
+            n1.data(),
+            n2.data(),
             nm1,
             nm2,
             max_atoms1,
@@ -532,15 +504,10 @@ static py::array_t<double> fgdml_kernel_symm_py(
     const std::size_t dx1N = (std::size_t)nm1 * max_atoms1 * rep * (3 * (std::size_t)max_atoms1);
     const std::size_t q1N = (std::size_t)nm1 * max_atoms1;
 
-    kf::ConstArray<double> x1v(x1.data(), x1N);
-    kf::ConstArray<double> dx1v(dx1.data(), dx1N);
-    kf::ConstArray<int> q1v(q1.data(), q1N);
-    kf::ConstArray<int> n1v(n1.data(), nm1);
-
     // ---- compute naq1 = 3*sum_a min(max(n1[a],0), max_atoms1), naq2 analogously ----
     long long naq1_ll = 0;
     for (int a = 0; a < nm1; ++a) {
-        int na = n1v[a];
+        int na = n1.data()[a];
         if (na < 0) na = 0;
         if (na > max_atoms1) na = max_atoms1;
         naq1_ll += 3ll * na;
@@ -581,10 +548,10 @@ static py::array_t<double> fgdml_kernel_symm_py(
     {
         py::gil_scoped_release release;
         kf::fchl19::kernel_gaussian_hessian_symm(
-            x1v,
-            dx1v,
-            q1v,
-            n1v,
+            x1.data(),
+            dx1.data(),
+            q1.data(),
+            n1.data(),
             nm1,
             max_atoms1,
             rep,
@@ -620,10 +587,6 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
     const size_t xN = (size_t)nm * (size_t)max_atoms * (size_t)rep_size;
     const size_t qN = (size_t)nm * (size_t)max_atoms;
 
-    kf::ConstArray<double> xv(x1.data(), xN);
-    kf::ConstArray<int> qv(q1.data(), qN);
-    kf::ConstArray<int> nv(n1.data(), nm);
-
     // Allocate aligned RFP output: nt = nm*(nm+1)/2
     const size_t nt = (size_t)nm * (nm + 1ull) / 2ull;
     double *arf_ptr = aligned_alloc_64(nt);
@@ -632,7 +595,16 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
     auto capsule = py::capsule(arf_ptr, [](void *p) { aligned_free_64(p); });
 
     // Call kernel (fills arf_ptr in TRANSR='N', UPLO='U')
-    kf::fchl19::kernel_gaussian_symm_rfp(xv, qv, nv, nm, max_atoms, rep_size, sigma, arf_ptr);
+    kf::fchl19::kernel_gaussian_symm_rfp(
+        x1.data(),
+        q1.data(),
+        n1.data(),
+        nm,
+        max_atoms,
+        rep_size,
+        sigma,
+        arf_ptr
+    );
 
     // Return as 1-D C-contiguous array without extra copies
     return py::array_t<double>({(py::ssize_t)nt}, {(py::ssize_t)sizeof(double)}, arf_ptr, capsule);
@@ -670,15 +642,10 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
     const std::size_t dx1N = (std::size_t)nm * max_atoms * rep * (3 * (std::size_t)max_atoms);
     const std::size_t q1N = (std::size_t)nm * max_atoms;
 
-    kf::ConstArray<double> x1v(x1.data(), x1N);
-    kf::ConstArray<double> dx1v(dx1.data(), dx1N);
-    kf::ConstArray<int> q1v(q1.data(), q1N);
-    kf::ConstArray<int> n1v(n1.data(), nm);
-
     // ---- compute naq = 3*sum_a min(max(n1[a],0), max_atoms) ----
     long long naq_ll = 0;
     for (int a = 0; a < nm; ++a) {
-        int na = n1v[a];
+        int na = n1.data()[a];
         if (na < 0) na = 0;
         if (na > max_atoms) na = max_atoms;
         naq_ll += 3ll * na;
@@ -704,10 +671,10 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
     {
         py::gil_scoped_release release;
         kf::fchl19::kernel_gaussian_hessian_symm_rfp(
-            x1v,
-            dx1v,
-            q1v,
-            n1v,
+            x1.data(),
+            dx1.data(),
+            q1.data(),
+            n1.data(),
             nm,
             max_atoms,
             rep,
@@ -928,20 +895,11 @@ Returns:
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            kf::ConstArray<double> x1v(x1.data(), x1.size());
-            kf::ConstArray<double> x2v(x2.data(), x2.size());
-            kf::ConstArray<double> dx1v(dx1.data(), dx1.size());
-            kf::ConstArray<double> dx2v(dx2.data(), dx2.size());
-            kf::ConstArray<int> q1v(q1.data(), q1.size());
-            kf::ConstArray<int> q2v(q2.data(), q2.size());
-            kf::ConstArray<int> n1v(n1.data(), n1.size());
-            kf::ConstArray<int> n2v(n2.data(), n2.size());
-
             long long naq1_ll = 0, naq2_ll = 0;
             for (int a = 0; a < nm1; ++a)
-                naq1_ll += 3LL * std::max(0, std::min(n1v[a], max_atoms1));
+                naq1_ll += 3LL * std::max(0, std::min(n1.data()[a], max_atoms1));
             for (int b = 0; b < nm2; ++b)
-                naq2_ll += 3LL * std::max(0, std::min(n2v[b], max_atoms2));
+                naq2_ll += 3LL * std::max(0, std::min(n2.data()[b], max_atoms2));
             const int naq1 = (int)naq1_ll, naq2 = (int)naq2_ll;
             const int rows = nm1 + naq1, cols = nm2 + naq2;
 
@@ -950,14 +908,14 @@ Returns:
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_full(
-                    x1v,
-                    x2v,
-                    dx1v,
-                    dx2v,
-                    q1v,
-                    q2v,
-                    n1v,
-                    n2v,
+                    x1.data(),
+                    x2.data(),
+                    dx1.data(),
+                    dx2.data(),
+                    q1.data(),
+                    q2.data(),
+                    n1.data(),
+                    n2.data(),
                     nm1,
                     nm2,
                     max_atoms1,
@@ -1019,14 +977,9 @@ Block layout:
                 throw std::invalid_argument("Q shape mismatch");
             if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
 
-            kf::ConstArray<double> xv(x.data(), x.size());
-            kf::ConstArray<double> dxv(dx.data(), dx.size());
-            kf::ConstArray<int> qv(q.data(), q.size());
-            kf::ConstArray<int> nv(n.data(), n.size());
-
             long long naq_ll = 0;
             for (int m = 0; m < nm; ++m)
-                naq_ll += 3LL * std::max(0, std::min(nv[m], max_atoms));
+                naq_ll += 3LL * std::max(0, std::min(n.data()[m], max_atoms));
             const int naq = (int)naq_ll;
             const int BIG = nm + naq;
 
@@ -1035,10 +988,10 @@ Block layout:
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_full_symm(
-                    xv,
-                    dxv,
-                    qv,
-                    nv,
+                    x.data(),
+                    dx.data(),
+                    q.data(),
+                    n.data(),
                     nm,
                     max_atoms,
                     rep,
@@ -1093,14 +1046,9 @@ Block layout:
                 throw std::invalid_argument("Q shape mismatch");
             if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
 
-            kf::ConstArray<double> xv(x.data(), x.size());
-            kf::ConstArray<double> dxv(dx.data(), dx.size());
-            kf::ConstArray<int> qv(q.data(), q.size());
-            kf::ConstArray<int> nv(n.data(), n.size());
-
             long long naq_ll = 0;
             for (int m = 0; m < nm; ++m)
-                naq_ll += 3LL * std::max(0, std::min(nv[m], max_atoms));
+                naq_ll += 3LL * std::max(0, std::min(n.data()[m], max_atoms));
             const int naq = (int)naq_ll;
             const int BIG = nm + naq;
             const std::size_t nt = (std::size_t)BIG * (BIG + 1) / 2;
@@ -1110,10 +1058,10 @@ Block layout:
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_full_symm_rfp(
-                    xv,
-                    dxv,
-                    qv,
-                    nv,
+                    x.data(),
+                    dx.data(),
+                    q.data(),
+                    n.data(),
                     nm,
                     max_atoms,
                     rep,
@@ -1160,11 +1108,6 @@ Packed as RFP TRANSR='N', UPLO='U'.
                 throw std::invalid_argument("Q2 shape mismatch");
             if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch");
 
-            kf::ConstArray<double> dx2v(dx2.data(), dx2.size());
-            kf::ConstArray<int> q2v(q2.data(), q2.size());
-            kf::ConstArray<int> n2v(n2.data(), n2.size());
-            kf::ConstArray<double> alphav(alpha.data(), alpha.size());
-
             // Allocate output: (nm2, max_atoms2, rep_size)
             const std::size_t output_size = (std::size_t)nm2 * max_atoms2 * rep_size;
             double *alpha_desc_ptr = aligned_alloc_64(output_size);
@@ -1173,13 +1116,13 @@ Packed as RFP TRANSR='N', UPLO='U'.
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_local_compute_alpha_desc(
-                    dx2v,
-                    q2v,
-                    n2v,
+                    dx2.data(),
+                    q2.data(),
+                    n2.data(),
                     nm2,
                     max_atoms2,
                     rep_size,
-                    alphav.data(),
+                    alpha.data(),
                     alpha_desc_ptr
                 );
             }
@@ -1255,19 +1198,10 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            kf::ConstArray<double> x1v(x1.data(), x1.size());
-            kf::ConstArray<double> dx1v(dx1.data(), dx1.size());
-            kf::ConstArray<double> x2v(x2.data(), x2.size());
-            kf::ConstArray<double> alpha_descv(alpha_desc.data(), alpha_desc.size());
-            kf::ConstArray<int> q1v(q1.data(), q1.size());
-            kf::ConstArray<int> q2v(q2.data(), q2.size());
-            kf::ConstArray<int> n1v(n1.data(), n1.size());
-            kf::ConstArray<int> n2v(n2.data(), n2.size());
-
             // Compute naq1 = 3*sum(n1)
             long long naq1_ll = 0;
             for (int a = 0; a < nm1; ++a)
-                naq1_ll += 3LL * std::max(0, std::min(n1v[a], max_atoms1));
+                naq1_ll += 3LL * std::max(0, std::min(n1.data()[a], max_atoms1));
             const int naq1 = static_cast<int>(naq1_ll);
 
             // Allocate output: (naq1,)
@@ -1277,14 +1211,14 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_local_hessian_matvec(
-                    x1v,
-                    dx1v,
-                    x2v,
-                    alpha_descv,
-                    q1v,
-                    q2v,
-                    n1v,
-                    n2v,
+                    x1.data(),
+                    dx1.data(),
+                    x2.data(),
+                    alpha_desc.data(),
+                    q1.data(),
+                    q2.data(),
+                    n1.data(),
+                    n2.data(),
                     nm1,
                     nm2,
                     max_atoms1,
@@ -1366,24 +1300,17 @@ Returns:
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            kf::ConstArray<double> x1v(x1.data(), x1.size());
-            kf::ConstArray<double> x2v(x2.data(), x2.size());
-            kf::ConstArray<int> q1v(q1.data(), q1.size());
-            kf::ConstArray<int> q2v(q2.data(), q2.size());
-            kf::ConstArray<int> n1v(n1.data(), n1.size());
-            kf::ConstArray<int> n2v(n2.data(), n2.size());
-
             auto E = py::array_t<double>(nm1);
             {
                 auto Ev = E.mutable_unchecked<1>();
                 kf::fchl19::kernel_gaussian_local_matvec(
-                    x1v,
-                    x2v,
+                    x1.data(),
+                    x2.data(),
                     alpha_E.data(),
-                    q1v,
-                    q2v,
-                    n1v,
-                    n2v,
+                    q1.data(),
+                    q2.data(),
+                    n1.data(),
+                    n2.data(),
                     nm1,
                     nm2,
                     max_atoms1,
@@ -1454,14 +1381,6 @@ Returns:
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            kf::ConstArray<double> x1v(x1.data(), x1.size());
-            kf::ConstArray<double> x2v(x2.data(), x2.size());
-            kf::ConstArray<double> alpha_descv(alpha_desc.data(), alpha_desc.size());
-            kf::ConstArray<int> q1v(q1.data(), q1.size());
-            kf::ConstArray<int> q2v(q2.data(), q2.size());
-            kf::ConstArray<int> n1v(n1.data(), n1.size());
-            kf::ConstArray<int> n2v(n2.data(), n2.size());
-
             // Allocate output: (nm1,)
             py::array_t<double> E({(py::ssize_t)nm1});
             auto Ev = E.mutable_unchecked<1>();
@@ -1469,13 +1388,13 @@ Returns:
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_local_jacobian_t_matvec(
-                    x1v,
-                    x2v,
-                    alpha_descv,
-                    q1v,
-                    q2v,
-                    n1v,
-                    n2v,
+                    x1.data(),
+                    x2.data(),
+                    alpha_desc.data(),
+                    q1.data(),
+                    q2.data(),
+                    n1.data(),
+                    n2.data(),
                     nm1,
                     nm2,
                     max_atoms1,
@@ -1559,20 +1478,10 @@ Returns:
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            kf::ConstArray<double> x1v(x1.data(), x1.size());
-            kf::ConstArray<double> dx1v(dx1.data(), dx1.size());
-            kf::ConstArray<double> x2v(x2.data(), x2.size());
-            kf::ConstArray<double> alpha_desc_Fv(alpha_desc_F.data(), alpha_desc_F.size());
-            kf::ConstArray<double> alpha_Ev(alpha_E.data(), alpha_E.size());
-            kf::ConstArray<int> q1v(q1.data(), q1.size());
-            kf::ConstArray<int> q2v(q2.data(), q2.size());
-            kf::ConstArray<int> n1v(n1.data(), n1.size());
-            kf::ConstArray<int> n2v(n2.data(), n2.size());
-
             // Compute naq1 = 3*sum(n1)
             long long naq1_ll = 0;
             for (int a = 0; a < nm1; ++a)
-                naq1_ll += 3LL * std::max(0, std::min(n1v[a], max_atoms1));
+                naq1_ll += 3LL * std::max(0, std::min(n1.data()[a], max_atoms1));
             const int naq1 = static_cast<int>(naq1_ll);
 
             py::array_t<double> E({(py::ssize_t)nm1});
@@ -1583,15 +1492,15 @@ Returns:
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_local_full_matvec(
-                    x1v,
-                    dx1v,
-                    x2v,
-                    alpha_desc_Fv,
-                    alpha_Ev.data(),
-                    q1v,
-                    q2v,
-                    n1v,
-                    n2v,
+                    x1.data(),
+                    dx1.data(),
+                    x2.data(),
+                    alpha_desc_F.data(),
+                    alpha_E.data(),
+                    q1.data(),
+                    q2.data(),
+                    n1.data(),
+                    n2.data(),
                     nm1,
                     nm2,
                     max_atoms1,

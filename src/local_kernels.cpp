@@ -1,8 +1,6 @@
 // Own header
 #include "local_kernels.hpp"
 
-#include "array_view.hpp"
-
 // C++ standard library
 #include <algorithm>
 #include <chrono>
@@ -25,16 +23,14 @@
 namespace kf {
 namespace fchl19 {
 
-using ::kf::ConstArray;
-
 //  #########################
 //  # FCHL19 KERNEL HELPERS #
 //  #########################
 
 // Distinct labels across both sets, with q1 (nm1,max_atoms1) and q2 (nm2,max_atoms2)
 static inline void collect_distinct_labels_T(
-    ConstArray<int> q1, int nm1, int max_atoms1, ConstArray<int> n1, ConstArray<int> q2, int nm2,
-    int max_atoms2, ConstArray<int> n2, std::vector<int> &labels_out
+    const int *q1, int nm1, int max_atoms1, const int *n1, const int *q2, int nm2, int max_atoms2,
+    const int *n2, std::vector<int> &labels_out
 ) {
     std::unordered_map<int, char> seen;
     seen.reserve(128);
@@ -75,9 +71,8 @@ struct PackedLabel {
 };
 
 static inline PackedLabel pack_label_block_T(
-    int label, ConstArray<double> x1, int nm1, int max_atoms1, int rep_size, ConstArray<double> x2,
-    int nm2, int max_atoms2, ConstArray<int> q1, ConstArray<int> q2, ConstArray<int> n1,
-    ConstArray<int> n2
+    int label, const double *x1, int nm1, int max_atoms1, int rep_size, const double *x2, int nm2,
+    int max_atoms2, const int *q1, const int *q2, const int *n1, const int *n2
 ) {
     PackedLabel pk;
     pk.rows_per_mol1.resize(nm1);
@@ -156,12 +151,12 @@ static inline PackedLabel pack_label_block_T(
 //  #################################
 
 void kernel_gaussian(
-    ConstArray<double> x1,  // (nm1, max_atoms1, rep_size)
-    ConstArray<double> x2,  // (nm2, max_atoms2, rep_size)
-    ConstArray<int> q1,     // (nm1, max_atoms1)
-    ConstArray<int> q2,     // (nm2, max_atoms2)
-    ConstArray<int> n1,     // (nm1)
-    ConstArray<int> n2,     // (nm2)
+    const double *x1,  // (nm1, max_atoms1, rep_size)
+    const double *x2,  // (nm2, max_atoms2, rep_size)
+    const int *q1,     // (nm1, max_atoms1)
+    const int *q2,     // (nm2, max_atoms2)
+    const int *n1,     // (nm1)
+    const int *n2,     // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size, double sigma,
     double *kernel  // (nm1, nm2), row-major: kernel[a*nm2 + b]
 ) {
@@ -307,7 +302,7 @@ void kernel_gaussian(
 
 // --- helper: collect labels for single set with q shape (nm, max_atoms)
 static inline void collect_distinct_labels_single_T(
-    ConstArray<int> q, int nm, int max_atoms, ConstArray<int> n, std::vector<int> &labels_out
+    const int *q, int nm, int max_atoms, const int *n, std::vector<int> &labels_out
 ) {
     std::unordered_map<int, char> seen;
     seen.reserve(128);
@@ -333,8 +328,7 @@ struct PackedLabelSym {
 };
 
 static inline PackedLabelSym pack_label_block_sym_T(
-    int label, ConstArray<double> x, int nm, int max_atoms, int rep_size, ConstArray<int> q,
-    ConstArray<int> n
+    int label, const double *x, int nm, int max_atoms, int rep_size, const int *q, const int *n
 ) {
     PackedLabelSym pk;
     pk.rows_per_mol.resize(nm);
@@ -404,9 +398,9 @@ static inline size_t rfp_index_upper_N(int n, int i, int j) {
 
 // Tiled, memory-bounded version that writes **directly to RFP** (TRANSR='N', UPLO='U')
 void kernel_gaussian_symm_rfp(
-    ConstArray<double> x,  // (nm, max_atoms, rep_size)
-    ConstArray<int> q,     // (nm, max_atoms)
-    ConstArray<int> n,     // (nm)
+    const double *x,  // (nm, max_atoms, rep_size)
+    const int *q,     // (nm, max_atoms)
+    const int *n,     // (nm)
     int nm, int max_atoms, int rep_size, double sigma,
     double *arf  // length nt = nm*(nm+1)/2, output RFP (TRANSR='N', UPLO='U')
 ) {
@@ -586,9 +580,9 @@ void kernel_gaussian_symm_rfp(
 
 // Tiled, memory-bounded version: only allocates a B×B scratch tile.
 void kernel_gaussian_symm(
-    ConstArray<double> x,  // (nm, max_atoms, rep_size)
-    ConstArray<int> q,     // (nm, max_atoms)
-    ConstArray<int> n,     // (nm)
+    const double *x,  // (nm, max_atoms, rep_size)
+    const int *q,     // (nm, max_atoms)
+    const int *n,     // (nm)
     int nm, int max_atoms, int rep_size, double sigma,
     double *kernel  // (nm, nm), row-major: kernel[a*nm + b]
 ) {
@@ -794,13 +788,13 @@ static inline size_t base_dx(int m, int j, int nm, int max_atoms, int rep) {
 }
 
 void kernel_gaussian_jacobian(
-    ConstArray<double> x1,   // (nm1, max_atoms1, rep)
-    ConstArray<double> x2,   // (nm2, max_atoms2, rep)
-    ConstArray<double> dX2,  // (nm2, max_atoms2, rep, 3*max_atoms2)
-    ConstArray<int> q1,      // (nm1, max_atoms1)
-    ConstArray<int> q2,      // (nm2, max_atoms2)
-    ConstArray<int> n1,      // (nm1)
-    ConstArray<int> n2,      // (nm2)
+    const double *x1,   // (nm1, max_atoms1, rep)
+    const double *x2,   // (nm2, max_atoms2, rep)
+    const double *dX2,  // (nm2, max_atoms2, rep, 3*max_atoms2)
+    const int *q1,      // (nm1, max_atoms1)
+    const int *q2,      // (nm2, max_atoms2)
+    const int *n1,      // (nm1)
+    const int *n2,      // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size, int naq2, double sigma,
     double *kernel_out  // (nm1, naq2)
 ) {
@@ -816,12 +810,6 @@ void kernel_gaussian_jacobian(
     const size_t dXN = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
     const size_t q1N = (size_t)nm1 * max_atoms1;
     const size_t q2N = (size_t)nm2 * max_atoms2;
-
-    if (x1.size() != x1N || x2.size() != x2N) throw std::invalid_argument("x1/x2 size mismatch.");
-    if (dX2.size() != dXN) throw std::invalid_argument("dX2 size mismatch.");
-    if (q1.size() != q1N || q2.size() != q2N) throw std::invalid_argument("q1/q2 size mismatch.");
-    if ((int)n1.size() != nm1 || (int)n2.size() != nm2)
-        throw std::invalid_argument("n1/n2 size mismatch.");
 
     // per-b offsets and ncols (3 * n2[b])
     std::vector<int> offs2(nm2), ncols_b(nm2);
@@ -994,13 +982,13 @@ void kernel_gaussian_jacobian(
 //   K_t[naq1_off_a + r, b] += alpha * A1[r, :] @ d   for r in [0, 3*n1[a])
 // where A1 = dX1[a, j1, :, :] shape (rep_size, 3*max_atoms1) row-major.
 void kernel_gaussian_jacobian_t(
-    ConstArray<double> x1,   // (nm1, max_atoms1, rep)
-    ConstArray<double> x2,   // (nm2, max_atoms2, rep)
-    ConstArray<double> dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
-    ConstArray<int> q1,      // (nm1, max_atoms1)
-    ConstArray<int> q2,      // (nm2, max_atoms2)
-    ConstArray<int> n1,      // (nm1)
-    ConstArray<int> n2,      // (nm2)
+    const double *x1,   // (nm1, max_atoms1, rep)
+    const double *x2,   // (nm2, max_atoms2, rep)
+    const double *dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
+    const int *q1,      // (nm1, max_atoms1)
+    const int *q2,      // (nm2, max_atoms2)
+    const int *n1,      // (nm1)
+    const int *n2,      // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum(n1)
     double sigma,
@@ -1017,12 +1005,6 @@ void kernel_gaussian_jacobian_t(
     const size_t dXN = (size_t)nm1 * max_atoms1 * rep_size * (3 * (size_t)max_atoms1);
     const size_t q1N = (size_t)nm1 * max_atoms1;
     const size_t q2N = (size_t)nm2 * max_atoms2;
-
-    if (x1.size() != x1N || x2.size() != x2N) throw std::invalid_argument("x1/x2 size mismatch.");
-    if (dX1.size() != dXN) throw std::invalid_argument("dX1 size mismatch.");
-    if (q1.size() != q1N || q2.size() != q2N) throw std::invalid_argument("q1/q2 size mismatch.");
-    if ((int)n1.size() != nm1 || (int)n2.size() != nm2)
-        throw std::invalid_argument("n1/n2 size mismatch.");
 
     // per-a offsets and nrows (3 * n1[a])
     std::vector<int> offs1(nm1), nrows_a(nm1);
@@ -1174,14 +1156,14 @@ void kernel_gaussian_jacobian_t(
 // # FCHL19 HESSIAN KERNEL #
 // #########################
 void kernel_gaussian_hessian(
-    ConstArray<double> x1,   // (nm1, max_atoms1, rep_size)
-    ConstArray<double> x2,   // (nm2, max_atoms2, rep_size)
-    ConstArray<double> dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    ConstArray<double> dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
-    ConstArray<int> q1,      // (nm1, max_atoms1)
-    ConstArray<int> q2,      // (nm2, max_atoms2)
-    ConstArray<int> n1,      // (nm1)
-    ConstArray<int> n2,      // (nm2)
+    const double *x1,   // (nm1, max_atoms1, rep_size)
+    const double *x2,   // (nm2, max_atoms2, rep_size)
+    const double *dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const double *dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const int *q1,      // (nm1, max_atoms1)
+    const int *q2,      // (nm2, max_atoms2)
+    const int *n1,      // (nm1)
+    const int *n2,      // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must be 3 * sum_a n1[a]
     int naq2,  // must be 3 * sum_b n2[b]
@@ -1201,13 +1183,6 @@ void kernel_gaussian_hessian(
     const size_t dx2N = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
     const size_t q1N = (size_t)nm1 * max_atoms1;
     const size_t q2N = (size_t)nm2 * max_atoms2;
-
-    if (x1.size() != x1N || x2.size() != x2N) throw std::invalid_argument("x1/x2 size mismatch.");
-    if (dx1.size() != dx1N || dx2.size() != dx2N)
-        throw std::invalid_argument("dx1/dx2 size mismatch.");
-    if (q1.size() != q1N || q2.size() != q2N) throw std::invalid_argument("q1/q2 size mismatch.");
-    if ((int)n1.size() != nm1 || (int)n2.size() != nm2)
-        throw std::invalid_argument("n1/n2 size mismatch.");
 
     // column offsets (set-1) and row offsets (set-2)
     std::vector<int> offs1(nm1), offs2(nm2);
@@ -1424,10 +1399,10 @@ void kernel_gaussian_hessian(
 }
 
 void kernel_gaussian_hessian_symm(
-    ConstArray<double> x,   // (nm, max_atoms, rep_size)
-    ConstArray<double> dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
-    ConstArray<int> q,      // (nm, max_atoms)
-    ConstArray<int> n,      // (nm)
+    const double *x,   // (nm, max_atoms, rep_size)
+    const double *dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const int *q,      // (nm, max_atoms)
+    const int *n,      // (nm)
     int nm, int max_atoms, int rep_size,
     int naq,  // must be 3 * sum_m n[m]
     double sigma,
@@ -1442,11 +1417,6 @@ void kernel_gaussian_hessian_symm(
     const size_t xN = (size_t)nm * max_atoms * rep_size;
     const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
     const size_t qN = (size_t)nm * max_atoms;
-
-    if (x.size() != xN) throw std::invalid_argument("x size mismatch");
-    if (dx.size() != dxN) throw std::invalid_argument("dx size mismatch");
-    if (q.size() != qN) throw std::invalid_argument("q size mismatch");
-    if ((int)n.size() != nm) throw std::invalid_argument("n size mismatch");
 
     // Offsets in derivative axis (3 * active atoms per molecule)
     std::vector<int> offs(nm);
@@ -1667,10 +1637,10 @@ void kernel_gaussian_hessian_symm(
 // to a full (naq x naq) square matrix, each (a,b) block is accumulated into
 // a small temp buffer, then scattered into the RFP array.
 void kernel_gaussian_hessian_symm_rfp(
-    ConstArray<double> x,   // (nm, max_atoms, rep_size)
-    ConstArray<double> dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
-    ConstArray<int> q,      // (nm, max_atoms)
-    ConstArray<int> n,      // (nm)
+    const double *x,   // (nm, max_atoms, rep_size)
+    const double *dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const int *q,      // (nm, max_atoms)
+    const int *n,      // (nm)
     int nm, int max_atoms, int rep_size,
     int naq,  // must be 3 * sum_m n[m]
     double sigma,
@@ -1685,11 +1655,6 @@ void kernel_gaussian_hessian_symm_rfp(
     const size_t xN = (size_t)nm * max_atoms * rep_size;
     const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
     const size_t qN = (size_t)nm * max_atoms;
-
-    if (x.size() != xN) throw std::invalid_argument("x size mismatch");
-    if (dx.size() != dxN) throw std::invalid_argument("dx size mismatch");
-    if (q.size() != qN) throw std::invalid_argument("q size mismatch");
-    if ((int)n.size() != nm) throw std::invalid_argument("n size mismatch");
 
     // Offsets in derivative axis (3 * active atoms per molecule)
     std::vector<int> offs(nm);
@@ -1915,14 +1880,14 @@ void kernel_gaussian_hessian_symm_rfp(
 //   - Jac, S_sum, V, and W remain per-i1 (SD1 varies per i1).
 // ============================================================================
 void kernel_gaussian_full(
-    ConstArray<double> x1,   // (nm1, max_atoms1, rep_size)
-    ConstArray<double> x2,   // (nm2, max_atoms2, rep_size)
-    ConstArray<double> dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    ConstArray<double> dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
-    ConstArray<int> q1,      // (nm1, max_atoms1)
-    ConstArray<int> q2,      // (nm2, max_atoms2)
-    ConstArray<int> n1,      // (nm1,)
-    ConstArray<int> n2,      // (nm2,)
+    const double *x1,   // (nm1, max_atoms1, rep_size)
+    const double *x2,   // (nm2, max_atoms2, rep_size)
+    const double *dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const double *dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const int *q1,      // (nm1, max_atoms1)
+    const int *q2,      // (nm2, max_atoms2)
+    const int *n1,      // (nm1,)
+    const int *n2,      // (nm2,)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum(n1)
     int naq2,  // must equal 3 * sum(n2)
@@ -1940,13 +1905,6 @@ void kernel_gaussian_full(
     const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
     const size_t dx1N = (size_t)nm1 * max_atoms1 * rep_size * (3 * (size_t)max_atoms1);
     const size_t dx2N = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
-    if (x1.size() != x1N || x2.size() != x2N) throw std::invalid_argument("x1/x2 size mismatch.");
-    if (dx1.size() != dx1N || dx2.size() != dx2N)
-        throw std::invalid_argument("dx1/dx2 size mismatch.");
-    if (q1.size() != (size_t)nm1 * max_atoms1 || q2.size() != (size_t)nm2 * max_atoms2)
-        throw std::invalid_argument("q1/q2 size mismatch.");
-    if ((int)n1.size() != nm1 || (int)n2.size() != nm2)
-        throw std::invalid_argument("n1/n2 size mismatch.");
 
     // Offsets in derivative axes
     std::vector<int> offs1(nm1), offs2(nm2);
@@ -2198,10 +2156,10 @@ void kernel_gaussian_full(
 // Uses the same fused single-pass approach as the asymmetric variant.
 // ============================================================================
 void kernel_gaussian_full_symm(
-    ConstArray<double> x,   // (nm, max_atoms, rep_size)
-    ConstArray<double> dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
-    ConstArray<int> q,      // (nm, max_atoms)
-    ConstArray<int> n,      // (nm,)
+    const double *x,   // (nm, max_atoms, rep_size)
+    const double *dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const int *q,      // (nm, max_atoms)
+    const int *n,      // (nm,)
     int nm, int max_atoms, int rep_size,
     int naq,  // must equal 3 * sum(n)
     double sigma,
@@ -2215,10 +2173,6 @@ void kernel_gaussian_full_symm(
 
     const size_t xN = (size_t)nm * max_atoms * rep_size;
     const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
-    if (x.size() != xN) throw std::invalid_argument("x size mismatch");
-    if (dx.size() != dxN) throw std::invalid_argument("dx size mismatch");
-    if (q.size() != (size_t)nm * max_atoms) throw std::invalid_argument("q size mismatch");
-    if ((int)n.size() != nm) throw std::invalid_argument("n size mismatch");
 
     std::vector<int> offs(nm);
     int sum = 0;
@@ -2508,10 +2462,10 @@ void kernel_gaussian_full_symm(
 //   [nm+col_off+c, nm+row_off+r] with col_off <= row_off (or col_off==row_off, c<=r): hessian block
 // ============================================================================
 void kernel_gaussian_full_symm_rfp(
-    ConstArray<double> x,   // (nm, max_atoms, rep_size)
-    ConstArray<double> dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
-    ConstArray<int> q,      // (nm, max_atoms)
-    ConstArray<int> n,      // (nm,)
+    const double *x,   // (nm, max_atoms, rep_size)
+    const double *dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    const int *q,      // (nm, max_atoms)
+    const int *n,      // (nm,)
     int nm, int max_atoms, int rep_size,
     int naq,  // must equal 3 * sum(n)
     double sigma,
@@ -2525,10 +2479,6 @@ void kernel_gaussian_full_symm_rfp(
 
     const size_t xN = (size_t)nm * max_atoms * rep_size;
     const size_t dxN = (size_t)nm * max_atoms * rep_size * (3 * (size_t)max_atoms);
-    if (x.size() != xN) throw std::invalid_argument("x size mismatch");
-    if (dx.size() != dxN) throw std::invalid_argument("dx size mismatch");
-    if (q.size() != (size_t)nm * max_atoms) throw std::invalid_argument("q size mismatch");
-    if ((int)n.size() != nm) throw std::invalid_argument("n size mismatch");
 
     std::vector<int> offs(nm);
     int sum = 0;
@@ -2815,25 +2765,20 @@ void kernel_gaussian_full_symm_rfp(
 // ============================================================================
 
 void kernel_gaussian_local_compute_alpha_desc(
-    ConstArray<double> dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
-    ConstArray<int> q2,      // (nm2, max_atoms2)
-    ConstArray<int> n2,      // (nm2)
+    const double *dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    const int *q2,      // (nm2, max_atoms2)
+    const int *n2,      // (nm2)
     int nm2, int max_atoms2, int rep_size,
     const double *alpha,  // (naq2,) where naq2 = 3*sum(n2)
     double *alpha_desc    // (nm2, max_atoms2, rep_size) output
 ) {
-    if (!dx2.data() || !q2.data() || !n2.data() || !alpha || !alpha_desc)
-        throw std::invalid_argument("null pointer");
+    if (!dx2 || !q2 || !n2 || !alpha || !alpha_desc) throw std::invalid_argument("null pointer");
     if (nm2 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
         throw std::invalid_argument("dimensions must be positive");
 
     const size_t dx2N = (size_t)nm2 * max_atoms2 * rep_size * (3 * (size_t)max_atoms2);
     const size_t q2N = (size_t)nm2 * max_atoms2;
     const size_t n2N = (size_t)nm2;
-
-    if (dx2.size() != dx2N) throw std::invalid_argument("dx2 size mismatch");
-    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
-    if (n2.size() != n2N) throw std::invalid_argument("n2 size mismatch");
 
     // Compute offsets: offs2[b] = 3 * sum(n2[0..b-1])
     std::vector<int> offs2(nm2);
@@ -2889,21 +2834,20 @@ void kernel_gaussian_local_compute_alpha_desc(
 }
 
 void kernel_gaussian_local_hessian_matvec(
-    ConstArray<double> x1,          // (nm1, max_atoms1, rep_size)
-    ConstArray<double> dx1,         // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    ConstArray<double> x2,          // (nm2, max_atoms2, rep_size)
-    ConstArray<double> alpha_desc,  // (nm2, max_atoms2, rep_size)
-    ConstArray<int> q1,             // (nm1, max_atoms1)
-    ConstArray<int> q2,             // (nm2, max_atoms2)
-    ConstArray<int> n1,             // (nm1)
-    ConstArray<int> n2,             // (nm2)
+    const double *x1,          // (nm1, max_atoms1, rep_size)
+    const double *dx1,         // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const double *x2,          // (nm2, max_atoms2, rep_size)
+    const double *alpha_desc,  // (nm2, max_atoms2, rep_size)
+    const int *q1,             // (nm1, max_atoms1)
+    const int *q2,             // (nm2, max_atoms2)
+    const int *n1,             // (nm1)
+    const int *n2,             // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum(n1)
     double sigma,
     double *F  // (naq1,) output
 ) {
-    if (!x1.data() || !dx1.data() || !x2.data() || !alpha_desc.data() || !q1.data() || !q2.data() ||
-        !n1.data() || !n2.data() || !F)
+    if (!x1 || !dx1 || !x2 || !alpha_desc || !q1 || !q2 || !n1 || !n2 || !F)
         throw std::invalid_argument("null pointer");
     if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
         throw std::invalid_argument("dimensions must be positive");
@@ -2915,15 +2859,6 @@ void kernel_gaussian_local_hessian_matvec(
     const size_t alpha_desc_N = (size_t)nm2 * max_atoms2 * rep_size;
     const size_t q1N = (size_t)nm1 * max_atoms1;
     const size_t q2N = (size_t)nm2 * max_atoms2;
-
-    if (x1.size() != x1N) throw std::invalid_argument("x1 size mismatch");
-    if (x2.size() != x2N) throw std::invalid_argument("x2 size mismatch");
-    if (dx1.size() != dx1N) throw std::invalid_argument("dx1 size mismatch");
-    if (alpha_desc.size() != alpha_desc_N) throw std::invalid_argument("alpha_desc size mismatch");
-    if (q1.size() != q1N) throw std::invalid_argument("q1 size mismatch");
-    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
-    if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
-    if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
 
     std::vector<int> offs1(nm1);
     int sum1 = 0;
@@ -3221,18 +3156,17 @@ void kernel_gaussian_local_hessian_matvec(
 // Strategy: per-label pack + tiled dual-DGEMM (distance trick + A@Bd^T), then
 // OpenMP epilogue. Much faster than nested atom-pair loops on ethanol-scale sets.
 void kernel_gaussian_local_jacobian_t_matvec(
-    ConstArray<double> x1,          // (nm1, max_atoms1, rep_size)
-    ConstArray<double> x2,          // (nm2, max_atoms2, rep_size)
-    ConstArray<double> alpha_desc,  // (nm2, max_atoms2, rep_size)
-    ConstArray<int> q1,             // (nm1, max_atoms1)
-    ConstArray<int> q2,             // (nm2, max_atoms2)
-    ConstArray<int> n1,             // (nm1)
-    ConstArray<int> n2,             // (nm2)
+    const double *x1,          // (nm1, max_atoms1, rep_size)
+    const double *x2,          // (nm2, max_atoms2, rep_size)
+    const double *alpha_desc,  // (nm2, max_atoms2, rep_size)
+    const int *q1,             // (nm1, max_atoms1)
+    const int *q2,             // (nm2, max_atoms2)
+    const int *n1,             // (nm1)
+    const int *n2,             // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size, double sigma,
     double *E_out  // (nm1,) output energies
 ) {
-    if (!x1.data() || !x2.data() || !alpha_desc.data() || !q1.data() || !q2.data() || !n1.data() ||
-        !n2.data() || !E_out)
+    if (!x1 || !x2 || !alpha_desc || !q1 || !q2 || !n1 || !n2 || !E_out)
         throw std::invalid_argument("null pointer");
     if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
         throw std::invalid_argument("dimensions must be positive");
@@ -3243,14 +3177,6 @@ void kernel_gaussian_local_jacobian_t_matvec(
     const size_t alpha_desc_N = (size_t)nm2 * max_atoms2 * rep_size;
     const size_t q1N = (size_t)nm1 * max_atoms1;
     const size_t q2N = (size_t)nm2 * max_atoms2;
-
-    if (x1.size() != x1N) throw std::invalid_argument("x1 size mismatch");
-    if (x2.size() != x2N) throw std::invalid_argument("x2 size mismatch");
-    if (alpha_desc.size() != alpha_desc_N) throw std::invalid_argument("alpha_desc size mismatch");
-    if (q1.size() != q1N) throw std::invalid_argument("q1 size mismatch");
-    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
-    if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
-    if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
 
     std::fill(E_out, E_out + nm1, 0.0);
 
@@ -3400,23 +3326,23 @@ void kernel_gaussian_local_jacobian_t_matvec(
 // All terms share kernel evaluations. Strategy: per-label pack + tiled dual-DGEMM
 // (same structure as jacobian_t_matvec), then back-project forces with dgemv.
 void kernel_gaussian_local_full_matvec(
-    ConstArray<double> x1,            // (nm1, max_atoms1, rep_size)
-    ConstArray<double> dx1,           // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    ConstArray<double> x2,            // (nm2, max_atoms2, rep_size)
-    ConstArray<double> alpha_desc_F,  // (nm2, max_atoms2, rep_size) precomputed
-    const double *alpha_E,            // (nm2,) energy coefficients
-    ConstArray<int> q1,               // (nm1, max_atoms1)
-    ConstArray<int> q2,               // (nm2, max_atoms2)
-    ConstArray<int> n1,               // (nm1)
-    ConstArray<int> n2,               // (nm2)
+    const double *x1,            // (nm1, max_atoms1, rep_size)
+    const double *dx1,           // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    const double *x2,            // (nm2, max_atoms2, rep_size)
+    const double *alpha_desc_F,  // (nm2, max_atoms2, rep_size) precomputed
+    const double *alpha_E,       // (nm2,) energy coefficients
+    const int *q1,               // (nm1, max_atoms1)
+    const int *q2,               // (nm2, max_atoms2)
+    const int *n1,               // (nm1)
+    const int *n2,               // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum(n1)
     double sigma,
     double *E_out,  // (nm1,) output energies
     double *F_out   // (naq1,) output forces
 ) {
-    if (!x1.data() || !dx1.data() || !x2.data() || !alpha_desc_F.data() || !alpha_E || !q1.data() ||
-        !q2.data() || !n1.data() || !n2.data() || !E_out || !F_out)
+    if (!x1 || !dx1 || !x2 || !alpha_desc_F || !alpha_E || !q1 || !q2 || !n1 || !n2 || !E_out ||
+        !F_out)
         throw std::invalid_argument("null pointer");
     if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
         throw std::invalid_argument("dimensions must be positive");
@@ -3428,16 +3354,6 @@ void kernel_gaussian_local_full_matvec(
     const size_t alpha_desc_N = (size_t)nm2 * max_atoms2 * rep_size;
     const size_t q1N = (size_t)nm1 * max_atoms1;
     const size_t q2N = (size_t)nm2 * max_atoms2;
-
-    if (x1.size() != x1N) throw std::invalid_argument("x1 size mismatch");
-    if (x2.size() != x2N) throw std::invalid_argument("x2 size mismatch");
-    if (dx1.size() != dx1N) throw std::invalid_argument("dx1 size mismatch");
-    if (alpha_desc_F.size() != alpha_desc_N)
-        throw std::invalid_argument("alpha_desc_F size mismatch");
-    if (q1.size() != q1N) throw std::invalid_argument("q1 size mismatch");
-    if (q2.size() != q2N) throw std::invalid_argument("q2 size mismatch");
-    if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
-    if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
 
     // Compute offsets for set-1
     std::vector<int> offs1(nm1);
@@ -3640,12 +3556,11 @@ void kernel_gaussian_local_full_matvec(
 
 // Scalar local Kw: E = K @ alpha_E without forming K (tiled distance-trick DGEMM).
 void kernel_gaussian_local_matvec(
-    ConstArray<double> x1, ConstArray<double> x2, const double *alpha_E, ConstArray<int> q1,
-    ConstArray<int> q2, ConstArray<int> n1, ConstArray<int> n2, int nm1, int nm2, int max_atoms1,
-    int max_atoms2, int rep_size, double sigma, double *E_out
+    const double *x1, const double *x2, const double *alpha_E, const int *q1, const int *q2,
+    const int *n1, const int *n2, int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
+    double sigma, double *E_out
 ) {
-    if (!x1.data() || !x2.data() || !alpha_E || !q1.data() || !q2.data() || !n1.data() ||
-        !n2.data() || !E_out)
+    if (!x1 || !x2 || !alpha_E || !q1 || !q2 || !n1 || !n2 || !E_out)
         throw std::invalid_argument("null pointer");
     if (nm1 <= 0 || nm2 <= 0 || max_atoms1 <= 0 || max_atoms2 <= 0 || rep_size <= 0)
         throw std::invalid_argument("dimensions must be positive");
@@ -3653,12 +3568,6 @@ void kernel_gaussian_local_matvec(
 
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
     const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
-    if (x1.size() != x1N) throw std::invalid_argument("x1 size mismatch");
-    if (x2.size() != x2N) throw std::invalid_argument("x2 size mismatch");
-    if (q1.size() != (size_t)nm1 * max_atoms1) throw std::invalid_argument("q1 size mismatch");
-    if (q2.size() != (size_t)nm2 * max_atoms2) throw std::invalid_argument("q2 size mismatch");
-    if ((int)n1.size() != nm1) throw std::invalid_argument("n1 size mismatch");
-    if ((int)n2.size() != nm2) throw std::invalid_argument("n2 size mismatch");
 
     std::fill(E_out, E_out + nm1, 0.0);
     const double inv_2sigma2 = -1.0 / (2.0 * sigma * sigma);
