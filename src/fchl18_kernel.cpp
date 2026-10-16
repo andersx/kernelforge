@@ -2514,10 +2514,16 @@ static void kernel_gaussian_jacobian_impl(
         use_atm
     );
 
-    // Prefer serial outer over queries; parallelise inside gradient over B
-    // (shared B cache) to avoid bandwidth thrash from many concurrent A rebuilds.
+    // One OpenMP level only. Prefer B-parallel when the partner set is large
+    // (avoids N_A threads each streaming the full B cache — BW thrash on jac).
+    // Prefer A-parallel when A is large and B is small (typical jacobian_t).
+#ifdef _OPENMP
+    const bool parallel_over_B = (nm2 >= N_A) && (nm2 >= omp_get_max_threads());
+    const bool parallel_over_A = !parallel_over_B && (N_A >= omp_get_max_threads());
+#else
     const bool parallel_over_A = false;
     const bool parallel_over_B = true;
+#endif
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic) if (parallel_over_A)
@@ -3787,10 +3793,13 @@ void kernel_gaussian_jacobian_matvec(
         use_atm
     );
 
-    // Prefer serial outer over queries; parallelise inside gradient over B
-    // (shared B cache) to avoid bandwidth thrash from many concurrent A rebuilds.
+#ifdef _OPENMP
+    const bool parallel_over_B = (nm2 >= N_A) && (nm2 >= omp_get_max_threads());
+    const bool parallel_over_A = !parallel_over_B && (N_A >= omp_get_max_threads());
+#else
     const bool parallel_over_A = false;
     const bool parallel_over_B = true;
+#endif
 
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic) if (parallel_over_A)
