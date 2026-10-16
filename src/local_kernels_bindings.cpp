@@ -10,6 +10,7 @@
 
 // Project headers
 #include "aligned_alloc64.hpp"
+#include "array_view.hpp"
 #include "local_kernels.hpp"
 
 namespace py = pybind11;
@@ -56,22 +57,17 @@ static py::array_t<double> flocal_kernel_py(
     if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
     if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
-    // Flatten into std::vector
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
     const size_t x2N = (size_t)nm2 * max_atoms2 * rep_size;
     const size_t q1N = (size_t)max_atoms1 * nm1;
     const size_t q2N = (size_t)max_atoms2 * nm2;
 
-    std::vector<double> x1v(x1N), x2v(x2N);
-    std::vector<int> q1v(q1N), q2v(q2N), n1v(nm1), n2v(nm2);
-
-    // Memory is C-contiguous because of c_style; we can memcpy via iterators
-    std::copy_n(x1.data(), x1N, x1v.begin());
-    std::copy_n(x2.data(), x2N, x2v.begin());
-    std::copy_n(q1.data(), q1N, q1v.begin());
-    std::copy_n(q2.data(), q2N, q2v.begin());
-    std::copy_n(n1.data(), (size_t)nm1, n1v.begin());
-    std::copy_n(n2.data(), (size_t)nm2, n2v.begin());
+    kf::ConstArray<double> x1v(x1.data(), x1N);
+    kf::ConstArray<double> x2v(x2.data(), x2N);
+    kf::ConstArray<int> q1v(q1.data(), q1N);
+    kf::ConstArray<int> q2v(q2.data(), q2N);
+    kf::ConstArray<int> n1v(n1.data(), nm1);
+    kf::ConstArray<int> n2v(n2.data(), nm2);
 
     // Make aligned (n2 x n1) output
     const std::size_t nelems = nm2 * nm1;
@@ -110,9 +106,7 @@ static py::array_t<double> flocal_kernel_symm_py(
     py::array_t<int, py::array::c_style | py::array::forcecast> n1, double sigma
 ) {
     if (x1.ndim() != 3 || q1.ndim() != 2 || n1.ndim() != 1) {
-        throw std::invalid_argument(
-            "Expect shapes: X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm)."
-        );
+        throw std::invalid_argument("Expect shapes: X(nm,max_atoms,rep), Q(nm,max_atoms), N(nm).");
     }
 
     const int nm1 = static_cast<int>(x1.shape(0));
@@ -125,17 +119,12 @@ static py::array_t<double> flocal_kernel_symm_py(
         throw std::invalid_argument("Q shape mismatch.");
     if (n1.shape(0) != nm1) throw std::invalid_argument("N length mismatch.");
 
-    // Flatten into std::vector
     const size_t x1N = (size_t)nm1 * max_atoms1 * rep_size;
     const size_t q1N = (size_t)max_atoms1 * nm1;
 
-    std::vector<double> x1v(x1N);
-    std::vector<int> q1v(q1N), n1v(nm1);
-
-    // Memory is C-contiguous because of c_style; we can memcpy via iterators
-    std::copy_n(x1.data(), x1N, x1v.begin());
-    std::copy_n(q1.data(), q1N, q1v.begin());
-    std::copy_n(n1.data(), (size_t)nm1, n1v.begin());
+    kf::ConstArray<double> x1v(x1.data(), x1N);
+    kf::ConstArray<int> q1v(q1.data(), q1N);
+    kf::ConstArray<int> n1v(n1.data(), nm1);
 
     // Make aligned (n2 x n1) output
     const std::size_t nelems = nm1 * nm1;
@@ -196,7 +185,6 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
     if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
-    // Flatten into std::vector (C-contiguous thanks to c_style|forcecast)
     const std::size_t x1N = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size;
     const std::size_t x2N = static_cast<std::size_t>(nm2) * max_atoms2 * rep_size;
     const std::size_t dXN = static_cast<std::size_t>(nm2) * max_atoms2 * rep_size *
@@ -204,16 +192,13 @@ static py::array_t<double> fatomic_local_gradient_kernel_py(
     const std::size_t q1N = static_cast<std::size_t>(nm1) * max_atoms1;
     const std::size_t q2N = static_cast<std::size_t>(nm2) * max_atoms2;
 
-    std::vector<double> x1v(x1N), x2v(x2N), dX2v(dXN);
-    std::vector<int> q1v(q1N), q2v(q2N), n1v(nm1), n2v(nm2);
-
-    std::copy_n(x1.data(), x1N, x1v.begin());
-    std::copy_n(x2.data(), x2N, x2v.begin());
-    std::copy_n(dX2.data(), dXN, dX2v.begin());
-    std::copy_n(q1.data(), q1N, q1v.begin());
-    std::copy_n(q2.data(), q2N, q2v.begin());
-    std::copy_n(n1.data(), static_cast<std::size_t>(nm1), n1v.begin());
-    std::copy_n(n2.data(), static_cast<std::size_t>(nm2), n2v.begin());
+    kf::ConstArray<double> x1v(x1.data(), x1N);
+    kf::ConstArray<double> x2v(x2.data(), x2N);
+    kf::ConstArray<double> dX2v(dX2.data(), dXN);
+    kf::ConstArray<int> q1v(q1.data(), q1N);
+    kf::ConstArray<int> q2v(q2.data(), q2N);
+    kf::ConstArray<int> n1v(n1.data(), nm1);
+    kf::ConstArray<int> n2v(n2.data(), nm2);
 
     // Compute naq2 = 3 * sum(n2)
     long long naq2_ll = 0;
@@ -274,10 +259,10 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     py::array_t<double, py::array::c_style | py::array::forcecast>
         dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
     py::array_t<double, py::array::c_style | py::array::forcecast> x2,  // (nm2, max_atoms2, rep)
-    py::array_t<int, py::array::c_style | py::array::forcecast> q1,  // (nm1, max_atoms1)
-    py::array_t<int, py::array::c_style | py::array::forcecast> q2,  // (nm2, max_atoms2)
-    py::array_t<int, py::array::c_style | py::array::forcecast> n1,  // (nm1,)
-    py::array_t<int, py::array::c_style | py::array::forcecast> n2,  // (nm2,)
+    py::array_t<int, py::array::c_style | py::array::forcecast> q1,     // (nm1, max_atoms1)
+    py::array_t<int, py::array::c_style | py::array::forcecast> q2,     // (nm2, max_atoms2)
+    py::array_t<int, py::array::c_style | py::array::forcecast> n1,     // (nm1,)
+    py::array_t<int, py::array::c_style | py::array::forcecast> n2,     // (nm2,)
     double sigma
 ) {
     // --- shape checks ---
@@ -309,7 +294,6 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
     if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
-    // Flatten into std::vector (C-contiguous thanks to c_style|forcecast)
     const std::size_t x1N = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size;
     const std::size_t x2N = static_cast<std::size_t>(nm2) * max_atoms2 * rep_size;
     const std::size_t dXN = static_cast<std::size_t>(nm1) * max_atoms1 * rep_size *
@@ -317,16 +301,13 @@ static py::array_t<double> fatomic_local_gradient_kernel_t_py(
     const std::size_t q1N = static_cast<std::size_t>(nm1) * max_atoms1;
     const std::size_t q2N = static_cast<std::size_t>(nm2) * max_atoms2;
 
-    std::vector<double> x1v(x1N), x2v(x2N), dX1v(dXN);
-    std::vector<int> q1v(q1N), q2v(q2N), n1v(nm1), n2v(nm2);
-
-    std::copy_n(x1.data(), x1N, x1v.begin());
-    std::copy_n(x2.data(), x2N, x2v.begin());
-    std::copy_n(dX1.data(), dXN, dX1v.begin());
-    std::copy_n(q1.data(), q1N, q1v.begin());
-    std::copy_n(q2.data(), q2N, q2v.begin());
-    std::copy_n(n1.data(), static_cast<std::size_t>(nm1), n1v.begin());
-    std::copy_n(n2.data(), static_cast<std::size_t>(nm2), n2v.begin());
+    kf::ConstArray<double> x1v(x1.data(), x1N);
+    kf::ConstArray<double> x2v(x2.data(), x2N);
+    kf::ConstArray<double> dX1v(dX1.data(), dXN);
+    kf::ConstArray<int> q1v(q1.data(), q1N);
+    kf::ConstArray<int> q2v(q2.data(), q2N);
+    kf::ConstArray<int> n1v(n1.data(), nm1);
+    kf::ConstArray<int> n2v(n2.data(), nm2);
 
     // Compute naq1 = 3 * sum(n1)
     long long naq1_ll = 0;
@@ -429,7 +410,6 @@ static py::array_t<double> fgdml_kernel_py(
     if (n1.shape(0) != nm1) throw std::invalid_argument("N1 length mismatch.");
     if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch.");
 
-    // ---- flatten to std::vector (C-contiguous guaranteed by c_style|forcecast) ----
     const std::size_t x1N = (std::size_t)nm1 * max_atoms1 * rep;
     const std::size_t x2N = (std::size_t)nm2 * max_atoms2 * rep;
     const std::size_t dx1N = (std::size_t)nm1 * max_atoms1 * rep * (3 * (std::size_t)max_atoms1);
@@ -437,17 +417,14 @@ static py::array_t<double> fgdml_kernel_py(
     const std::size_t q1N = (std::size_t)nm1 * max_atoms1;
     const std::size_t q2N = (std::size_t)nm2 * max_atoms2;
 
-    std::vector<double> x1v(x1N), x2v(x2N), dx1v(dx1N), dx2v(dx2N);
-    std::vector<int> q1v(q1N), q2v(q2N), n1v(nm1), n2v(nm2);
-
-    std::copy_n(x1.data(), x1N, x1v.begin());
-    std::copy_n(x2.data(), x2N, x2v.begin());
-    std::copy_n(dx1.data(), dx1N, dx1v.begin());
-    std::copy_n(dx2.data(), dx2N, dx2v.begin());
-    std::copy_n(q1.data(), q1N, q1v.begin());
-    std::copy_n(q2.data(), q2N, q2v.begin());
-    std::copy_n(n1.data(), (std::size_t)nm1, n1v.begin());
-    std::copy_n(n2.data(), (std::size_t)nm2, n2v.begin());
+    kf::ConstArray<double> x1v(x1.data(), x1N);
+    kf::ConstArray<double> x2v(x2.data(), x2N);
+    kf::ConstArray<double> dx1v(dx1.data(), dx1N);
+    kf::ConstArray<double> dx2v(dx2.data(), dx2N);
+    kf::ConstArray<int> q1v(q1.data(), q1N);
+    kf::ConstArray<int> q2v(q2.data(), q2N);
+    kf::ConstArray<int> n1v(n1.data(), nm1);
+    kf::ConstArray<int> n2v(n2.data(), nm2);
 
     // ---- compute naq1 = 3*sum_a min(max(n1[a],0), max_atoms1), naq2 analogously ----
     long long naq1_ll = 0, naq2_ll = 0;
@@ -551,18 +528,14 @@ static py::array_t<double> fgdml_kernel_symm_py(
         throw std::invalid_argument("Q shape mismatch.");
     if (n1.shape(0) != nm1) throw std::invalid_argument("N length mismatch.");
 
-    // ---- flatten to std::vector (C-contiguous guaranteed by c_style|forcecast) ----
     const std::size_t x1N = (std::size_t)nm1 * max_atoms1 * rep;
     const std::size_t dx1N = (std::size_t)nm1 * max_atoms1 * rep * (3 * (std::size_t)max_atoms1);
     const std::size_t q1N = (std::size_t)nm1 * max_atoms1;
 
-    std::vector<double> x1v(x1N), dx1v(dx1N);
-    std::vector<int> q1v(q1N), n1v(nm1);
-
-    std::copy_n(x1.data(), x1N, x1v.begin());
-    std::copy_n(dx1.data(), dx1N, dx1v.begin());
-    std::copy_n(q1.data(), q1N, q1v.begin());
-    std::copy_n(n1.data(), (std::size_t)nm1, n1v.begin());
+    kf::ConstArray<double> x1v(x1.data(), x1N);
+    kf::ConstArray<double> dx1v(dx1.data(), dx1N);
+    kf::ConstArray<int> q1v(q1.data(), q1N);
+    kf::ConstArray<int> n1v(n1.data(), nm1);
 
     // ---- compute naq1 = 3*sum_a min(max(n1[a],0), max_atoms1), naq2 analogously ----
     long long naq1_ll = 0;
@@ -644,16 +617,12 @@ static py::array_t<double> flocal_kernel_symm_rfp_py(
         throw std::invalid_argument("Q shape mismatch.");
     if (n1.shape(0) != nm) throw std::invalid_argument("N length mismatch.");
 
-    // Flatten into std::vector
     const size_t xN = (size_t)nm * (size_t)max_atoms * (size_t)rep_size;
     const size_t qN = (size_t)nm * (size_t)max_atoms;
 
-    std::vector<double> xv(xN);
-    std::vector<int> qv(qN), nv(nm);
-
-    std::copy_n(x1.data(), xN, xv.begin());
-    std::copy_n(q1.data(), qN, qv.begin());
-    std::copy_n(n1.data(), (size_t)nm, nv.begin());
+    kf::ConstArray<double> xv(x1.data(), xN);
+    kf::ConstArray<int> qv(q1.data(), qN);
+    kf::ConstArray<int> nv(n1.data(), nm);
 
     // Allocate aligned RFP output: nt = nm*(nm+1)/2
     const size_t nt = (size_t)nm * (nm + 1ull) / 2ull;
@@ -697,18 +666,14 @@ static py::array_t<double> fgdml_kernel_symm_rfp_py(
         throw std::invalid_argument("Q shape mismatch.");
     if (n1.shape(0) != nm) throw std::invalid_argument("N length mismatch.");
 
-    // ---- flatten to std::vector ----
     const std::size_t x1N = (std::size_t)nm * max_atoms * rep;
     const std::size_t dx1N = (std::size_t)nm * max_atoms * rep * (3 * (std::size_t)max_atoms);
     const std::size_t q1N = (std::size_t)nm * max_atoms;
 
-    std::vector<double> x1v(x1N), dx1v(dx1N);
-    std::vector<int> q1v(q1N), n1v(nm);
-
-    std::copy_n(x1.data(), x1N, x1v.begin());
-    std::copy_n(dx1.data(), dx1N, dx1v.begin());
-    std::copy_n(q1.data(), q1N, q1v.begin());
-    std::copy_n(n1.data(), (std::size_t)nm, n1v.begin());
+    kf::ConstArray<double> x1v(x1.data(), x1N);
+    kf::ConstArray<double> dx1v(dx1.data(), dx1N);
+    kf::ConstArray<int> q1v(q1.data(), q1N);
+    kf::ConstArray<int> n1v(n1.data(), nm);
 
     // ---- compute naq = 3*sum_a min(max(n1[a],0), max_atoms) ----
     long long naq_ll = 0;
@@ -963,14 +928,14 @@ Returns:
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            std::vector<double> x1v(x1.data(), x1.data() + x1.size());
-            std::vector<double> x2v(x2.data(), x2.data() + x2.size());
-            std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
-            std::vector<double> dx2v(dx2.data(), dx2.data() + dx2.size());
-            std::vector<int> q1v(q1.data(), q1.data() + q1.size());
-            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
-            std::vector<int> n1v(n1.data(), n1.data() + n1.size());
-            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+            kf::ConstArray<double> x1v(x1.data(), x1.size());
+            kf::ConstArray<double> x2v(x2.data(), x2.size());
+            kf::ConstArray<double> dx1v(dx1.data(), dx1.size());
+            kf::ConstArray<double> dx2v(dx2.data(), dx2.size());
+            kf::ConstArray<int> q1v(q1.data(), q1.size());
+            kf::ConstArray<int> q2v(q2.data(), q2.size());
+            kf::ConstArray<int> n1v(n1.data(), n1.size());
+            kf::ConstArray<int> n2v(n2.data(), n2.size());
 
             long long naq1_ll = 0, naq2_ll = 0;
             for (int a = 0; a < nm1; ++a)
@@ -1054,10 +1019,10 @@ Block layout:
                 throw std::invalid_argument("Q shape mismatch");
             if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
 
-            std::vector<double> xv(x.data(), x.data() + x.size());
-            std::vector<double> dxv(dx.data(), dx.data() + dx.size());
-            std::vector<int> qv(q.data(), q.data() + q.size());
-            std::vector<int> nv(n.data(), n.data() + n.size());
+            kf::ConstArray<double> xv(x.data(), x.size());
+            kf::ConstArray<double> dxv(dx.data(), dx.size());
+            kf::ConstArray<int> qv(q.data(), q.size());
+            kf::ConstArray<int> nv(n.data(), n.size());
 
             long long naq_ll = 0;
             for (int m = 0; m < nm; ++m)
@@ -1128,10 +1093,10 @@ Block layout:
                 throw std::invalid_argument("Q shape mismatch");
             if (n.shape(0) != nm) throw std::invalid_argument("N length mismatch");
 
-            std::vector<double> xv(x.data(), x.data() + x.size());
-            std::vector<double> dxv(dx.data(), dx.data() + dx.size());
-            std::vector<int> qv(q.data(), q.data() + q.size());
-            std::vector<int> nv(n.data(), n.data() + n.size());
+            kf::ConstArray<double> xv(x.data(), x.size());
+            kf::ConstArray<double> dxv(dx.data(), dx.size());
+            kf::ConstArray<int> qv(q.data(), q.size());
+            kf::ConstArray<int> nv(n.data(), n.size());
 
             long long naq_ll = 0;
             for (int m = 0; m < nm; ++m)
@@ -1179,22 +1144,26 @@ Packed as RFP TRANSR='N', UPLO='U'.
     m.def(
         "kernel_gaussian_local_compute_alpha_desc",
         [](py::array_t<double, py::array::c_style | py::array::forcecast> dx2,
-           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
-           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
-           py::array_t<double, py::array::c_style | py::array::forcecast> alpha) -> py::array_t<double> {
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               alpha) -> py::array_t<double> {
             if (dx2.ndim() != 4 || q2.ndim() != 2 || n2.ndim() != 1 || alpha.ndim() != 1)
                 throw std::invalid_argument("shape error");
             const int nm2 = static_cast<int>(dx2.shape(0));
             const int max_atoms2 = static_cast<int>(dx2.shape(1));
             const int rep_size = static_cast<int>(dx2.shape(2));
             if (dx2.shape(3) != 3 * max_atoms2) throw std::invalid_argument("dX2 shape mismatch");
-            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2) throw std::invalid_argument("Q2 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
+                throw std::invalid_argument("Q2 shape mismatch");
             if (n2.shape(0) != nm2) throw std::invalid_argument("N2 length mismatch");
 
-            std::vector<double> dx2v(dx2.data(), dx2.data() + dx2.size());
-            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
-            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
-            std::vector<double> alphav(alpha.data(), alpha.data() + alpha.size());
+            kf::ConstArray<double> dx2v(dx2.data(), dx2.size());
+            kf::ConstArray<int> q2v(q2.data(), q2.size());
+            kf::ConstArray<int> n2v(n2.data(), n2.size());
+            kf::ConstArray<double> alphav(alpha.data(), alpha.size());
 
             // Allocate output: (nm2, max_atoms2, rep_size)
             const std::size_t output_size = (std::size_t)nm2 * max_atoms2 * rep_size;
@@ -1246,13 +1215,20 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
     m.def(
         "kernel_gaussian_local_hessian_matvec",
         [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
-           py::array_t<double, py::array::c_style | py::array::forcecast> dx1,
-           py::array_t<double, py::array::c_style | py::array::forcecast> x2,
-           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_desc,
-           py::array_t<int, py::array::c_style | py::array::forcecast> q1,
-           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
-           py::array_t<int, py::array::c_style | py::array::forcecast> n1,
-           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               dx1,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               alpha_desc,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n2,
            double sigma) -> py::array_t<double> {
             if (x1.ndim() != 3 || dx1.ndim() != 4 || x2.ndim() != 3 || alpha_desc.ndim() != 3 ||
                 q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
@@ -1279,14 +1255,14 @@ Use with kernel_gaussian_local_hessian_matvec for efficient O(M) inference cost.
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            std::vector<double> x1v(x1.data(), x1.data() + x1.size());
-            std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
-            std::vector<double> x2v(x2.data(), x2.data() + x2.size());
-            std::vector<double> alpha_descv(alpha_desc.data(), alpha_desc.data() + alpha_desc.size());
-            std::vector<int> q1v(q1.data(), q1.data() + q1.size());
-            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
-            std::vector<int> n1v(n1.data(), n1.data() + n1.size());
-            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+            kf::ConstArray<double> x1v(x1.data(), x1.size());
+            kf::ConstArray<double> dx1v(dx1.data(), dx1.size());
+            kf::ConstArray<double> x2v(x2.data(), x2.size());
+            kf::ConstArray<double> alpha_descv(alpha_desc.data(), alpha_desc.size());
+            kf::ConstArray<int> q1v(q1.data(), q1.size());
+            kf::ConstArray<int> q2v(q2.data(), q2.size());
+            kf::ConstArray<int> n1v(n1.data(), n1.size());
+            kf::ConstArray<int> n2v(n2.data(), n2.size());
 
             // Compute naq1 = 3*sum(n1)
             long long naq1_ll = 0;
@@ -1356,17 +1332,109 @@ Returns:
     );
 
     m.def(
+        "kernel_gaussian_local_matvec",
+        [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               alpha_E,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n2,
+           double sigma) -> py::array_t<double> {
+            if (x1.ndim() != 3 || x2.ndim() != 3 || alpha_E.ndim() != 1 || q1.ndim() != 2 ||
+                q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
+                throw std::invalid_argument("shape error");
+
+            const int nm1 = static_cast<int>(x1.shape(0));
+            const int max_atoms1 = static_cast<int>(x1.shape(1));
+            const int rep_size = static_cast<int>(x1.shape(2));
+            const int nm2 = static_cast<int>(x2.shape(0));
+            const int max_atoms2 = static_cast<int>(x2.shape(1));
+
+            if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch");
+            if (alpha_E.shape(0) != nm2) throw std::invalid_argument("alpha_E length mismatch");
+            if (q1.shape(0) != nm1 || q1.shape(1) != max_atoms1)
+                throw std::invalid_argument("Q1 shape mismatch");
+            if (q2.shape(0) != nm2 || q2.shape(1) != max_atoms2)
+                throw std::invalid_argument("Q2 shape mismatch");
+            if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
+                throw std::invalid_argument("N1/N2 length mismatch");
+
+            kf::ConstArray<double> x1v(x1.data(), x1.size());
+            kf::ConstArray<double> x2v(x2.data(), x2.size());
+            kf::ConstArray<int> q1v(q1.data(), q1.size());
+            kf::ConstArray<int> q2v(q2.data(), q2.size());
+            kf::ConstArray<int> n1v(n1.data(), n1.size());
+            kf::ConstArray<int> n2v(n2.data(), n2.size());
+
+            auto E = py::array_t<double>(nm1);
+            {
+                auto Ev = E.mutable_unchecked<1>();
+                kf::fchl19::kernel_gaussian_local_matvec(
+                    x1v,
+                    x2v,
+                    alpha_E.data(),
+                    q1v,
+                    q2v,
+                    n1v,
+                    n2v,
+                    nm1,
+                    nm2,
+                    max_atoms1,
+                    max_atoms2,
+                    rep_size,
+                    sigma,
+                    Ev.mutable_data(0)
+                );
+            }
+            return E;
+        },
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("alpha_E"),
+        py::arg("Q1"),
+        py::arg("Q2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("sigma"),
+        R"(Predict energies via local scalar kernel matvec (Kw) without forming K.
+
+Shapes:
+  X1:      (nm1, max_atoms1, rep_size), query descriptors
+  X2:      (nm2, max_atoms2, rep_size), train descriptors
+  alpha_E: (nm2,), energy coefficients
+  Q1, Q2:  atomic labels; N1, N2: active atom counts
+  sigma:   Gaussian width
+
+Returns:
+  E: (nm1,) predicted energies
+)"
+    );
+
+    m.def(
         "kernel_gaussian_local_jacobian_t_matvec",
         [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
-           py::array_t<double, py::array::c_style | py::array::forcecast> x2,
-           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_desc,
-           py::array_t<int, py::array::c_style | py::array::forcecast> q1,
-           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
-           py::array_t<int, py::array::c_style | py::array::forcecast> n1,
-           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               alpha_desc,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n2,
            double sigma) -> py::array_t<double> {
-            if (x1.ndim() != 3 || x2.ndim() != 3 || alpha_desc.ndim() != 3 ||
-                q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
+            if (x1.ndim() != 3 || x2.ndim() != 3 || alpha_desc.ndim() != 3 || q1.ndim() != 2 ||
+                q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
                 throw std::invalid_argument("shape error");
 
             const int nm1 = static_cast<int>(x1.shape(0));
@@ -1386,13 +1454,13 @@ Returns:
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            std::vector<double> x1v(x1.data(), x1.data() + x1.size());
-            std::vector<double> x2v(x2.data(), x2.data() + x2.size());
-            std::vector<double> alpha_descv(alpha_desc.data(), alpha_desc.data() + alpha_desc.size());
-            std::vector<int> q1v(q1.data(), q1.data() + q1.size());
-            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
-            std::vector<int> n1v(n1.data(), n1.data() + n1.size());
-            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+            kf::ConstArray<double> x1v(x1.data(), x1.size());
+            kf::ConstArray<double> x2v(x2.data(), x2.size());
+            kf::ConstArray<double> alpha_descv(alpha_desc.data(), alpha_desc.size());
+            kf::ConstArray<int> q1v(q1.data(), q1.size());
+            kf::ConstArray<int> q2v(q2.data(), q2.size());
+            kf::ConstArray<int> n1v(n1.data(), n1.size());
+            kf::ConstArray<int> n2v(n2.data(), n2.size());
 
             // Allocate output: (nm1,)
             py::array_t<double> E({(py::ssize_t)nm1});
@@ -1401,8 +1469,19 @@ Returns:
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_local_jacobian_t_matvec(
-                    x1v, x2v, alpha_descv, q1v, q2v, n1v, n2v,
-                    nm1, nm2, max_atoms1, max_atoms2, rep_size, sigma,
+                    x1v,
+                    x2v,
+                    alpha_descv,
+                    q1v,
+                    q2v,
+                    n1v,
+                    n2v,
+                    nm1,
+                    nm2,
+                    max_atoms1,
+                    max_atoms2,
+                    rep_size,
+                    sigma,
                     Ev.mutable_data(0)
                 );
             }
@@ -1437,18 +1516,26 @@ Returns:
     m.def(
         "kernel_gaussian_local_full_matvec",
         [](py::array_t<double, py::array::c_style | py::array::forcecast> x1,
-           py::array_t<double, py::array::c_style | py::array::forcecast> dx1,
-           py::array_t<double, py::array::c_style | py::array::forcecast> x2,
-           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_desc_F,
-           py::array_t<double, py::array::c_style | py::array::forcecast> alpha_E,
-           py::array_t<int, py::array::c_style | py::array::forcecast> q1,
-           py::array_t<int, py::array::c_style | py::array::forcecast> q2,
-           py::array_t<int, py::array::c_style | py::array::forcecast> n1,
-           py::array_t<int, py::array::c_style | py::array::forcecast> n2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               dx1,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               x2,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               alpha_desc_F,
+           py::array_t<double, py::array::c_style | py::array::forcecast>
+               alpha_E,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               q2,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n1,
+           py::array_t<int, py::array::c_style | py::array::forcecast>
+               n2,
            double sigma) -> py::tuple {
-            if (x1.ndim() != 3 || dx1.ndim() != 4 || x2.ndim() != 3 ||
-                alpha_desc_F.ndim() != 3 || alpha_E.ndim() != 1 ||
-                q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 || n2.ndim() != 1)
+            if (x1.ndim() != 3 || dx1.ndim() != 4 || x2.ndim() != 3 || alpha_desc_F.ndim() != 3 ||
+                alpha_E.ndim() != 1 || q1.ndim() != 2 || q2.ndim() != 2 || n1.ndim() != 1 ||
+                n2.ndim() != 1)
                 throw std::invalid_argument("shape error");
 
             const int nm1 = static_cast<int>(x1.shape(0));
@@ -1457,8 +1544,8 @@ Returns:
             const int nm2 = static_cast<int>(x2.shape(0));
             const int max_atoms2 = static_cast<int>(x2.shape(1));
 
-            if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 ||
-                dx1.shape(2) != rep_size || dx1.shape(3) != 3 * max_atoms1)
+            if (dx1.shape(0) != nm1 || dx1.shape(1) != max_atoms1 || dx1.shape(2) != rep_size ||
+                dx1.shape(3) != 3 * max_atoms1)
                 throw std::invalid_argument("dX1 shape mismatch");
             if (x2.shape(2) != rep_size) throw std::invalid_argument("X2 rep_size mismatch");
             if (alpha_desc_F.shape(0) != nm2 || alpha_desc_F.shape(1) != max_atoms2 ||
@@ -1472,15 +1559,15 @@ Returns:
             if (n1.shape(0) != nm1 || n2.shape(0) != nm2)
                 throw std::invalid_argument("N1/N2 length mismatch");
 
-            std::vector<double> x1v(x1.data(), x1.data() + x1.size());
-            std::vector<double> dx1v(dx1.data(), dx1.data() + dx1.size());
-            std::vector<double> x2v(x2.data(), x2.data() + x2.size());
-            std::vector<double> alpha_desc_Fv(alpha_desc_F.data(), alpha_desc_F.data() + alpha_desc_F.size());
-            std::vector<double> alpha_Ev(alpha_E.data(), alpha_E.data() + alpha_E.size());
-            std::vector<int> q1v(q1.data(), q1.data() + q1.size());
-            std::vector<int> q2v(q2.data(), q2.data() + q2.size());
-            std::vector<int> n1v(n1.data(), n1.data() + n1.size());
-            std::vector<int> n2v(n2.data(), n2.data() + n2.size());
+            kf::ConstArray<double> x1v(x1.data(), x1.size());
+            kf::ConstArray<double> dx1v(dx1.data(), dx1.size());
+            kf::ConstArray<double> x2v(x2.data(), x2.size());
+            kf::ConstArray<double> alpha_desc_Fv(alpha_desc_F.data(), alpha_desc_F.size());
+            kf::ConstArray<double> alpha_Ev(alpha_E.data(), alpha_E.size());
+            kf::ConstArray<int> q1v(q1.data(), q1.size());
+            kf::ConstArray<int> q2v(q2.data(), q2.size());
+            kf::ConstArray<int> n1v(n1.data(), n1.size());
+            kf::ConstArray<int> n2v(n2.data(), n2.size());
 
             // Compute naq1 = 3*sum(n1)
             long long naq1_ll = 0;
@@ -1496,10 +1583,24 @@ Returns:
             {
                 py::gil_scoped_release release;
                 kf::fchl19::kernel_gaussian_local_full_matvec(
-                    x1v, dx1v, x2v, alpha_desc_Fv, alpha_Ev.data(),
-                    q1v, q2v, n1v, n2v,
-                    nm1, nm2, max_atoms1, max_atoms2, rep_size, naq1, sigma,
-                    Ev.mutable_data(0), Fv.mutable_data(0)
+                    x1v,
+                    dx1v,
+                    x2v,
+                    alpha_desc_Fv,
+                    alpha_Ev.data(),
+                    q1v,
+                    q2v,
+                    n1v,
+                    n2v,
+                    nm1,
+                    nm2,
+                    max_atoms1,
+                    max_atoms2,
+                    rep_size,
+                    naq1,
+                    sigma,
+                    Ev.mutable_data(0),
+                    Fv.mutable_data(0)
                 );
             }
             return py::make_tuple(E, F);

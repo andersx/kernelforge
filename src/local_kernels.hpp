@@ -1,36 +1,40 @@
 #pragma once
+#include "array_view.hpp"
+
 #include <cstddef>
 #include <vector>
 
 namespace kf {
 namespace fchl19 {
 
+using ::kf::ConstArray;
+
 // Local (atom-pair-wise) Gaussian kernel functions
 
 void kernel_gaussian(
-    const std::vector<double> &x1, const std::vector<double> &x2, const std::vector<int> &q1,
-    const std::vector<int> &q2, const std::vector<int> &n1, const std::vector<int> &n2, int nm1,
-    int nm2, int max_atoms1, int max_atoms2, int rep_size, double sigma, double *kernel_out
+    ConstArray<double> x1, ConstArray<double> x2, ConstArray<int> q1, ConstArray<int> q2,
+    ConstArray<int> n1, ConstArray<int> n2, int nm1, int nm2, int max_atoms1, int max_atoms2,
+    int rep_size, double sigma, double *kernel_out
 );
 
 void kernel_gaussian_symm_rfp(
-    const std::vector<double> &x, const std::vector<int> &q, const std::vector<int> &n, int nm,
-    int max_atoms, int rep_size, double sigma, double *arf
+    ConstArray<double> x, ConstArray<int> q, ConstArray<int> n, int nm, int max_atoms, int rep_size,
+    double sigma, double *arf
 );
 
 void kernel_gaussian_symm(
-    const std::vector<double> &x, const std::vector<int> &q, const std::vector<int> &n, int nm,
-    int max_atoms, int rep_size, double sigma, double *kernel_out
+    ConstArray<double> x, ConstArray<int> q, ConstArray<int> n, int nm, int max_atoms, int rep_size,
+    double sigma, double *kernel_out
 );
 
 void kernel_gaussian_jacobian(
-    const std::vector<double> &x1,   // (nm1, max_atoms1, rep)
-    const std::vector<double> &x2,   // (nm2, max_atoms2, rep)
-    const std::vector<double> &dX2,  // (nm2, max_atoms2, rep, 3*max_atoms2)
-    const std::vector<int> &q1,      // (nm1, max_atoms1)
-    const std::vector<int> &q2,      // (nm2, max_atoms2)
-    const std::vector<int> &n1,      // (nm1)
-    const std::vector<int> &n2,      // (nm2)
+    ConstArray<double> x1,   // (nm1, max_atoms1, rep)
+    ConstArray<double> x2,   // (nm2, max_atoms2, rep)
+    ConstArray<double> dX2,  // (nm2, max_atoms2, rep, 3*max_atoms2)
+    ConstArray<int> q1,      // (nm1, max_atoms1)
+    ConstArray<int> q2,      // (nm2, max_atoms2)
+    ConstArray<int> n1,      // (nm1)
+    ConstArray<int> n2,      // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq2,  // should equal 3 * sum(n2)
     double sigma,
@@ -42,13 +46,13 @@ void kernel_gaussian_jacobian(
 // Property: kernel_gaussian_jacobian_t(X1, dX1, X2, ...) ==
 //           -kernel_gaussian_jacobian(X2, X1, dX1, ...).T
 void kernel_gaussian_jacobian_t(
-    const std::vector<double> &x1,   // (nm1, max_atoms1, rep)
-    const std::vector<double> &x2,   // (nm2, max_atoms2, rep)
-    const std::vector<double> &dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
-    const std::vector<int> &q1,      // (nm1, max_atoms1)
-    const std::vector<int> &q2,      // (nm2, max_atoms2)
-    const std::vector<int> &n1,      // (nm1)
-    const std::vector<int> &n2,      // (nm2)
+    ConstArray<double> x1,   // (nm1, max_atoms1, rep)
+    ConstArray<double> x2,   // (nm2, max_atoms2, rep)
+    ConstArray<double> dX1,  // (nm1, max_atoms1, rep, 3*max_atoms1)
+    ConstArray<int> q1,      // (nm1, max_atoms1)
+    ConstArray<int> q2,      // (nm2, max_atoms2)
+    ConstArray<int> n1,      // (nm1)
+    ConstArray<int> n2,      // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // should equal 3 * sum(n1)
     double sigma,
@@ -56,14 +60,14 @@ void kernel_gaussian_jacobian_t(
 );
 
 void kernel_gaussian_hessian(
-    const std::vector<double> &x1,   // (nm1, max_atoms1, rep_size)
-    const std::vector<double> &x2,   // (nm2, max_atoms2, rep_size)
-    const std::vector<double> &dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    const std::vector<double> &dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
-    const std::vector<int> &q1,      // (nm1, max_atoms1)
-    const std::vector<int> &q2,      // (nm2, max_atoms2)
-    const std::vector<int> &n1,      // (nm1)
-    const std::vector<int> &n2,      // (nm2)
+    ConstArray<double> x1,   // (nm1, max_atoms1, rep_size)
+    ConstArray<double> x2,   // (nm2, max_atoms2, rep_size)
+    ConstArray<double> dx1,  // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    ConstArray<double> dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    ConstArray<int> q1,      // (nm1, max_atoms1)
+    ConstArray<int> q2,      // (nm2, max_atoms2)
+    ConstArray<int> n1,      // (nm1)
+    ConstArray<int> n2,      // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum_a n1[a]
     int naq2,  // must equal 3 * sum_b n2[b]
@@ -72,10 +76,10 @@ void kernel_gaussian_hessian(
 );
 
 void kernel_gaussian_hessian_symm(
-    const std::vector<double> &x,   // (nm, max_atoms, rep_size)
-    const std::vector<double> &dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
-    const std::vector<int> &q,      // (nm, max_atoms)
-    const std::vector<int> &n,      // (nm)
+    ConstArray<double> x,   // (nm, max_atoms, rep_size)
+    ConstArray<double> dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    ConstArray<int> q,      // (nm, max_atoms)
+    ConstArray<int> n,      // (nm)
     int nm, int max_atoms, int rep_size,
     int naq,  // must be 3 * sum_m n[m]
     double sigma,
@@ -83,10 +87,10 @@ void kernel_gaussian_hessian_symm(
 );
 
 void kernel_gaussian_hessian_symm_rfp(
-    const std::vector<double> &x,   // (nm, max_atoms, rep_size)
-    const std::vector<double> &dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
-    const std::vector<int> &q,      // (nm, max_atoms)
-    const std::vector<int> &n,      // (nm)
+    ConstArray<double> x,   // (nm, max_atoms, rep_size)
+    ConstArray<double> dx,  // (nm, max_atoms, rep_size, 3*max_atoms)
+    ConstArray<int> q,      // (nm, max_atoms)
+    ConstArray<int> n,      // (nm)
     int nm, int max_atoms, int rep_size,
     int naq,  // must be 3 * sum_m n[m]
     double sigma,
@@ -97,26 +101,25 @@ void kernel_gaussian_hessian_symm_rfp(
 // Output: ((nm1+naq1) x (nm2+naq2)) row-major matrix.
 // Blocks: [0:nm1,0:nm2]=scalar, [0:nm1,nm2:]=jac_t, [nm1:,0:nm2]=jac, [nm1:,nm2:]=hessian.
 void kernel_gaussian_full(
-    const std::vector<double> &x1, const std::vector<double> &x2, const std::vector<double> &dx1,
-    const std::vector<double> &dx2, const std::vector<int> &q1, const std::vector<int> &q2,
-    const std::vector<int> &n1, const std::vector<int> &n2, int nm1, int nm2, int max_atoms1,
-    int max_atoms2, int rep_size, int naq1, int naq2, double sigma,
+    ConstArray<double> x1, ConstArray<double> x2, ConstArray<double> dx1, ConstArray<double> dx2,
+    ConstArray<int> q1, ConstArray<int> q2, ConstArray<int> n1, ConstArray<int> n2, int nm1,
+    int nm2, int max_atoms1, int max_atoms2, int rep_size, int naq1, int naq2, double sigma,
     double *kernel_out  // ((nm1+naq1) x (nm2+naq2)), row-major
 );
 
 // Full combined energy+force kernel (symmetric, full square output).
 // Output: ((nm+naq) x (nm+naq)) row-major, fully filled symmetric matrix.
 void kernel_gaussian_full_symm(
-    const std::vector<double> &x, const std::vector<double> &dx, const std::vector<int> &q,
-    const std::vector<int> &n, int nm, int max_atoms, int rep_size, int naq, double sigma,
+    ConstArray<double> x, ConstArray<double> dx, ConstArray<int> q, ConstArray<int> n, int nm,
+    int max_atoms, int rep_size, int naq, double sigma,
     double *kernel_out  // ((nm+naq) x (nm+naq)), row-major
 );
 
 // Full combined energy+force kernel (symmetric, RFP output).
 // Output: 1-D array of length BIG*(BIG+1)/2, BIG=nm+naq, TRANSR='N', UPLO='U'.
 void kernel_gaussian_full_symm_rfp(
-    const std::vector<double> &x, const std::vector<double> &dx, const std::vector<int> &q,
-    const std::vector<int> &n, int nm, int max_atoms, int rep_size, int naq, double sigma,
+    ConstArray<double> x, ConstArray<double> dx, ConstArray<int> q, ConstArray<int> n, int nm,
+    int max_atoms, int rep_size, int naq, double sigma,
     double *arf  // length (nm+naq)*(nm+naq+1)/2
 );
 
@@ -139,9 +142,9 @@ void kernel_gaussian_full_symm_rfp(
 //
 // Call once after training, then use with kernel_gaussian_local_hessian_matvec.
 void kernel_gaussian_local_compute_alpha_desc(
-    const std::vector<double> &dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
-    const std::vector<int> &q2,      // (nm2, max_atoms2)
-    const std::vector<int> &n2,      // (nm2)
+    ConstArray<double> dx2,  // (nm2, max_atoms2, rep_size, 3*max_atoms2)
+    ConstArray<int> q2,      // (nm2, max_atoms2)
+    ConstArray<int> n2,      // (nm2)
     int nm2, int max_atoms2, int rep_size,
     const double *alpha,  // (naq2,) where naq2 = 3*sum(n2)
     double *alpha_desc    // (nm2, max_atoms2, rep_size) output, row-major
@@ -169,18 +172,36 @@ void kernel_gaussian_local_compute_alpha_desc(
 // Output:
 //   F: (naq1,) where naq1 = 3*sum(n1), forces in Cartesian coordinates
 void kernel_gaussian_local_hessian_matvec(
-    const std::vector<double> &x1,    // (nm1, max_atoms1, rep_size)
-    const std::vector<double> &dx1,   // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    const std::vector<double> &x2,    // (nm2, max_atoms2, rep_size)
-    const std::vector<double> &alpha_desc,  // (nm2, max_atoms2, rep_size)
-    const std::vector<int> &q1,       // (nm1, max_atoms1)
-    const std::vector<int> &q2,       // (nm2, max_atoms2)
-    const std::vector<int> &n1,       // (nm1)
-    const std::vector<int> &n2,       // (nm2)
+    ConstArray<double> x1,          // (nm1, max_atoms1, rep_size)
+    ConstArray<double> dx1,         // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    ConstArray<double> x2,          // (nm2, max_atoms2, rep_size)
+    ConstArray<double> alpha_desc,  // (nm2, max_atoms2, rep_size)
+    ConstArray<int> q1,             // (nm1, max_atoms1)
+    ConstArray<int> q2,             // (nm2, max_atoms2)
+    ConstArray<int> n1,             // (nm1)
+    ConstArray<int> n2,             // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum(n1)
     double sigma,
     double *F  // (naq1,) output, row-major
+);
+
+// Efficient energy prediction via local scalar kernel matvec (Kw).
+//
+// Computes E[a] = Σ_b K[a,b] · alpha_E[b] without forming K.
+// K[a,b] is the local (atom-pairwise, matching-label) Gaussian kernel.
+//
+// Shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep), alpha_E(nm2,) -> E_out(nm1,)
+void kernel_gaussian_local_matvec(
+    ConstArray<double> x1,  // (nm1, max_atoms1, rep_size)
+    ConstArray<double> x2,  // (nm2, max_atoms2, rep_size)
+    const double *alpha_E,  // (nm2,)
+    ConstArray<int> q1,     // (nm1, max_atoms1)
+    ConstArray<int> q2,     // (nm2, max_atoms2)
+    ConstArray<int> n1,     // (nm1)
+    ConstArray<int> n2,     // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size, double sigma,
+    double *E_out  // (nm1,)
 );
 
 // Efficient energy prediction via local Jacobian kernel matvec using J^T·α trick.
@@ -191,15 +212,14 @@ void kernel_gaussian_local_hessian_matvec(
 // Shapes: x1(nm1,max_atoms1,rep), x2(nm2,max_atoms2,rep),
 //         alpha_desc(nm2,max_atoms2,rep) -> E_out(nm1,)
 void kernel_gaussian_local_jacobian_t_matvec(
-    const std::vector<double> &x1,          // (nm1, max_atoms1, rep_size)
-    const std::vector<double> &x2,          // (nm2, max_atoms2, rep_size)
-    const std::vector<double> &alpha_desc,  // (nm2, max_atoms2, rep_size) precomputed
-    const std::vector<int> &q1,             // (nm1, max_atoms1)
-    const std::vector<int> &q2,             // (nm2, max_atoms2)
-    const std::vector<int> &n1,             // (nm1)
-    const std::vector<int> &n2,             // (nm2)
-    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
-    double sigma,
+    ConstArray<double> x1,          // (nm1, max_atoms1, rep_size)
+    ConstArray<double> x2,          // (nm2, max_atoms2, rep_size)
+    ConstArray<double> alpha_desc,  // (nm2, max_atoms2, rep_size) precomputed
+    ConstArray<int> q1,             // (nm1, max_atoms1)
+    ConstArray<int> q2,             // (nm2, max_atoms2)
+    ConstArray<int> n1,             // (nm1)
+    ConstArray<int> n2,             // (nm2)
+    int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size, double sigma,
     double *E_out  // (nm1,) output energies
 );
 
@@ -212,15 +232,15 @@ void kernel_gaussian_local_jacobian_t_matvec(
 //         x2(nm2,max_atoms2,rep), alpha_E(nm2,), alpha_desc_F(nm2,max_atoms2,rep)
 //         -> E_out(nm1,), F_out(naq1,)
 void kernel_gaussian_local_full_matvec(
-    const std::vector<double> &x1,           // (nm1, max_atoms1, rep_size)
-    const std::vector<double> &dx1,          // (nm1, max_atoms1, rep_size, 3*max_atoms1)
-    const std::vector<double> &x2,           // (nm2, max_atoms2, rep_size)
-    const std::vector<double> &alpha_desc_F, // (nm2, max_atoms2, rep_size) precomputed
-    const double *alpha_E,                   // (nm2,) energy coefficients
-    const std::vector<int> &q1,              // (nm1, max_atoms1)
-    const std::vector<int> &q2,              // (nm2, max_atoms2)
-    const std::vector<int> &n1,              // (nm1)
-    const std::vector<int> &n2,              // (nm2)
+    ConstArray<double> x1,            // (nm1, max_atoms1, rep_size)
+    ConstArray<double> dx1,           // (nm1, max_atoms1, rep_size, 3*max_atoms1)
+    ConstArray<double> x2,            // (nm2, max_atoms2, rep_size)
+    ConstArray<double> alpha_desc_F,  // (nm2, max_atoms2, rep_size) precomputed
+    const double *alpha_E,            // (nm2,) energy coefficients
+    ConstArray<int> q1,               // (nm1, max_atoms1)
+    ConstArray<int> q2,               // (nm2, max_atoms2)
+    ConstArray<int> n1,               // (nm1)
+    ConstArray<int> n2,               // (nm2)
     int nm1, int nm2, int max_atoms1, int max_atoms2, int rep_size,
     int naq1,  // must equal 3 * sum(n1)
     double sigma,

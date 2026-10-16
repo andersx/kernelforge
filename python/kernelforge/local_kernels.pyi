@@ -164,6 +164,30 @@ def kernel_gaussian_local_hessian_matvec(
     """
     ...
 
+def kernel_gaussian_local_matvec(
+    X1: NDArray[np.float64],
+    X2: NDArray[np.float64],
+    alpha_E: NDArray[np.float64],
+    Q1: NDArray[np.int32],
+    Q2: NDArray[np.int32],
+    N1: NDArray[np.int32],
+    N2: NDArray[np.int32],
+    sigma: float,
+) -> NDArray[np.float64]:
+    """Predict energies via local scalar kernel matvec (Kw) without forming K.
+
+    Shapes:
+      X1:      (nm1, max_atoms1, rep_size), query descriptors
+      X2:      (nm2, max_atoms2, rep_size), train descriptors
+      alpha_E: (nm2,), energy coefficients
+      Q1, Q2:  atomic labels; N1, N2: active atom counts
+      sigma:   Gaussian width
+
+    Returns:
+      E: (nm1,) predicted energies
+    """
+    ...
+
 def kernel_gaussian_local_jacobian_t_matvec(
     X1: NDArray[np.float64],
     X2: NDArray[np.float64],
