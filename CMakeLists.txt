@@ -183,9 +183,20 @@ option(KF_USE_NATIVE "Enable -march/-mcpu=native style flags" OFF)
 
 function(kf_apply_cxx_flags tgt)
   if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # x86/x64: -march=native (enables AVX2/AVX-512 etc).
+    # -mcpu=native is ARM-oriented; on x86 GCC it is deprecated and does NOT
+    # select the host ISA the way -march=native does.
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64|armv7")
+      set(_kf_native_a -mcpu=native)
+      set(_kf_native_b -mtune=native)
+    else()
+      set(_kf_native_a -march=native)
+      set(_kf_native_b -mtune=native)
+    endif()
     target_compile_options(${tgt} PRIVATE
       -O3 -ffast-math -ftree-vectorize -fopenmp
-      $<$<BOOL:${KF_USE_NATIVE}>:-mcpu=native -mtune=native>
+      $<$<BOOL:${KF_USE_NATIVE}>:${_kf_native_a}>
+      $<$<BOOL:${KF_USE_NATIVE}>:${_kf_native_b}>
     )
   elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel|IntelLLVM")
     # Intel classic (icc/icpc) and oneAPI (icx/icpx) compilers

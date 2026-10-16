@@ -15,23 +15,28 @@ ifneq ($(NINJA_BIN),)
 CUDA_LOCAL_FAST_CMAKE_ARGS += -G Ninja
 endif
 
+# Default Linux builds use g++ (not icpx). Native = -march=native on x86.
 install-linux:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON" uv pip install -e .[test,dev] --verbose
+	CC=gcc CXX=g++ CMAKE_ARGS="-DKF_USE_NATIVE=ON" uv pip install -e .[test,dev] --verbose
 
 install-linux-ilp64:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_ILP64=ON" uv pip install -e .[test,dev] --verbose
+	CC=gcc CXX=g++ CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_ILP64=ON" uv pip install -e .[test,dev] --verbose
 
 install-linux-mkl:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL" uv pip install -e .[test,dev] --verbose
+	CC=gcc CXX=g++ CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL" uv pip install -e .[test,dev] --verbose
 
 install-linux-mkl-ilp64:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL -DKF_BLAS_ILP64=ON" uv pip install -e .[test,dev] --verbose
+	CC=gcc CXX=g++ CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL -DKF_BLAS_ILP64=ON" uv pip install -e .[test,dev] --verbose
 
 install-linux-openblas:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=OpenBLAS" uv pip install -e .[test,dev] --verbose
+	CC=gcc CXX=g++ CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=OpenBLAS" uv pip install -e .[test,dev] --verbose
 
 install-linux-openblas-ilp64:
-	CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=OpenBLAS -DKF_BLAS_ILP64=ON" uv pip install -e .[test,dev] --verbose
+	CC=gcc CXX=g++ CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=OpenBLAS -DKF_BLAS_ILP64=ON" uv pip install -e .[test,dev] --verbose
+
+# Optional Intel oneAPI build (explicit; not the default).
+install-linux-mkl-icpx:
+	CC=icx CXX=icpx CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL" uv pip install -e .[test,dev] --verbose
 
 install-linux-mkl-ilp64-cuda:
 	TORCH_CUDA_ARCH_LIST="$${TORCH_CUDA_ARCH_LIST:-$(if $(TORCH_CUDA_ARCH_LIST),$(TORCH_CUDA_ARCH_LIST),12.0)}" CMAKE_BUILD_PARALLEL_LEVEL="$(NPROC)" CMAKE_ARGS="$(CUDA_LOCAL_FAST_CMAKE_ARGS)" uv pip install -e .[test,dev] --verbose
