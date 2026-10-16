@@ -13,19 +13,15 @@ namespace kf {
 namespace fchl18 {
 
 void generate_fchl18(
-    const std::vector<double> &coords,  // (n_atoms * 3) row-major
-    const std::vector<int> &nuclear_z,  // (n_atoms)
-    int max_size, double cut_distance,
+    const double *coords,  // (n_atoms * 3) row-major
+    const int *nuclear_z,  // (n_atoms)
+    int n_atoms, int max_size, double cut_distance,
     std::vector<double> &x,        // (max_size * 5 * max_size) row-major OUT
     std::vector<int> &n_neighbors  // (max_size) OUT
 ) {
-    const int n_atoms = static_cast<int>(nuclear_z.size());
-
     if (n_atoms == 0) throw std::invalid_argument("n_atoms must be > 0");
     if (max_size < n_atoms) throw std::invalid_argument("max_size must be >= n_atoms");
     if (cut_distance <= 0.0) throw std::invalid_argument("cut_distance must be > 0");
-    if (static_cast<int>(coords.size()) != n_atoms * 3)
-        throw std::invalid_argument("coords size mismatch");
 
     // Allocate output: (max_size, 5, max_size), all initialised to 1e100
     const std::size_t total = static_cast<std::size_t>(max_size) * 5 * max_size;

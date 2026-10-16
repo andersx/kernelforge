@@ -167,7 +167,7 @@ static void compute_threebody_fourier(
     const double *atom_chan,  // (5, max_size) slice for one atom
     int max_size, int n_neigh, double three_body_power, double cut_start, double cut_distance,
     int order, int pmax,
-    const std::vector<int> &z_to_idx,  // Z -> compact index (size 256)
+    const int *z_to_idx,  // Z -> compact index (size 256)
     bool use_atm,
     std::vector<double> &cosp,  // (pmax, order, max_size) flat
     std::vector<double> &sinp   // (pmax, order, max_size) flat
@@ -291,12 +291,12 @@ static void compute_threebody_fourier(
 static double scalar_noalchemy(
     // Atom i data: (5, max_size_1) channel-major
     const double *x1_chan, int max_size1, int n1, const double *ksi1,
-    const std::vector<double> &cos1,  // (pmax, order, max_size1)
-    const std::vector<double> &sin1,
+    const double *cos1,  // (pmax, order, max_size1)
+    const double *sin1,
     // Atom j data: (5, max_size_2) channel-major
     const double *x2_chan, int max_size2, int n2, const double *ksi2,
-    const std::vector<double> &cos2,  // (pmax, order, max_size2)
-    const std::vector<double> &sin2,
+    const double *cos2,  // (pmax, order, max_size2)
+    const double *sin2,
     // Kernel hyperparameters
     double d_width, int order, int pmax,
     const double *s_prefactor,  // (order) precomputed Fourier prefactors
@@ -372,12 +372,12 @@ struct AtomData {
 // Returns a flat vector indexed [mol * max_size + atom].
 // Parallelised over the flat (mol, atom) space for fine-grained load balancing.
 static std::vector<AtomData> precompute_atom_data(
-    const std::vector<double> &x,  // (nm, max_size, 5, max_size) row-major
-    const std::vector<int> &n,     // (nm) atom counts
-    const std::vector<int> &nn,    // (nm * max_size) neighbour counts
+    const double *x,  // (nm, max_size, 5, max_size) row-major
+    const int *n,     // (nm) atom counts
+    const int *nn,    // (nm * max_size) neighbour counts
     int nm, int max_size, double two_body_power, double cut_start, double cut_distance,
     double three_body_power, int order, int pmax,
-    const std::vector<int> &z_to_idx,  // compact element map (size 256)
+    const int *z_to_idx,  // compact element map (size 256)
     bool use_atm
 ) {
     std::vector<AtomData> data(static_cast<std::size_t>(nm) * max_size);
@@ -404,7 +404,7 @@ static std::vector<AtomData> precompute_atom_data(
         const int n_neigh = nn[static_cast<std::size_t>(a) * max_size + i];
         ad.n_neigh = n_neigh;
 
-        const double *atom_chan = x.data() + static_cast<std::size_t>(a) * mol_stride +
+        const double *atom_chan = x + static_cast<std::size_t>(a) * mol_stride +
                                   static_cast<std::size_t>(i) * atom_stride;
 
         compute_ksi(atom_chan, max_size, n_neigh, two_body_power, cut_start, cut_distance, ad.ksi);
@@ -432,8 +432,8 @@ static std::vector<AtomData> precompute_atom_data(
 // self_scalar[a * max_size + i] = scalar(atom_i from mol_a, atom_i from mol_a)
 // =============================================================================
 static std::vector<double> compute_self_scalars(
-    const std::vector<double> &x,  // (nm, max_size, 5, max_size)
-    const std::vector<int> &n,     // (nm)
+    const double *x,  // (nm, max_size, 5, max_size)
+    const int *n,     // (nm)
     const std::vector<AtomData> &ad, int nm, int max_size, int order, int pmax, double t_width,
     double d_width, double ang_norm2, double distance_scale, double angular_scale
 ) {
@@ -464,7 +464,7 @@ static std::vector<double> compute_self_scalars(
         const int a = atom_list[t].first;
         const int i = atom_list[t].second;
         const AtomData &adi = ad[static_cast<std::size_t>(a) * max_size + i];
-        const double *atom_chan = x.data() + static_cast<std::size_t>(a) * mol_stride +
+        const double *atom_chan = x + static_cast<std::size_t>(a) * mol_stride +
                                   static_cast<std::size_t>(i) * atom_stride;
 
         ss[static_cast<std::size_t>(a) * max_size + i] = scalar_noalchemy(
@@ -472,14 +472,14 @@ static std::vector<double> compute_self_scalars(
             max_size,
             adi.n_neigh,
             adi.ksi.data(),
-            adi.cosp,
-            adi.sinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
             atom_chan,
             max_size,
             adi.n_neigh,
             adi.ksi.data(),
-            adi.cosp,
-            adi.sinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
             d_width,
             order,
             pmax,
@@ -499,24 +499,19 @@ static std::vector<double> compute_self_scalars(
 // casting the 1e100 padding value in channel 1 to int.
 // =============================================================================
 static int build_element_map(
-    const std::vector<double> &x1, const std::vector<int> &n1, const std::vector<int> &nn1, int nm1,
-    int max_size1, const std::vector<double> &x2, const std::vector<int> &n2,
-    const std::vector<int> &nn2, int nm2, int max_size2,
+    const double *x1, const int *n1, const int *nn1, int nm1, int max_size1, const double *x2,
+    const int *n2, const int *nn2, int nm2, int max_size2,
     std::vector<int> &z_to_idx  // size 256, output
 ) {
     z_to_idx.assign(256, -1);
     std::vector<int> present;  // Z values seen so far
 
-    auto scan = [&](const std::vector<double> &x,
-                    const std::vector<int> &nv,
-                    const std::vector<int> &nn,
-                    int nm,
-                    int ms) {
+    auto scan = [&](const double *x, const int *nv, const int *nn, int nm, int ms) {
         const std::size_t mol_s = static_cast<std::size_t>(ms) * 5 * ms;
         const std::size_t atom_s = static_cast<std::size_t>(5) * ms;
         for (int a = 0; a < nm; ++a) {
             for (int i = 0; i < nv[a]; ++i) {
-                const double *chan = x.data() + a * mol_s + i * atom_s;
+                const double *chan = x + a * mol_s + i * atom_s;
                 const int n_neigh = nn[static_cast<std::size_t>(a) * ms + i];
                 for (int k = 0; k < n_neigh; ++k) {
                     const int z = static_cast<int>(chan[ms + k]);  // channel 1
@@ -537,12 +532,11 @@ static int build_element_map(
 // Public API: kernel_gaussian (asymmetric)
 // =============================================================================
 void kernel_gaussian(
-    const std::vector<double> &x1, const std::vector<double> &x2, const std::vector<int> &n1,
-    const std::vector<int> &n2, const std::vector<int> &nn1, const std::vector<int> &nn2, int nm1,
-    int nm2, int max_size1, int max_size2, double sigma, double two_body_scaling,
-    double two_body_width, double two_body_power, double three_body_scaling,
-    double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm, double *kernel_out
+    const double *x1, const double *x2, const int *n1, const int *n2, const int *nn1,
+    const int *nn2, int nm1, int nm2, int max_size1, int max_size2, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm, double *kernel_out
 ) {
     if (!kernel_out) throw std::invalid_argument("kernel_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -577,7 +571,7 @@ void kernel_gaussian(
         three_body_power,
         fourier_order,
         pmax,
-        z_to_idx,
+        z_to_idx.data(),
         use_atm
     );
     auto ad2 = precompute_atom_data(
@@ -592,7 +586,7 @@ void kernel_gaussian(
         three_body_power,
         fourier_order,
         pmax,
-        z_to_idx,
+        z_to_idx.data(),
         use_atm
     );
 
@@ -656,13 +650,13 @@ void kernel_gaussian(
 
             for (int i = 0; i < na; ++i) {
                 const AtomData &adi = ad1[static_cast<std::size_t>(a) * max_size1 + i];
-                const double *x1_chan = x1.data() + a * mol1 + i * at1;
+                const double *x1_chan = x1 + a * mol1 + i * at1;
 
                 const double sii = ss1[static_cast<std::size_t>(a) * max_size1 + i];
 
                 for (int j = 0; j < nb; ++j) {
                     const AtomData &adj = ad2[static_cast<std::size_t>(b) * max_size2 + j];
-                    const double *x2_chan = x2.data() + b * mol2 + j * at2;
+                    const double *x2_chan = x2 + b * mol2 + j * at2;
 
                     const double sjj = ss2[static_cast<std::size_t>(b) * max_size2 + j];
 
@@ -671,14 +665,14 @@ void kernel_gaussian(
                         max_size1,
                         adi.n_neigh,
                         adi.ksi.data(),
-                        adi.cosp,
-                        adi.sinp,
+                        adi.cosp.data(),
+                        adi.sinp.data(),
                         x2_chan,
                         max_size2,
                         adj.n_neigh,
                         adj.ksi.data(),
-                        adj.cosp,
-                        adj.sinp,
+                        adj.cosp.data(),
+                        adj.sinp.data(),
                         two_body_width,
                         fourier_order,
                         pmax,
@@ -701,10 +695,10 @@ void kernel_gaussian(
 // =============================================================================
 template <class Writer>
 static void kernel_gaussian_symm_impl(
-    const std::vector<double> &x, const std::vector<int> &n, const std::vector<int> &nn, int nm,
-    int max_size, double sigma, double two_body_scaling, double two_body_width,
-    double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    const double *x, const int *n, const int *nn, int nm, int max_size, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm,
     Writer &&write  // write(a, b, kab) once per pair a <= b (thread-safe)
 ) {
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -731,7 +725,7 @@ static void kernel_gaussian_symm_impl(
         three_body_power,
         fourier_order,
         pmax,
-        z_to_idx,
+        z_to_idx.data(),
         use_atm
     );
 
@@ -780,13 +774,13 @@ static void kernel_gaussian_symm_impl(
 
         for (int i = 0; i < na; ++i) {
             const AtomData &adi = ad[static_cast<std::size_t>(a) * max_size + i];
-            const double *xa_chan = x.data() + a * mol_s + i * at_s;
+            const double *xa_chan = x + a * mol_s + i * at_s;
 
             const double sii = ss[static_cast<std::size_t>(a) * max_size + i];
 
             for (int j = 0; j < nb; ++j) {
                 const AtomData &adj = ad[static_cast<std::size_t>(b) * max_size + j];
-                const double *xb_chan = x.data() + b * mol_s + j * at_s;
+                const double *xb_chan = x + b * mol_s + j * at_s;
 
                 const double sjj = ss[static_cast<std::size_t>(b) * max_size + j];
 
@@ -795,14 +789,14 @@ static void kernel_gaussian_symm_impl(
                     max_size,
                     adi.n_neigh,
                     adi.ksi.data(),
-                    adi.cosp,
-                    adi.sinp,
+                    adi.cosp.data(),
+                    adi.sinp.data(),
                     xb_chan,
                     max_size,
                     adj.n_neigh,
                     adj.ksi.data(),
-                    adj.cosp,
-                    adj.sinp,
+                    adj.cosp.data(),
+                    adj.sinp.data(),
                     two_body_width,
                     fourier_order,
                     pmax,
@@ -820,11 +814,10 @@ static void kernel_gaussian_symm_impl(
 }
 
 void kernel_gaussian_symm(
-    const std::vector<double> &x, const std::vector<int> &n, const std::vector<int> &nn, int nm,
-    int max_size, double sigma, double two_body_scaling, double two_body_width,
-    double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    double *kernel_out
+    const double *x, const int *n, const int *nn, int nm, int max_size, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm, double *kernel_out
 ) {
     if (!kernel_out) throw std::invalid_argument("kernel_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -854,11 +847,10 @@ void kernel_gaussian_symm(
 }
 
 void kernel_gaussian_symm_rfp_core(
-    const std::vector<double> &x, const std::vector<int> &n, const std::vector<int> &nn, int nm,
-    int max_size, double sigma, double two_body_scaling, double two_body_width,
-    double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    double *rfp_out
+    const double *x, const int *n, const int *nn, int nm, int max_size, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm, double *rfp_out
 ) {
     if (!rfp_out) throw std::invalid_argument("rfp_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -989,9 +981,9 @@ static void compute_ksi_and_grad(
     int max_size, int n_neigh, double power, double cut_start, double cut_distance,
     int centre_atom_idx,  // index of atom i within molecule A
     int n_atoms_A,
-    const std::vector<int> &nbr_atom_idx_i,  // [k] -> atom index in A for nbr slot k
-    std::vector<double> &ksi,                // size n_neigh, output
-    std::vector<double> &dksi                // size n_neigh * n_atoms_A * 3, output
+    const int *nbr_atom_idx_i,  // [k] -> atom index in A for nbr slot k
+    std::vector<double> &ksi,   // size n_neigh, output
+    std::vector<double> &dksi   // size n_neigh * n_atoms_A * 3, output
 ) {
     const int na3 = n_atoms_A * 3;
     ksi.assign(n_neigh, 0.0);
@@ -1049,13 +1041,12 @@ static void compute_ksi_and_grad(
 static void compute_threebody_fourier_and_grad(
     const double *atom_chan,  // (5, max_size) slice for atom i
     int max_size, int n_neigh, double three_body_power, double cut_start, double cut_distance,
-    int order, int pmax, const std::vector<int> &z_to_idx, bool use_atm, int centre_atom_idx,
-    int n_atoms_A,
-    const std::vector<int> &nbr_atom_idx_i,  // [k] -> atom index in A
-    std::vector<double> &cosp,               // (pmax * order * max_size)        output
-    std::vector<double> &sinp,               // (pmax * order * max_size)        output
-    std::vector<double> &dcosp,              // (pmax * order * max_size * na3)  output
-    std::vector<double> &dsinp               // (pmax * order * max_size * na3)  output
+    int order, int pmax, const int *z_to_idx, bool use_atm, int centre_atom_idx, int n_atoms_A,
+    const int *nbr_atom_idx_i,   // [k] -> atom index in A
+    std::vector<double> &cosp,   // (pmax * order * max_size)        output
+    std::vector<double> &sinp,   // (pmax * order * max_size)        output
+    std::vector<double> &dcosp,  // (pmax * order * max_size * na3)  output
+    std::vector<double> &dsinp   // (pmax * order * max_size * na3)  output
 ) {
     const int na3 = n_atoms_A * 3;
     const std::size_t sz = static_cast<std::size_t>(pmax) * order * max_size;
@@ -1595,8 +1586,8 @@ struct AtomDataGrad {
 static std::vector<int> build_nbr_atom_idx(
     const double *atom_chan,  // (5, max_size) for atom i
     int max_size, int n_neigh,
-    const std::vector<double> &coords_A,  // (n_atoms_A * 3)
-    const std::vector<int> &z_A, int centre_idx, int n_atoms_A
+    const double *coords_A,  // (n_atoms_A * 3)
+    const int *z_A, int centre_idx, int n_atoms_A
 ) {
     std::vector<int> result(n_neigh, -1);
     result[0] = centre_idx;  // k=0 is always self
@@ -1630,12 +1621,12 @@ static std::vector<int> build_nbr_atom_idx(
 // parallel_atoms: OpenMP over atoms when not already in a parallel region
 // (avoids nested OpenMP; caller disables for large nm2 where B-parallelism dominates).
 static std::vector<AtomDataGrad> precompute_atom_data_grad(
-    const std::vector<double> &x,     // (max_size, 5, max_size) for one molecule
-    const std::vector<int> &n_vec,    // {n_atoms_A}
-    const std::vector<int> &nn_flat,  // (max_size) neighbour counts
-    int n_atoms_A, int max_size, const std::vector<double> &coords_A, const std::vector<int> &z_A,
-    double two_body_power, double cut_start, double cut_distance, double three_body_power,
-    int order, int pmax, const std::vector<int> &z_to_idx, bool use_atm, bool parallel_atoms
+    const double *x,     // (max_size, 5, max_size) for one molecule
+    const int *n_vec,    // {n_atoms_A}
+    const int *nn_flat,  // (max_size) neighbour counts
+    int n_atoms_A, int max_size, const double *coords_A, const int *z_A, double two_body_power,
+    double cut_start, double cut_distance, double three_body_power, int order, int pmax,
+    const int *z_to_idx, bool use_atm, bool parallel_atoms
 ) {
     std::vector<AtomDataGrad> data(n_atoms_A);
     const std::size_t atom_stride = static_cast<std::size_t>(5) * max_size;
@@ -1650,7 +1641,7 @@ static std::vector<AtomDataGrad> precompute_atom_data_grad(
         const int n_neigh = nn_flat[static_cast<std::size_t>(i)];
         ad.n_neigh = n_neigh;
 
-        const double *atom_chan = x.data() + static_cast<std::size_t>(i) * atom_stride;
+        const double *atom_chan = x + static_cast<std::size_t>(i) * atom_stride;
 
         // Build neighbour -> atom-index map
         ad.nbr_atom_idx =
@@ -1666,7 +1657,7 @@ static std::vector<AtomDataGrad> precompute_atom_data_grad(
             cut_distance,
             i,
             n_atoms_A,
-            nbr_idx,
+            nbr_idx.data(),
             ad.ksi,
             ad.dksi
         );
@@ -1684,7 +1675,7 @@ static std::vector<AtomDataGrad> precompute_atom_data_grad(
             use_atm,
             i,
             n_atoms_A,
-            nbr_idx,
+            nbr_idx.data(),
             ad.cosp,
             ad.sinp,
             ad.dcosp,
@@ -1715,10 +1706,9 @@ static std::vector<AtomDataGrad> precompute_atom_data_grad(
 static double scalar_noalchemy_and_grad(
     const double *x1_chan, int max_size1, int n1, const double *ksi1,
     const double *dksi1,  // ksi1[k], dksi1[k*na3+alpha*3+mu]
-    const std::vector<double> &cos1, const std::vector<double> &sin1,
-    const std::vector<double> &dcos1, const std::vector<double> &dsin1, const double *x2_chan,
-    int max_size2, int n2, const double *ksi2, const std::vector<double> &cos2,
-    const std::vector<double> &sin2, double d_width, int order, int pmax, const double *s_prefactor,
+    const double *cos1, const double *sin1, const double *dcos1, const double *dsin1,
+    const double *x2_chan, int max_size2, int n2, const double *ksi2, const double *cos2,
+    const double *sin2, double d_width, int order, int pmax, const double *s_prefactor,
     double distance_scale, double angular_scale,
     int n_atoms_A,              // for gradient output size
     std::vector<double> &ds_dR  // output: size n_atoms_A*3
@@ -1896,11 +1886,11 @@ static double scalar_noalchemy_and_grad(
 // dri1 layout: [neigh_slot * na3 + alpha*3 + mu]  (same as dksi1)
 static double scalar_noalchemy_and_grad_full(
     const double *x1_chan, int max_size1, int n1, const double *ksi1, const double *dksi1,
-    const double *dri1, const std::vector<double> &cos1, const std::vector<double> &sin1,
-    const std::vector<double> &dcos1, const std::vector<double> &dsin1, const double *x2_chan,
-    int max_size2, int n2, const double *ksi2, const std::vector<double> &cos2,
-    const std::vector<double> &sin2, double d_width, int order, int pmax, const double *s_prefactor,
-    double distance_scale, double angular_scale, int n_atoms_A, std::vector<double> &ds_dR
+    const double *dri1, const double *cos1, const double *sin1, const double *dcos1,
+    const double *dsin1, const double *x2_chan, int max_size2, int n2, const double *ksi2,
+    const double *cos2, const double *sin2, double d_width, int order, int pmax,
+    const double *s_prefactor, double distance_scale, double angular_scale, int n_atoms_A,
+    std::vector<double> &ds_dR
 ) {
     // Early exit: central atoms must have the same nuclear charge (matches Fortran
     // scalar_noalchemy). Caller may also fast-path this case.
@@ -2052,8 +2042,8 @@ struct GradBSide {
 };
 
 static GradBSide build_grad_b_side(
-    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2, int nm2,
-    int max_size2, std::vector<int> z_to_idx, int pmax, double sigma, double two_body_scaling,
+    const double *x2, const int *n2, const int *nn2, int nm2, int max_size2,
+    std::vector<int> z_to_idx, int pmax, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm
@@ -2089,7 +2079,7 @@ static GradBSide build_grad_b_side(
         three_body_power,
         fourier_order,
         pmax,
-        B.z_to_idx,
+        B.z_to_idx.data(),
         use_atm
     );
     B.ss_B = compute_self_scalars(
@@ -2112,9 +2102,8 @@ static GradBSide build_grad_b_side(
 // Element map from nuclear-charge lists (A) + B representation neighbour scan.
 // Neighbours are atoms of the same molecule, so A Z-lists cover all A-side elements.
 static int build_element_map_zlists_and_repr(
-    const std::vector<std::vector<int>> &z_lists, const std::vector<double> &x2,
-    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2,
-    std::vector<int> &z_to_idx
+    const std::vector<std::vector<int>> &z_lists, const double *x2, const int *n2, const int *nn2,
+    int nm2, int max_size2, std::vector<int> &z_to_idx
 ) {
     z_to_idx.assign(256, -1);
     std::vector<int> present;
@@ -2134,8 +2123,8 @@ static int build_element_map_zlists_and_repr(
     const std::size_t atom_s = static_cast<std::size_t>(5) * max_size2;
     for (int a = 0; a < nm2; ++a) {
         for (int i = 0; i < n2[static_cast<std::size_t>(a)]; ++i) {
-            const double *chan = x2.data() + static_cast<std::size_t>(a) * mol_s +
-                                 static_cast<std::size_t>(i) * atom_s;
+            const double *chan =
+                x2 + static_cast<std::size_t>(a) * mol_s + static_cast<std::size_t>(i) * atom_s;
             const int n_neigh = nn2[static_cast<std::size_t>(a) * max_size2 + i];
             for (int k = 0; k < n_neigh; ++k)
                 add_z(static_cast<int>(chan[max_size2 + k]));
@@ -2147,11 +2136,10 @@ static int build_element_map_zlists_and_repr(
 // Core: one query molecule A against precomputed B.
 // parallel_over_B: enable OpenMP over training molecules (disable when outer A-parallel).
 static void gradient_one_A_against_B(
-    const std::vector<double> &coords_A, const std::vector<int> &z_A, int n_atoms_A,
-    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2, int nm2,
-    int max_size2, const GradBSide &B, double two_body_width, double two_body_power,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    bool parallel_over_B, double *grad_out
+    const double *coords_A, const int *z_A, int n_atoms_A, const double *x2, const int *n2,
+    const int *nn2, int nm2, int max_size2, const GradBSide &B, double two_body_width,
+    double two_body_power, double three_body_power, double cut_start, double cut_distance,
+    int fourier_order, bool use_atm, bool parallel_over_B, double *grad_out
 ) {
     std::memset(grad_out, 0, sizeof(double) * static_cast<std::size_t>(n_atoms_A) * 3 * nm2);
     if (B.pmax == 0) return;
@@ -2172,7 +2160,15 @@ static void gradient_one_A_against_B(
 
     std::vector<double> x_A_mol;
     std::vector<int> nn_A_mol;
-    kf::fchl18::generate_fchl18(coords_A, z_A, max_size_A, cut_distance, x_A_mol, nn_A_mol);
+    kf::fchl18::generate_fchl18(
+        coords_A,
+        z_A,
+        n_atoms_A,
+        max_size_A,
+        cut_distance,
+        x_A_mol,
+        nn_A_mol
+    );
     const auto t_repr = clock::now();
 
     const std::vector<int> n_A_vec = {n_atoms_A};
@@ -2188,9 +2184,9 @@ static void gradient_one_A_against_B(
     const bool parallel_ad_atoms = false;
 #endif
     const std::vector<AtomDataGrad> adA = precompute_atom_data_grad(
-        x_A_mol,
-        n_A_vec,
-        nn_A_flat,
+        x_A_mol.data(),
+        n_A_vec.data(),
+        nn_A_flat.data(),
         n_atoms_A,
         max_size_A,
         coords_A,
@@ -2201,7 +2197,7 @@ static void gradient_one_A_against_B(
         three_body_power,
         fourier_order,
         pmax,
-        B.z_to_idx,
+        B.z_to_idx.data(),
         use_atm,
         parallel_ad_atoms
     );
@@ -2258,16 +2254,16 @@ static void gradient_one_A_against_B(
             adi.ksi.data(),
             adi.dksi.data(),
             dri_A[static_cast<std::size_t>(i)].data(),
-            adi.cosp,
-            adi.sinp,
-            adi.dcosp,
-            adi.dsinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
+            adi.dcosp.data(),
+            adi.dsinp.data(),
             x1_chan,
             max_size_A,
             adi.n_neigh,
             adi.ksi.data(),
-            adi.cosp,
-            adi.sinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
             two_body_width,
             fourier_order,
             pmax,
@@ -2303,7 +2299,7 @@ static void gradient_one_A_against_B(
 
             for (int j = 0; j < nb; ++j) {
                 const AtomData &adj = B.adB[static_cast<std::size_t>(b) * max_size2 + j];
-                const double *x2_chan = x2.data() + static_cast<std::size_t>(b) * mol2_stride +
+                const double *x2_chan = x2 + static_cast<std::size_t>(b) * mol2_stride +
                                         static_cast<std::size_t>(j) * at2_stride;
                 const double sjj = B.ss_B[static_cast<std::size_t>(b) * max_size2 + j];
                 const int Zj = static_cast<int>(x2_chan[max_size2]);
@@ -2317,16 +2313,16 @@ static void gradient_one_A_against_B(
                         adi.ksi.data(),
                         adi.dksi.data(),
                         dri_A[static_cast<std::size_t>(i)].data(),
-                        adi.cosp,
-                        adi.sinp,
-                        adi.dcosp,
-                        adi.dsinp,
+                        adi.cosp.data(),
+                        adi.sinp.data(),
+                        adi.dcosp.data(),
+                        adi.dsinp.data(),
                         x2_chan,
                         max_size2,
                         adj.n_neigh,
                         adj.ksi.data(),
-                        adj.cosp,
-                        adj.sinp,
+                        adj.cosp.data(),
+                        adj.sinp.data(),
                         two_body_width,
                         fourier_order,
                         pmax,
@@ -2390,13 +2386,12 @@ static void gradient_one_A_against_B(
 // Output grad_out: (n_atoms_A, 3, nm2) row-major.
 // =============================================================================
 void kernel_gaussian_gradient(
-    const std::vector<double> &coords_A,  // (n_atoms_A * 3) row-major
-    const std::vector<int> &z_A,          // (n_atoms_A)
-    const std::vector<double> &x2, const std::vector<int> &n2, const std::vector<int> &nn2,
-    int n_atoms_A, int nm2, int max_size2, double sigma, double two_body_scaling,
-    double two_body_width, double two_body_power, double three_body_scaling,
-    double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm,
+    const double *coords_A,  // (n_atoms_A * 3) row-major
+    const int *z_A,          // (n_atoms_A)
+    const double *x2, const int *n2, const int *nn2, int n_atoms_A, int nm2, int max_size2,
+    double sigma, double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm,
     double *grad_out  // (n_atoms_A, 3, nm2) row-major OUT
 ) {
     if (!grad_out) throw std::invalid_argument("grad_out is null");
@@ -2404,7 +2399,8 @@ void kernel_gaussian_gradient(
     if (n_atoms_A <= 0) throw std::invalid_argument("n_atoms_A must be > 0");
 
     std::vector<int> z_to_idx;
-    const std::vector<std::vector<int>> z_lists = {z_A};
+    const std::vector<int> z_A_vec(z_A, z_A + n_atoms_A);
+    const std::vector<std::vector<int>> z_lists = {z_A_vec};
     const int pmax =
         build_element_map_zlists_and_repr(z_lists, x2, n2, nn2, nm2, max_size2, z_to_idx);
 
@@ -2461,11 +2457,11 @@ enum class JacStoreLayout { RowsAreCoords, ColsAreCoords };
 
 static void kernel_gaussian_jacobian_impl(
     const std::vector<std::vector<double>> &coords_A_list,
-    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
-    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2, double sigma,
-    double two_body_scaling, double two_body_width, double two_body_power,
-    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, JacStoreLayout layout, double *out
+    const std::vector<std::vector<int>> &z_A_list, const double *x2, const int *n2, const int *nn2,
+    int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    JacStoreLayout layout, double *out
 ) {
     if (!out) throw std::invalid_argument("jacobian output is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -2533,8 +2529,8 @@ static void kernel_gaussian_jacobian_impl(
         std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * nm2, 0.0);
 
         gradient_one_A_against_B(
-            coords_A_list[static_cast<std::size_t>(i)],
-            z_A_list[static_cast<std::size_t>(i)],
+            coords_A_list[static_cast<std::size_t>(i)].data(),
+            z_A_list[static_cast<std::size_t>(i)].data(),
             na_i,
             x2,
             n2,
@@ -2582,11 +2578,11 @@ static void kernel_gaussian_jacobian_impl(
 
 void kernel_gaussian_jacobian(
     const std::vector<std::vector<double>> &coords_A_list,
-    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
-    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2, double sigma,
-    double two_body_scaling, double two_body_width, double two_body_power,
-    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *J_out
+    const std::vector<std::vector<int>> &z_A_list, const double *x2, const int *n2, const int *nn2,
+    int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    double *J_out
 ) {
     kernel_gaussian_jacobian_impl(
         coords_A_list,
@@ -2614,11 +2610,11 @@ void kernel_gaussian_jacobian(
 
 void kernel_gaussian_jacobian_t(
     const std::vector<std::vector<double>> &coords_A_list,
-    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
-    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2, double sigma,
-    double two_body_scaling, double two_body_width, double two_body_power,
-    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *K_jt_out
+    const std::vector<std::vector<int>> &z_A_list, const double *x2, const int *n2, const int *nn2,
+    int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    double *K_jt_out
 ) {
     kernel_gaussian_jacobian_impl(
         coords_A_list,
@@ -2887,8 +2883,8 @@ struct HessSharedParams {
 };
 
 static void build_dri_from_ad(
-    const std::vector<AtomDataGrad> &ad, const std::vector<double> &x_mol, int n_atoms,
-    int max_size, std::vector<std::vector<double>> &dri_out
+    const std::vector<AtomDataGrad> &ad, const double *x_mol, int n_atoms, int max_size,
+    std::vector<std::vector<double>> &dri_out
 ) {
     const int na3 = n_atoms * 3;
     const std::size_t atom_stride = static_cast<std::size_t>(5) * max_size;
@@ -2898,7 +2894,7 @@ static void build_dri_from_ad(
         const int n_neigh = adi.n_neigh;
         dri_out[static_cast<std::size_t>(i)].assign(static_cast<std::size_t>(n_neigh) * na3, 0.0);
 
-        const double *atom_chan = x_mol.data() + static_cast<std::size_t>(i) * atom_stride;
+        const double *atom_chan = x_mol + static_cast<std::size_t>(i) * atom_stride;
         const double *dist_chan = atom_chan;
         const double *xc = atom_chan + 2 * max_size;
         const double *yc = atom_chan + 3 * max_size;
@@ -2926,14 +2922,14 @@ static void build_dri_from_ad(
 }
 
 static HessMolSide build_hess_mol_side(
-    const std::vector<double> &coords, const std::vector<int> &z, int n_atoms,
-    const HessSharedParams &P, double two_body_power, double three_body_power, double cut_start,
-    double cut_distance, bool use_atm, bool parallel_atoms
+    const double *coords, const int *z, int n_atoms, const HessSharedParams &P,
+    double two_body_power, double three_body_power, double cut_start, double cut_distance,
+    bool use_atm, bool parallel_atoms
 ) {
     HessMolSide S;
     S.n_atoms = n_atoms;
     S.max_size = n_atoms;
-    kf::fchl18::generate_fchl18(coords, z, S.max_size, cut_distance, S.x_mol, S.nn_mol);
+    kf::fchl18::generate_fchl18(coords, z, n_atoms, S.max_size, cut_distance, S.x_mol, S.nn_mol);
 
     const std::size_t atom_stride0 = static_cast<std::size_t>(5) * S.max_size;
     S.z_centre.resize(static_cast<std::size_t>(n_atoms));
@@ -2952,9 +2948,9 @@ static HessMolSide build_hess_mol_side(
 
     const std::vector<int> n_vec = {n_atoms};
     S.ad = precompute_atom_data_grad(
-        S.x_mol,
-        n_vec,
-        S.nn_mol,
+        S.x_mol.data(),
+        n_vec.data(),
+        S.nn_mol.data(),
         n_atoms,
         S.max_size,
         coords,
@@ -2965,12 +2961,12 @@ static HessMolSide build_hess_mol_side(
         three_body_power,
         P.fourier_order,
         P.pmax,
-        P.z_to_idx,
+        P.z_to_idx.data(),
         use_atm,
         parallel_atoms
     );
 
-    build_dri_from_ad(S.ad, S.x_mol, n_atoms, S.max_size, S.dri);
+    build_dri_from_ad(S.ad, S.x_mol.data(), n_atoms, S.max_size, S.dri);
 
     const int na3 = n_atoms * 3;
     const std::size_t atom_stride = static_cast<std::size_t>(5) * S.max_size;
@@ -2988,16 +2984,16 @@ static HessMolSide build_hess_mol_side(
             adi.ksi.data(),
             adi.dksi.data(),
             S.dri[static_cast<std::size_t>(i)].data(),
-            adi.cosp,
-            adi.sinp,
-            adi.dcosp,
-            adi.dsinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
+            adi.dcosp.data(),
+            adi.dsinp.data(),
             x1_chan,
             S.max_size,
             adi.n_neigh,
             adi.ksi.data(),
-            adi.cosp,
-            adi.sinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
             P.two_body_width,
             P.fourier_order,
             P.pmax,
@@ -3109,16 +3105,16 @@ static void hessian_pair_from_sides(
             adi.ksi.data(),
             adi.dksi.data(),
             A.dri[static_cast<std::size_t>(i)].data(),
-            adi.cosp,
-            adi.sinp,
-            adi.dcosp,
-            adi.dsinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
+            adi.dcosp.data(),
+            adi.dsinp.data(),
             x2_chan,
             B.max_size,
             adj.n_neigh,
             adj.ksi.data(),
-            adj.cosp,
-            adj.sinp,
+            adj.cosp.data(),
+            adj.sinp.data(),
             P.two_body_width,
             P.fourier_order,
             P.pmax,
@@ -3135,16 +3131,16 @@ static void hessian_pair_from_sides(
             adj.ksi.data(),
             adj.dksi.data(),
             B.dri[static_cast<std::size_t>(j)].data(),
-            adj.cosp,
-            adj.sinp,
-            adj.dcosp,
-            adj.dsinp,
+            adj.cosp.data(),
+            adj.sinp.data(),
+            adj.dcosp.data(),
+            adj.dsinp.data(),
             x1_chan,
             A.max_size,
             adi.n_neigh,
             adi.ksi.data(),
-            adi.cosp,
-            adi.sinp,
+            adi.cosp.data(),
+            adi.sinp.data(),
             P.two_body_width,
             P.fourier_order,
             P.pmax,
@@ -3229,18 +3225,19 @@ static void hessian_pair_from_sides(
 // Public API: kernel_gaussian_hessian
 // =============================================================================
 void kernel_gaussian_hessian(
-    const std::vector<double> &coords_A, const std::vector<int> &z_A,
-    const std::vector<double> &coords_B, const std::vector<int> &z_B, int n_atoms_A, int n_atoms_B,
-    double sigma, double two_body_scaling, double two_body_width, double two_body_power,
-    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm,
+    const double *coords_A, const int *z_A, const double *coords_B, const int *z_B, int n_atoms_A,
+    int n_atoms_B, double sigma, double two_body_scaling, double two_body_width,
+    double two_body_power, double three_body_scaling, double three_body_width,
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
     double *hess_out  // (n_atoms_A*3, n_atoms_B*3) row-major OUT
 ) {
     if (!hess_out) throw std::invalid_argument("hess_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
     if (n_atoms_A <= 0 || n_atoms_B <= 0) throw std::invalid_argument("n_atoms must be > 0");
 
-    const std::vector<std::vector<int>> z_lists = {z_A, z_B};
+    const std::vector<int> z_A_vec(z_A, z_A + n_atoms_A);
+    const std::vector<int> z_B_vec(z_B, z_B + n_atoms_B);
+    const std::vector<std::vector<int>> z_lists = {z_A_vec, z_B_vec};
     HessSharedParams P = build_hess_shared(
         z_lists,
         sigma,
@@ -3344,8 +3341,8 @@ void kernel_gaussian_hessian_rect(
     for (int i = 0; i < N_A + N_B; ++i) {
         if (i < N_A) {
             sides_A[static_cast<std::size_t>(i)] = build_hess_mol_side(
-                coords_A_list[static_cast<std::size_t>(i)],
-                z_A_list[static_cast<std::size_t>(i)],
+                coords_A_list[static_cast<std::size_t>(i)].data(),
+                z_A_list[static_cast<std::size_t>(i)].data(),
                 static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size()),
                 P,
                 two_body_power,
@@ -3358,8 +3355,8 @@ void kernel_gaussian_hessian_rect(
         } else {
             const int j = i - N_A;
             sides_B[static_cast<std::size_t>(j)] = build_hess_mol_side(
-                coords_B_list[static_cast<std::size_t>(j)],
-                z_B_list[static_cast<std::size_t>(j)],
+                coords_B_list[static_cast<std::size_t>(j)].data(),
+                z_B_list[static_cast<std::size_t>(j)].data(),
                 static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size()),
                 P,
                 two_body_power,
@@ -3445,8 +3442,8 @@ void kernel_gaussian_hessian_symm_blocks(
 #endif
     for (int a = 0; a < nm; ++a) {
         sides[static_cast<std::size_t>(a)] = build_hess_mol_side(
-            coords_list[static_cast<std::size_t>(a)],
-            z_list[static_cast<std::size_t>(a)],
+            coords_list[static_cast<std::size_t>(a)].data(),
+            z_list[static_cast<std::size_t>(a)].data(),
             static_cast<int>(z_list[static_cast<std::size_t>(a)].size()),
             P,
             two_body_power,
@@ -3553,8 +3550,8 @@ void kernel_gaussian_hessian_symm_rfp_blocks(
 #endif
     for (int a = 0; a < nm; ++a) {
         sides[static_cast<std::size_t>(a)] = build_hess_mol_side(
-            coords_list[static_cast<std::size_t>(a)],
-            z_list[static_cast<std::size_t>(a)],
+            coords_list[static_cast<std::size_t>(a)].data(),
+            z_list[static_cast<std::size_t>(a)].data(),
             static_cast<int>(z_list[static_cast<std::size_t>(a)].size()),
             P,
             two_body_power,
@@ -3630,7 +3627,7 @@ void kernel_gaussian_hessian_matvec(
     const std::vector<std::vector<double>> &coords_A_list,
     const std::vector<std::vector<int>> &z_A_list,
     const std::vector<std::vector<double>> &coords_B_list,
-    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &alpha_F, double sigma,
+    const std::vector<std::vector<int>> &z_B_list, const double *alpha_F, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm, double *F_out
@@ -3658,8 +3655,6 @@ void kernel_gaussian_hessian_matvec(
         off_B[static_cast<std::size_t>(j) + 1] = off_B[static_cast<std::size_t>(j)] + nb * 3;
     }
     const int D_B = off_B[static_cast<std::size_t>(N_B)];
-    if (static_cast<int>(alpha_F.size()) != D_B)
-        throw std::invalid_argument("alpha_F length must equal D_B");
 
     std::vector<std::vector<int>> z_all = z_A_list;
     z_all.insert(z_all.end(), z_B_list.begin(), z_B_list.end());
@@ -3683,8 +3678,8 @@ void kernel_gaussian_hessian_matvec(
     for (int i = 0; i < N_A + N_B; ++i) {
         if (i < N_A) {
             sides_A[static_cast<std::size_t>(i)] = build_hess_mol_side(
-                coords_A_list[static_cast<std::size_t>(i)],
-                z_A_list[static_cast<std::size_t>(i)],
+                coords_A_list[static_cast<std::size_t>(i)].data(),
+                z_A_list[static_cast<std::size_t>(i)].data(),
                 static_cast<int>(z_A_list[static_cast<std::size_t>(i)].size()),
                 P,
                 two_body_power,
@@ -3697,8 +3692,8 @@ void kernel_gaussian_hessian_matvec(
         } else {
             const int j = i - N_A;
             sides_B[static_cast<std::size_t>(j)] = build_hess_mol_side(
-                coords_B_list[static_cast<std::size_t>(j)],
-                z_B_list[static_cast<std::size_t>(j)],
+                coords_B_list[static_cast<std::size_t>(j)].data(),
+                z_B_list[static_cast<std::size_t>(j)].data(),
                 static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size()),
                 P,
                 two_body_power,
@@ -3744,9 +3739,8 @@ void kernel_gaussian_hessian_matvec(
 
 void kernel_gaussian_jacobian_matvec(
     const std::vector<std::vector<double>> &coords_A_list,
-    const std::vector<std::vector<int>> &z_A_list, const std::vector<double> &x2,
-    const std::vector<int> &n2, const std::vector<int> &nn2, int nm2, int max_size2,
-    const std::vector<double> &alpha_E, double sigma, double two_body_scaling,
+    const std::vector<std::vector<int>> &z_A_list, const double *x2, const int *n2, const int *nn2,
+    int nm2, int max_size2, const double *alpha_E, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm, double *F_out
@@ -3757,8 +3751,6 @@ void kernel_gaussian_jacobian_matvec(
     if (N_A == 0) throw std::invalid_argument("jacobian_matvec: empty query set");
     if (static_cast<int>(z_A_list.size()) != N_A)
         throw std::invalid_argument("coords_A_list and z_A_list size mismatch");
-    if (static_cast<int>(alpha_E.size()) != nm2)
-        throw std::invalid_argument("alpha_E length must equal nm2 (N_B)");
 
     std::vector<int> atom_offset(static_cast<std::size_t>(N_A) + 1, 0);
     for (int i = 0; i < N_A; ++i) {
@@ -3809,8 +3801,8 @@ void kernel_gaussian_jacobian_matvec(
         std::vector<double> grad(static_cast<std::size_t>(na_i) * 3 * nm2, 0.0);
 
         gradient_one_A_against_B(
-            coords_A_list[static_cast<std::size_t>(i)],
-            z_A_list[static_cast<std::size_t>(i)],
+            coords_A_list[static_cast<std::size_t>(i)].data(),
+            z_A_list[static_cast<std::size_t>(i)].data(),
             na_i,
             x2,
             n2,
@@ -3849,12 +3841,11 @@ void kernel_gaussian_jacobian_matvec(
 
 void kernel_gaussian_jacobian_t_matvec(
     const std::vector<std::vector<double>> &coords_B_list,
-    const std::vector<std::vector<int>> &z_B_list, const std::vector<double> &x_A,
-    const std::vector<int> &n_A, const std::vector<int> &nn_A, int nm_A, int max_size_A,
-    const std::vector<double> &alpha_F, double sigma, double two_body_scaling,
-    double two_body_width, double two_body_power, double three_body_scaling,
-    double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm, double *E_out
+    const std::vector<std::vector<int>> &z_B_list, const double *x_A, const int *n_A,
+    const int *nn_A, int nm_A, int max_size_A, const double *alpha_F, double sigma,
+    double two_body_scaling, double two_body_width, double two_body_power,
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm, double *E_out
 ) {
     if (!E_out) throw std::invalid_argument("E_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3870,8 +3861,6 @@ void kernel_gaussian_jacobian_t_matvec(
         off_B[static_cast<std::size_t>(j) + 1] = off_B[static_cast<std::size_t>(j)] + nb * 3;
     }
     const int D_B = off_B[static_cast<std::size_t>(N_B)];
-    if (static_cast<int>(alpha_F.size()) != D_B)
-        throw std::invalid_argument("alpha_F length must equal D_B");
 
     for (int j = 0; j < N_B; ++j) {
         const int nb = static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size());
@@ -3879,8 +3868,8 @@ void kernel_gaussian_jacobian_t_matvec(
         std::vector<double> grad(static_cast<std::size_t>(nb) * 3 * nm_A, 0.0);
 
         kernel_gaussian_gradient(
-            coords_B_list[static_cast<std::size_t>(j)],
-            z_B_list[static_cast<std::size_t>(j)],
+            coords_B_list[static_cast<std::size_t>(j)].data(),
+            z_B_list[static_cast<std::size_t>(j)].data(),
             x_A,
             n_A,
             nn_A,

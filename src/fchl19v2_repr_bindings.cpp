@@ -12,38 +12,32 @@
 
 namespace py = pybind11;
 
-// Convert a 2D NumPy array (n,3) or 1D (n*3,) to std::vector<double>
-static std::vector<double> as_coords_vector(const py::array &arr, size_t natoms) {
-    if (arr.ndim() == 2) {
-        if (static_cast<size_t>(arr.shape(0)) != natoms || arr.shape(1) != 3)
+static void coords_ptr_and_natoms(
+    const py::array &arr, size_t natoms, const double *&out_ptr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> &keep_alive
+) {
+    keep_alive = arr.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
+    if (keep_alive.ndim() == 2) {
+        if (static_cast<size_t>(keep_alive.shape(0)) != natoms || keep_alive.shape(1) != 3)
             throw std::invalid_argument("coords must have shape (n_atoms, 3)");
-        std::vector<double> out(natoms * 3);
-        auto buf = arr.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
-        auto r = buf.unchecked<2>();
-        for (size_t i = 0; i < natoms; ++i) {
-            out[3 * i + 0] = r(i, 0);
-            out[3 * i + 1] = r(i, 1);
-            out[3 * i + 2] = r(i, 2);
-        }
-        return out;
-    } else if (arr.ndim() == 1) {
-        if (static_cast<size_t>(arr.shape(0)) != natoms * 3)
+    } else if (keep_alive.ndim() == 1) {
+        if (static_cast<size_t>(keep_alive.shape(0)) != natoms * 3)
             throw std::invalid_argument("coords 1D length must be n_atoms*3");
-        auto buf = arr.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
-        auto r = buf.unchecked<1>();
-        return std::vector<double>(r.data(0), r.data(0) + natoms * 3);
     } else {
         throw std::invalid_argument("coords must be a 1D or 2D NumPy array");
     }
+    out_ptr = keep_alive.data();
 }
 
-static std::vector<int> as_int_vector(const py::array &arr, size_t expected = SIZE_MAX) {
-    auto buf = arr.cast<py::array_t<int, py::array::c_style | py::array::forcecast>>();
-    if (buf.ndim() != 1) throw std::invalid_argument("array must be 1D");
-    if (expected != SIZE_MAX && static_cast<size_t>(buf.shape(0)) != expected)
+static const int *z_ptr(
+    const py::array &arr, size_t expected,
+    py::array_t<int, py::array::c_style | py::array::forcecast> &keep_alive
+) {
+    keep_alive = arr.cast<py::array_t<int, py::array::c_style | py::array::forcecast>>();
+    if (keep_alive.ndim() != 1) throw std::invalid_argument("array must be 1D");
+    if (static_cast<size_t>(keep_alive.shape(0)) != expected)
         throw std::invalid_argument("unexpected array length");
-    auto r = buf.unchecked<1>();
-    return std::vector<int>(r.data(0), r.data(0) + r.shape(0));
+    return keep_alive.data();
 }
 
 // Build Rs2, Rs3 grids.
@@ -51,8 +45,8 @@ static std::vector<int> as_int_vector(const py::array &arr, size_t expected = SI
 // Rs3: linspace(0, acut, 1+nRs3)[1:] = acut*i/nRs3 for i=1..nRs3
 // Rs3_minus: linspace(0, acut, 1+nRs3_minus)[1:] (only for SplitR variants)
 static void build_grids(
-    int nRs2, int nRs3, int nRs3_minus, double rcut, double acut,
-    std::vector<double> &Rs2, std::vector<double> &Rs3, std::vector<double> &Rs3_minus
+    int nRs2, int nRs3, int nRs3_minus, double rcut, double acut, std::vector<double> &Rs2,
+    std::vector<double> &Rs3, std::vector<double> &Rs3_minus
 ) {
     Rs2.clear();
     Rs3.clear();
@@ -71,9 +65,7 @@ static void build_grids(
 }
 
 // Compute nabasis from type and nFourier/nCosine
-static int compute_nabasis(
-    const std::string &three_body_type, int nFourier, int nCosine
-) {
+static int compute_nabasis(const std::string &three_body_type, int nFourier, int nCosine) {
     // Cosine variants use nCosine (if >0), else nFourier as fallback
     if (three_body_type == "odd_fourier_rbar" || three_body_type == "odd_fourier_split_r") {
         return 2 * nFourier;
@@ -84,31 +76,20 @@ static int compute_nabasis(
 
 // ---- generate (forward only) ----
 static py::array_t<double> generate_py(
-    const py::array &coords,
-    const py::array &nuclear_z,
-    std::vector<int> elements,
-    int nRs2,
-    int nRs3,
-    int nRs3_minus,
-    int nFourier,
-    int nCosine,
-    double eta2,
-    double eta3,
-    double eta3_minus,
-    double zeta,
-    double rcut,
-    double acut,
-    double two_body_decay,
-    double three_body_decay,
-    double three_body_weight,
-    const std::string &two_body_type_str,
+    const py::array &coords, const py::array &nuclear_z, std::vector<int> elements, int nRs2,
+    int nRs3, int nRs3_minus, int nFourier, int nCosine, double eta2, double eta3,
+    double eta3_minus, double zeta, double rcut, double acut, double two_body_decay,
+    double three_body_decay, double three_body_weight, const std::string &two_body_type_str,
     const std::string &three_body_type_str
 ) {
     const size_t natoms = static_cast<size_t>(nuclear_z.cast<py::array>().shape(0));
     if (natoms == 0) throw std::invalid_argument("n_atoms must be > 0");
 
-    std::vector<double> coords_v = as_coords_vector(coords, natoms);
-    std::vector<int> z_v = as_int_vector(nuclear_z, natoms);
+    py::array_t<double, py::array::c_style | py::array::forcecast> coords_buf;
+    py::array_t<int, py::array::c_style | py::array::forcecast> z_buf;
+    const double *coords_p = nullptr;
+    coords_ptr_and_natoms(coords, natoms, coords_p, coords_buf);
+    const int *z_p = z_ptr(nuclear_z, natoms, z_buf);
     if (elements.empty()) elements = {1, 6, 7, 8, 16};
 
     std::vector<double> Rs2_v, Rs3_v, Rs3_minus_v;
@@ -121,7 +102,11 @@ static py::array_t<double> generate_py(
     const double w3 = std::sqrt(eta3 / M_PI) * three_body_weight;
 
     const size_t rep_size = kf::fchl19v2::compute_rep_size(
-        elements.size(), Rs2_v.size(), Rs3_v.size(), static_cast<size_t>(nabasis), ab_type,
+        elements.size(),
+        Rs2_v.size(),
+        Rs3_v.size(),
+        static_cast<size_t>(nabasis),
+        ab_type,
         Rs3_minus_v.size()
     );
 
@@ -129,14 +114,30 @@ static py::array_t<double> generate_py(
     {
         py::gil_scoped_release release;
         kf::fchl19v2::generate(
-            coords_v, z_v, elements, Rs2_v, Rs3_v, Rs3_minus_v, eta2, eta3, eta3_minus, zeta,
-            rcut, acut, two_body_decay, three_body_decay, w3, tb_type, ab_type, nabasis, rep
+            coords_p,
+            z_p,
+            natoms,
+            elements,
+            Rs2_v,
+            Rs3_v,
+            Rs3_minus_v,
+            eta2,
+            eta3,
+            eta3_minus,
+            zeta,
+            rcut,
+            acut,
+            two_body_decay,
+            three_body_decay,
+            w3,
+            tb_type,
+            ab_type,
+            nabasis,
+            rep
         );
     }
 
-    py::array_t<double> out(
-        {static_cast<py::ssize_t>(natoms), static_cast<py::ssize_t>(rep_size)}
-    );
+    py::array_t<double> out({static_cast<py::ssize_t>(natoms), static_cast<py::ssize_t>(rep_size)});
     auto o = out.mutable_unchecked<2>();
     for (size_t i = 0; i < natoms; ++i)
         for (size_t j = 0; j < rep_size; ++j)
@@ -146,31 +147,20 @@ static py::array_t<double> generate_py(
 
 // ---- generate_and_gradients ----
 static py::tuple generate_and_gradients_py(
-    const py::array &coords,
-    const py::array &nuclear_z,
-    std::vector<int> elements,
-    int nRs2,
-    int nRs3,
-    int nRs3_minus,
-    int nFourier,
-    int nCosine,
-    double eta2,
-    double eta3,
-    double eta3_minus,
-    double zeta,
-    double rcut,
-    double acut,
-    double two_body_decay,
-    double three_body_decay,
-    double three_body_weight,
-    const std::string &two_body_type_str,
+    const py::array &coords, const py::array &nuclear_z, std::vector<int> elements, int nRs2,
+    int nRs3, int nRs3_minus, int nFourier, int nCosine, double eta2, double eta3,
+    double eta3_minus, double zeta, double rcut, double acut, double two_body_decay,
+    double three_body_decay, double three_body_weight, const std::string &two_body_type_str,
     const std::string &three_body_type_str
 ) {
     const size_t natoms = static_cast<size_t>(nuclear_z.cast<py::array>().shape(0));
     if (natoms == 0) throw std::invalid_argument("n_atoms must be > 0");
 
-    std::vector<double> coords_v = as_coords_vector(coords, natoms);
-    std::vector<int> z_v = as_int_vector(nuclear_z, natoms);
+    py::array_t<double, py::array::c_style | py::array::forcecast> coords_buf;
+    py::array_t<int, py::array::c_style | py::array::forcecast> z_buf;
+    const double *coords_p = nullptr;
+    coords_ptr_and_natoms(coords, natoms, coords_p, coords_buf);
+    const int *z_p = z_ptr(nuclear_z, natoms, z_buf);
     if (elements.empty()) elements = {1, 6, 7, 8, 16};
 
     std::vector<double> Rs2_v, Rs3_v, Rs3_minus_v;
@@ -183,7 +173,11 @@ static py::tuple generate_and_gradients_py(
     const double w3 = std::sqrt(eta3 / M_PI) * three_body_weight;
 
     const size_t rep_size = kf::fchl19v2::compute_rep_size(
-        elements.size(), Rs2_v.size(), Rs3_v.size(), static_cast<size_t>(nabasis), ab_type,
+        elements.size(),
+        Rs2_v.size(),
+        Rs3_v.size(),
+        static_cast<size_t>(nabasis),
+        ab_type,
         Rs3_minus_v.size()
     );
 
@@ -191,8 +185,27 @@ static py::tuple generate_and_gradients_py(
     {
         py::gil_scoped_release release;
         kf::fchl19v2::generate_and_gradients(
-            coords_v, z_v, elements, Rs2_v, Rs3_v, Rs3_minus_v, eta2, eta3, eta3_minus, zeta,
-            rcut, acut, two_body_decay, three_body_decay, w3, tb_type, ab_type, nabasis, rep, grad
+            coords_p,
+            z_p,
+            natoms,
+            elements,
+            Rs2_v,
+            Rs3_v,
+            Rs3_minus_v,
+            eta2,
+            eta3,
+            eta3_minus,
+            zeta,
+            rcut,
+            acut,
+            two_body_decay,
+            three_body_decay,
+            w3,
+            tb_type,
+            ab_type,
+            nabasis,
+            rep,
+            grad
         );
     }
 
@@ -205,7 +218,8 @@ static py::tuple generate_and_gradients_py(
             R(i, j) = rep[i * rep_size + j];
 
     py::array_t<double> grad_arr(
-        {static_cast<py::ssize_t>(natoms), static_cast<py::ssize_t>(rep_size),
+        {static_cast<py::ssize_t>(natoms),
+         static_cast<py::ssize_t>(rep_size),
          static_cast<py::ssize_t>(3 * natoms)}
     );
     auto G = grad_arr.mutable_unchecked<3>();
@@ -225,8 +239,14 @@ static size_t compute_rep_size_py(
     const std::string &three_body_type_str, size_t nbasis3_minus
 ) {
     const auto ab_type = kf::fchl19v2::three_body_type_from_string(three_body_type_str);
-    return kf::fchl19v2::compute_rep_size(nelements, nbasis2, nbasis3, nabasis, ab_type,
-                                          nbasis3_minus);
+    return kf::fchl19v2::compute_rep_size(
+        nelements,
+        nbasis2,
+        nbasis3,
+        nabasis,
+        ab_type,
+        nbasis3_minus
+    );
 }
 
 PYBIND11_MODULE(fchl19v2_repr, m) {

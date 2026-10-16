@@ -73,11 +73,8 @@ static void decay_matrix(
 }
 
 // Compute full pairwise distance matrix (natoms x natoms, row-major)
-static std::vector<double> pairwise_distances(
-    const std::vector<double> &coords, std::size_t natoms
-) {
-    if (coords.size() != natoms * 3)
-        throw std::invalid_argument("coords.size() must equal natoms*3");
+static std::vector<double> pairwise_distances(const double *coords, std::size_t natoms) {
+    if (natoms == 0) throw std::invalid_argument("natoms must be > 0");
     std::vector<double> D(natoms * natoms, 0.0);
     for (std::size_t i = 0; i < natoms; ++i) {
         const double *ri = &coords[3 * i];
@@ -96,7 +93,7 @@ static std::vector<double> pairwise_distances(
 
 // Map nuclear charges to element indices
 static std::vector<int> build_elem_map(
-    const std::vector<int> &nuclear_z, const std::vector<int> &elements, std::size_t natoms
+    const int *nuclear_z, const std::vector<int> &elements, std::size_t natoms
 ) {
     std::unordered_map<int, int> z2idx;
     z2idx.reserve(elements.size() * 2);
@@ -143,10 +140,10 @@ std::size_t compute_rep_size(
 
 // T1: LogNormal (baseline FCHL19)
 static void two_body_log_normal_forward(
-    std::size_t natoms, std::size_t nbasis2, std::size_t nelements,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &Rs2, double eta2, double two_body_decay, double rcut,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep
+    std::size_t natoms, std::size_t nbasis2, std::size_t nelements, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
+    double two_body_decay, double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
+    std::vector<double> &rep
 ) {
     // Precompute log(Rs2) and 1/Rs2
     std::vector<double> log_Rs2(nbasis2), inv_Rs2(nbasis2);
@@ -204,10 +201,10 @@ static void two_body_log_normal_forward(
 
 // T2: Fixed-width Gaussian in r
 static void two_body_gaussian_r_forward(
-    std::size_t natoms, std::size_t nbasis2, std::size_t nelements,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &Rs2, double eta2, double two_body_decay, double rcut,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep
+    std::size_t natoms, std::size_t nbasis2, std::size_t nelements, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
+    double two_body_decay, double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
+    std::vector<double> &rep
 ) {
 #pragma omp parallel
     {
@@ -248,10 +245,10 @@ static void two_body_gaussian_r_forward(
 
 // T3: Fixed-width Gaussian in ln(r)
 static void two_body_gaussian_log_r_forward(
-    std::size_t natoms, std::size_t nbasis2, std::size_t nelements,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &Rs2, double eta2, double two_body_decay, double rcut,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep
+    std::size_t natoms, std::size_t nbasis2, std::size_t nelements, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
+    double two_body_decay, double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
+    std::vector<double> &rep
 ) {
     std::vector<double> log_Rs2(nbasis2);
     for (std::size_t k = 0; k < nbasis2; ++k) {
@@ -344,7 +341,7 @@ static void two_body_gaussian_r_no_pow_forward(
 static void two_body_bessel_forward(
     std::size_t natoms, std::size_t nbasis2, std::size_t /* nelements */,
     const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &/* Rs2 */, double /* eta2 */, double /* two_body_decay */,
+    const std::vector<double> & /* Rs2 */, double /* eta2 */, double /* two_body_decay */,
     double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
     std::vector<double> &rep
 ) {
@@ -399,32 +396,82 @@ static void two_body_forward(
     switch (type) {
         case TwoBodyType::LogNormal:
             two_body_log_normal_forward(
-                natoms, nbasis2, nelements, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep
+                natoms,
+                nbasis2,
+                nelements,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case TwoBodyType::GaussianR:
             two_body_gaussian_r_forward(
-                natoms, nbasis2, nelements, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep
+                natoms,
+                nbasis2,
+                nelements,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case TwoBodyType::GaussianLogR:
             two_body_gaussian_log_r_forward(
-                natoms, nbasis2, nelements, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep
+                natoms,
+                nbasis2,
+                nelements,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case TwoBodyType::GaussianRNoPow:
             two_body_gaussian_r_no_pow_forward(
-                natoms, nbasis2, nelements, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep
+                natoms,
+                nbasis2,
+                nelements,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case TwoBodyType::Bessel:
             two_body_bessel_forward(
-                natoms, nbasis2, nelements, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep
+                natoms,
+                nbasis2,
+                nelements,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
     }
@@ -434,11 +481,10 @@ static void two_body_forward(
 
 // T1: LogNormal gradient (ported from existing fchl19_repr.cpp)
 static void two_body_log_normal_grad(
-    std::size_t natoms, std::size_t nbasis2, const std::vector<double> &coords,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &Rs2, double eta2, double two_body_decay, double rcut,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep,
-    std::vector<double> &grad
+    std::size_t natoms, std::size_t nbasis2, const double *coords, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
+    double two_body_decay, double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
+    std::vector<double> &rep, std::vector<double> &grad
 ) {
     std::vector<double> log_Rs2(nbasis2), inv_Rs2(nbasis2);
     for (std::size_t k = 0; k < nbasis2; ++k) {
@@ -491,15 +537,14 @@ static void two_body_log_normal_grad(
                 for (std::size_t k = 0; k < nbasis2; ++k) {
                     const double L = log_Rs2[k] - mu;
                     const double term1 =
-                        L *
-                        (-dx * (rij * rij * exp_s2 + eta2) / std::pow(rij * sqrt_exp_s2, 3)) *
+                        L * (-dx * (rij * rij * exp_s2 + eta2) / std::pow(rij * sqrt_exp_s2, 3)) *
                         (sqrt_exp_s2 / (s2 * rij));
                     const double term2 =
                         (L * L) * eta2 * dx / ((s2 * s2) * std::pow(rij, 4) * exp_s2);
                     const double A =
                         (term1 + term2) * (exp_ln[k] / (Rs2[k] * sigma * std::sqrt(M_PI) * 2.0)) -
                         (exp_ln[k] * eta2 * dx) / (Rs2[k] * (s2 * std::sqrt(M_PI)) * sigma *
-                                                    std::pow(rij, 4) * exp_s2 * 2.0);
+                                                   std::pow(rij, 4) * exp_s2 * 2.0);
                     double part = A * scaling * decay_ij + radial_base[k] * dscal * decay_ij +
                                   radial_base[k] * scaling * ddecay;
 
@@ -517,11 +562,10 @@ static void two_body_log_normal_grad(
 
 // T2: GaussianR gradient
 static void two_body_gaussian_r_grad(
-    std::size_t natoms, std::size_t nbasis2, const std::vector<double> &coords,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &Rs2, double eta2, double two_body_decay, double rcut,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep,
-    std::vector<double> &grad
+    std::size_t natoms, std::size_t nbasis2, const double *coords, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
+    double two_body_decay, double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
+    std::vector<double> &rep, std::vector<double> &grad
 ) {
     const double inv_rcut = (rcut > 0) ? 1.0 / rcut : 0.0;
 
@@ -553,10 +597,9 @@ static void two_body_gaussian_r_grad(
             // dr/dx_i = (x_i - x_j)/r, so use dx = (x_i - x_j)
             for (int t = 0; t < 3; ++t) {
                 const double dx = coords[3 * i + t] - coords[3 * j + t];  // x_i - x_j
-                const double dx_over_r = dx * invr;  // (x_i-x_j)/r = dr/dx_i
+                const double dx_over_r = dx * invr;                       // (x_i-x_j)/r = dr/dx_i
 
-                const double ddecay_dr =
-                    -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
+                const double ddecay_dr = -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
                 const double ddecay = ddecay_dr * dx_over_r;
 
                 // d(rpow)/dx_i = d(r^-p)/dr * dr/dx_i = -p * r^(-p-2) * dx
@@ -588,11 +631,10 @@ static void two_body_gaussian_r_grad(
 
 // T3: GaussianLogR gradient
 static void two_body_gaussian_log_r_grad(
-    std::size_t natoms, std::size_t nbasis2, const std::vector<double> &coords,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &Rs2, double eta2, double two_body_decay, double rcut,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep,
-    std::vector<double> &grad
+    std::size_t natoms, std::size_t nbasis2, const double *coords, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
+    double two_body_decay, double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
+    std::vector<double> &rep, std::vector<double> &grad
 ) {
     const double inv_rcut = (rcut > 0) ? 1.0 / rcut : 0.0;
 
@@ -631,8 +673,7 @@ static void two_body_gaussian_log_r_grad(
                 const double dx = coords[3 * i + t] - coords[3 * j + t];  // x_i - x_j
                 const double dx_over_r = dx * invr;
 
-                const double ddecay_dr =
-                    -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
+                const double ddecay_dr = -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
                 const double ddecay = ddecay_dr * dx_over_r;
                 const double drpow = -two_body_decay * std::pow(rij, -(two_body_decay + 2.0)) * dx;
 
@@ -661,11 +702,10 @@ static void two_body_gaussian_log_r_grad(
 
 // T4: GaussianRNoPow gradient
 static void two_body_gaussian_r_no_pow_grad(
-    std::size_t natoms, std::size_t nbasis2, const std::vector<double> &coords,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &Rs2, double eta2, double /* two_body_decay */, double rcut,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep,
-    std::vector<double> &grad
+    std::size_t natoms, std::size_t nbasis2, const double *coords, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
+    double /* two_body_decay */, double rcut, const std::vector<int> &elem_of_atom,
+    std::size_t rep_size, std::vector<double> &rep, std::vector<double> &grad
 ) {
     const double inv_rcut = (rcut > 0) ? 1.0 / rcut : 0.0;
 
@@ -694,8 +734,7 @@ static void two_body_gaussian_r_no_pow_grad(
                 const double dx = coords[3 * i + t] - coords[3 * j + t];  // x_i - x_j
                 const double dx_over_r = dx * invr;
 
-                const double ddecay_dr =
-                    -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
+                const double ddecay_dr = -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
                 const double ddecay = ddecay_dr * dx_over_r;
 
                 for (std::size_t k = 0; k < nbasis2; ++k) {
@@ -720,11 +759,10 @@ static void two_body_gaussian_r_no_pow_grad(
 
 // T5: Bessel gradient
 static void two_body_bessel_grad(
-    std::size_t natoms, std::size_t nbasis2, const std::vector<double> &coords,
-    const std::vector<double> &D, const std::vector<double> &rdecay2,
-    const std::vector<double> &/* Rs2 */, double /* eta2 */, double /* two_body_decay */,
-    double rcut, const std::vector<int> &elem_of_atom, std::size_t rep_size,
-    std::vector<double> &rep, std::vector<double> &grad
+    std::size_t natoms, std::size_t nbasis2, const double *coords, const std::vector<double> &D,
+    const std::vector<double> &rdecay2, const std::vector<double> & /* Rs2 */, double /* eta2 */,
+    double /* two_body_decay */, double rcut, const std::vector<int> &elem_of_atom,
+    std::size_t rep_size, std::vector<double> &rep, std::vector<double> &grad
 ) {
     const double norm = std::sqrt(2.0 / rcut);
     const double pi_over_rcut = M_PI / rcut;
@@ -758,8 +796,7 @@ static void two_body_bessel_grad(
                 const double dx = coords[3 * i + t] - coords[3 * j + t];  // x_i - x_j
                 const double dx_over_r = dx * invr;
 
-                const double ddecay_dr =
-                    -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
+                const double ddecay_dr = -0.5 * M_PI * inv_rcut * std::sin(M_PI * rij * inv_rcut);
                 const double ddecay = ddecay_dr * dx_over_r;
 
                 for (std::size_t k = 0; k < nbasis2; ++k) {
@@ -791,41 +828,96 @@ static void two_body_bessel_grad(
 
 // Dispatch two-body gradient
 static void two_body_grad(
-    TwoBodyType type, std::size_t natoms, std::size_t nbasis2,
-    const std::vector<double> &coords, const std::vector<double> &D,
-    const std::vector<double> &rdecay2, const std::vector<double> &Rs2, double eta2,
-    double two_body_decay, double rcut, const std::vector<int> &elem_of_atom,
-    std::size_t rep_size, std::vector<double> &rep, std::vector<double> &grad
+    TwoBodyType type, std::size_t natoms, std::size_t nbasis2, const double *coords,
+    const std::vector<double> &D, const std::vector<double> &rdecay2,
+    const std::vector<double> &Rs2, double eta2, double two_body_decay, double rcut,
+    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep,
+    std::vector<double> &grad
 ) {
     switch (type) {
         case TwoBodyType::LogNormal:
             two_body_log_normal_grad(
-                natoms, nbasis2, coords, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep, grad
+                natoms,
+                nbasis2,
+                coords,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case TwoBodyType::GaussianR:
             two_body_gaussian_r_grad(
-                natoms, nbasis2, coords, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep, grad
+                natoms,
+                nbasis2,
+                coords,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case TwoBodyType::GaussianLogR:
             two_body_gaussian_log_r_grad(
-                natoms, nbasis2, coords, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep, grad
+                natoms,
+                nbasis2,
+                coords,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case TwoBodyType::GaussianRNoPow:
             two_body_gaussian_r_no_pow_grad(
-                natoms, nbasis2, coords, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep, grad
+                natoms,
+                nbasis2,
+                coords,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case TwoBodyType::Bessel:
             two_body_bessel_grad(
-                natoms, nbasis2, coords, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-                elem_of_atom, rep_size, rep, grad
+                natoms,
+                nbasis2,
+                coords,
+                D,
+                rdecay2,
+                Rs2,
+                eta2,
+                two_body_decay,
+                rcut,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
     }
@@ -836,7 +928,7 @@ static void two_body_grad(
 // A1: OddFourier + Rbar + ATM (ported from existing fchl19_repr.cpp)
 static void three_body_a1_forward(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nabasis, const std::vector<double> &coords, const std::vector<double> &D,
+    std::size_t nabasis, const double *coords, const std::vector<double> &D,
     const std::vector<double> &rdecay3, const std::vector<double> &Rs3, double eta3, double zeta,
     double acut, double three_body_decay, double three_body_weight,
     const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep
@@ -895,8 +987,7 @@ static void three_body_a1_forward(
                 const double cos_k = eik0 * ejk0 + eik1 * ejk1 + eik2 * ejk2;
 
                 // ATM factor
-                const double denom =
-                    std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
+                const double denom = std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
                 const double ksi3 =
                     (1.0 + 3.0 * cos_i * cos_j * cos_k) * (three_body_weight / denom);
 
@@ -952,7 +1043,7 @@ static void three_body_a1_forward(
 // dA[m]/d(cos_theta) = -m * sin(m * theta_i)  (chain rule via Chebyshev)
 static void three_body_a2_forward(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nabasis, const std::vector<double> &coords, const std::vector<double> &D,
+    std::size_t nabasis, const double *coords, const std::vector<double> &D,
     const std::vector<double> &rdecay3, const std::vector<double> &Rs3, double eta3, double acut,
     double three_body_decay, double three_body_weight, const std::vector<int> &elem_of_atom,
     std::size_t rep_size, std::vector<double> &rep
@@ -1000,8 +1091,7 @@ static void three_body_a2_forward(
                 const double cos_k = eik0 * ejk0 + eik1 * ejk1 + eik2 * ejk2;
 
                 // ATM factor
-                const double denom =
-                    std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
+                const double denom = std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
                 const double ksi3 =
                     (1.0 + 3.0 * cos_i * cos_j * cos_k) * (three_body_weight / denom);
 
@@ -1038,12 +1128,11 @@ static void three_body_a2_forward(
 // Same angular as A1 but radial uses r_plus = rij+rik and r_minus = |rij-rik|
 static void three_body_a3_forward(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nbasis3_minus, std::size_t nabasis, const std::vector<double> &coords,
+    std::size_t nbasis3_minus, std::size_t nabasis, const double *coords,
     const std::vector<double> &D, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
-    double eta3_minus, double zeta, double acut, double three_body_decay,
-    double three_body_weight, const std::vector<int> &elem_of_atom, std::size_t rep_size,
-    std::vector<double> &rep
+    double eta3_minus, double zeta, double acut, double three_body_decay, double three_body_weight,
+    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep
 ) {
     const std::size_t three_offset = nelements * nbasis2;
     const std::size_t n_harm = nabasis / 2;
@@ -1099,8 +1188,7 @@ static void three_body_a3_forward(
                 const double cos_k = eik0 * ejk0 + eik1 * ejk1 + eik2 * ejk2;
 
                 // ATM factor
-                const double denom =
-                    std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
+                const double denom = std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
                 const double ksi3 =
                     (1.0 + 3.0 * cos_i * cos_j * cos_k) * (three_body_weight / denom);
 
@@ -1118,8 +1206,10 @@ static void three_body_a3_forward(
                     for (int n = 2; n <= max_o; ++n) {
                         const double cn = two_cos * cn_1 - cn_2;
                         const double sn = two_cos * sn_1 - sn_2;
-                        cn_2 = cn_1; sn_2 = sn_1;
-                        cn_1 = cn; sn_1 = sn;
+                        cn_2 = cn_1;
+                        sn_2 = sn_1;
+                        cn_1 = cn;
+                        sn_1 = sn;
                         if (n == ang_o[harm_stored]) {
                             angular[2 * harm_stored] = ang_w[harm_stored] * cn;
                             angular[2 * harm_stored + 1] = ang_w[harm_stored] * sn;
@@ -1145,8 +1235,7 @@ static void three_body_a3_forward(
                         const double phi_m = std::exp(-eta3_minus * dm * dm);
                         const double radial = phi_p * phi_m * decay_ij * decay_ik;
                         const double scale = radial * ksi3;
-                        const std::size_t z =
-                            base + (l1 * nbasis3_minus + l2) * nabasis;
+                        const std::size_t z = base + (l1 * nbasis3_minus + l2) * nabasis;
                         double *dst = &rep[idx2(i, z, rep_size)];
                         for (std::size_t t = 0; t < nabasis; ++t)
                             dst[t] += angular[t] * scale;
@@ -1160,7 +1249,7 @@ static void three_body_a3_forward(
 // A4: CosineSeries + SplitR + ATM
 static void three_body_a4_forward(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nbasis3_minus, std::size_t nabasis, const std::vector<double> &coords,
+    std::size_t nbasis3_minus, std::size_t nabasis, const double *coords,
     const std::vector<double> &D, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
     double eta3_minus, double acut, double three_body_decay, double three_body_weight,
@@ -1209,8 +1298,7 @@ static void three_body_a4_forward(
                 const double cos_k = eik0 * ejk0 + eik1 * ejk1 + eik2 * ejk2;
 
                 // ATM factor
-                const double denom =
-                    std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
+                const double denom = std::pow(std::max(rik * rij * rjk, kf::EPS), three_body_decay);
                 const double ksi3 =
                     (1.0 + 3.0 * cos_i * cos_j * cos_k) * (three_body_weight / denom);
 
@@ -1237,8 +1325,7 @@ static void three_body_a4_forward(
                         const double phi_m = std::exp(-eta3_minus * dm * dm);
                         const double radial = phi_p * phi_m * decay_ij * decay_ik;
                         const double scale = radial * ksi3;
-                        const std::size_t z =
-                            base + (l1 * nbasis3_minus + l2) * nabasis;
+                        const std::size_t z = base + (l1 * nbasis3_minus + l2) * nabasis;
                         double *dst = &rep[idx2(i, z, rep_size)];
                         for (std::size_t t = 0; t < nabasis; ++t)
                             dst[t] += angular[t] * scale;
@@ -1252,11 +1339,11 @@ static void three_body_a4_forward(
 // A5: CosineSeries + SplitR, ATM factor = 1
 static void three_body_a5_forward(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nbasis3_minus, std::size_t nabasis, const std::vector<double> &coords,
+    std::size_t nbasis3_minus, std::size_t nabasis, const double *coords,
     const std::vector<double> &D, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
-    double eta3_minus, double acut, double three_body_weight,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep
+    double eta3_minus, double acut, double three_body_weight, const std::vector<int> &elem_of_atom,
+    std::size_t rep_size, std::vector<double> &rep
 ) {
     const std::size_t three_offset = nelements * nbasis2;
 
@@ -1315,8 +1402,7 @@ static void three_body_a5_forward(
                         const double phi_m = std::exp(-eta3_minus * dm * dm);
                         const double radial = phi_p * phi_m * decay_ij * decay_ik;
                         const double scale = radial * three_body_weight;
-                        const std::size_t z =
-                            base + (l1 * nbasis3_minus + l2) * nabasis;
+                        const std::size_t z = base + (l1 * nbasis3_minus + l2) * nabasis;
                         double *dst = &rep[idx2(i, z, rep_size)];
                         for (std::size_t t = 0; t < nabasis; ++t)
                             dst[t] += angular[t] * scale;
@@ -1330,46 +1416,122 @@ static void three_body_a5_forward(
 // Dispatch three-body forward
 static void three_body_forward(
     ThreeBodyType type, std::size_t natoms, std::size_t nelements, std::size_t nbasis2,
-    std::size_t nbasis3, std::size_t nabasis, const std::vector<double> &coords,
-    const std::vector<double> &D, const std::vector<double> &rdecay3,
-    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
-    double eta3_minus, double zeta, double acut, double three_body_decay,
-    double three_body_weight, const std::vector<int> &elem_of_atom, std::size_t rep_size,
-    std::vector<double> &rep
+    std::size_t nbasis3, std::size_t nabasis, const double *coords, const std::vector<double> &D,
+    const std::vector<double> &rdecay3, const std::vector<double> &Rs3,
+    const std::vector<double> &Rs3_minus, double eta3, double eta3_minus, double zeta, double acut,
+    double three_body_decay, double three_body_weight, const std::vector<int> &elem_of_atom,
+    std::size_t rep_size, std::vector<double> &rep
 ) {
     const std::size_t nbasis3_minus = Rs3_minus.size();
     switch (type) {
         case ThreeBodyType::OddFourier_Rbar:
             three_body_a1_forward(
-                natoms, nelements, nbasis2, nbasis3, nabasis, coords, D, rdecay3, Rs3, eta3,
-                zeta, acut, three_body_decay, three_body_weight, elem_of_atom, rep_size, rep
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nabasis,
+                coords,
+                D,
+                rdecay3,
+                Rs3,
+                eta3,
+                zeta,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case ThreeBodyType::CosineSeries_Rbar:
             three_body_a2_forward(
-                natoms, nelements, nbasis2, nbasis3, nabasis, coords, D, rdecay3, Rs3, eta3,
-                acut, three_body_decay, three_body_weight, elem_of_atom, rep_size, rep
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nabasis,
+                coords,
+                D,
+                rdecay3,
+                Rs3,
+                eta3,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case ThreeBodyType::OddFourier_SplitR:
             three_body_a3_forward(
-                natoms, nelements, nbasis2, nbasis3, nbasis3_minus, nabasis, coords, D, rdecay3,
-                Rs3, Rs3_minus, eta3, eta3_minus, zeta, acut, three_body_decay, three_body_weight,
-                elem_of_atom, rep_size, rep
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nbasis3_minus,
+                nabasis,
+                coords,
+                D,
+                rdecay3,
+                Rs3,
+                Rs3_minus,
+                eta3,
+                eta3_minus,
+                zeta,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case ThreeBodyType::CosineSeries_SplitR:
             three_body_a4_forward(
-                natoms, nelements, nbasis2, nbasis3, nbasis3_minus, nabasis, coords, D, rdecay3,
-                Rs3, Rs3_minus, eta3, eta3_minus, acut, three_body_decay, three_body_weight,
-                elem_of_atom, rep_size, rep
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nbasis3_minus,
+                nabasis,
+                coords,
+                D,
+                rdecay3,
+                Rs3,
+                Rs3_minus,
+                eta3,
+                eta3_minus,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
         case ThreeBodyType::CosineSeries_SplitR_NoATM:
             three_body_a5_forward(
-                natoms, nelements, nbasis2, nbasis3, nbasis3_minus, nabasis, coords, D, rdecay3,
-                Rs3, Rs3_minus, eta3, eta3_minus, acut, three_body_weight, elem_of_atom,
-                rep_size, rep
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nbasis3_minus,
+                nabasis,
+                coords,
+                D,
+                rdecay3,
+                Rs3,
+                Rs3_minus,
+                eta3,
+                eta3_minus,
+                acut,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep
             );
             break;
     }
@@ -1380,12 +1542,12 @@ static void three_body_forward(
 // A1: OddFourier + Rbar + ATM gradient (ported from existing fchl19_repr.cpp)
 static void three_body_a1_grad(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nabasis, const std::vector<double> &coords, const std::vector<double> &D,
+    std::size_t nabasis, const double *coords, const std::vector<double> &D,
     const std::vector<double> &D2, const std::vector<double> &invD,
     const std::vector<double> &invD2, const std::vector<double> &rdecay3,
-    const std::vector<double> &Rs3, double eta3, double zeta, double acut,
-    double three_body_decay, double three_body_weight, const std::vector<int> &elem_of_atom,
-    std::size_t rep_size, std::vector<double> &rep, std::vector<double> &grad
+    const std::vector<double> &Rs3, double eta3, double zeta, double acut, double three_body_decay,
+    double three_body_weight, const std::vector<int> &elem_of_atom, std::size_t rep_size,
+    std::vector<double> &rep, std::vector<double> &grad
 ) {
     const std::size_t three_offset = nelements * nbasis2;
     const std::size_t three_block_size = rep_size - three_offset;
@@ -1511,12 +1673,12 @@ static void three_body_a1_grad(
                 const double d_atm_ji0 = Cx - Bx - vi * (Ax - Bx) * invrij2;
                 const double d_atm_ji1 = Cy - By - vi * (Ay - By) * invrij2;
                 const double d_atm_ji2 = Cz - Bz - vi * (Az - Bz) * invrij2;
-                const double d_atm_jj0 = 2 * Ax - Bx - Cx -
-                                          vj * ((Ax - Bx) * invrij2 + (Ax - Cx) * invrjk * invrjk);
-                const double d_atm_jj1 = 2 * Ay - By - Cy -
-                                          vj * ((Ay - By) * invrij2 + (Ay - Cy) * invrjk * invrjk);
-                const double d_atm_jj2 = 2 * Az - Bz - Cz -
-                                          vj * ((Az - Bz) * invrij2 + (Az - Cz) * invrjk * invrjk);
+                const double d_atm_jj0 =
+                    2 * Ax - Bx - Cx - vj * ((Ax - Bx) * invrij2 + (Ax - Cx) * invrjk * invrjk);
+                const double d_atm_jj1 =
+                    2 * Ay - By - Cy - vj * ((Ay - By) * invrij2 + (Ay - Cy) * invrjk * invrjk);
+                const double d_atm_jj2 =
+                    2 * Az - Bz - Cz - vj * ((Az - Bz) * invrij2 + (Az - Cz) * invrjk * invrjk);
                 const double d_atm_jk0 = Bx - Cx - vk * (Ax - Cx) * invrjk * invrjk;
                 const double d_atm_jk1 = By - Cy - vk * (Ay - Cy) * invrjk * invrjk;
                 const double d_atm_jk2 = Bz - Cz - vk * (Az - Cz) * invrjk * invrjk;
@@ -1528,22 +1690,16 @@ static void three_body_a1_grad(
                 const double d_atm_kj1 = By - Ay - vj * (Cy - Ay) * invrjk * invrjk;
                 const double d_atm_kj2 = Bz - Az - vj * (Cz - Az) * invrjk * invrjk;
                 const double d_atm_kk0 =
-                    2 * Cx - Ax - Bx -
-                    vk * ((Cx - Ax) * invrjk * invrjk + (Cx - Bx) * invrik2);
+                    2 * Cx - Ax - Bx - vk * ((Cx - Ax) * invrjk * invrjk + (Cx - Bx) * invrik2);
                 const double d_atm_kk1 =
-                    2 * Cy - Ay - By -
-                    vk * ((Cy - Ay) * invrjk * invrjk + (Cy - By) * invrik2);
+                    2 * Cy - Ay - By - vk * ((Cy - Ay) * invrjk * invrjk + (Cy - By) * invrik2);
                 const double d_atm_kk2 =
-                    2 * Cz - Az - Bz -
-                    vk * ((Cz - Az) * invrjk * invrjk + (Cz - Bz) * invrik2);
+                    2 * Cz - Az - Bz - vk * ((Cz - Az) * invrjk * invrjk + (Cz - Bz) * invrik2);
 
                 const double atm_tbd = atm * tbd_over_w_pre;
-                const double d_extra_i0 =
-                    ((Ax - Bx) * invrij2 + (Cx - Bx) * invrik2) * atm_tbd;
-                const double d_extra_i1 =
-                    ((Ay - By) * invrij2 + (Cy - By) * invrik2) * atm_tbd;
-                const double d_extra_i2 =
-                    ((Az - Bz) * invrij2 + (Cz - Bz) * invrik2) * atm_tbd;
+                const double d_extra_i0 = ((Ax - Bx) * invrij2 + (Cx - Bx) * invrik2) * atm_tbd;
+                const double d_extra_i1 = ((Ay - By) * invrij2 + (Cy - By) * invrik2) * atm_tbd;
+                const double d_extra_i2 = ((Az - Bz) * invrij2 + (Cz - Bz) * invrik2) * atm_tbd;
                 const double d_extra_j0 =
                     ((Bx - Ax) * invrij2 + (Cx - Ax) * invrjk * invrjk) * atm_tbd;
                 const double d_extra_j1 =
@@ -1644,54 +1800,45 @@ static void three_body_a1_grad(
 
                         // dim 0
                         {
-                            const double gi = dang * dai0 * scale_ang * atm +
-                                              ang * dri0 * atm * decay_prod +
-                                              ang * rad_l * atmi0 * decay_prod +
-                                              ang * rad_l * dec_i0 * atm;
-                            const double gj = dang * daj0 * scale_ang * atm +
-                                              ang * drj0 * atm * decay_prod +
-                                              ang * rad_l * atmj0 * decay_prod +
-                                              ang * rad_l * dec_j0 * atm;
-                            const double gk = dang * dak0 * scale_ang * atm +
-                                              ang * drk0 * atm * decay_prod +
-                                              ang * rad_l * atmk0 * decay_prod +
-                                              ang * rad_l * dec_k0 * atm;
+                            const double gi =
+                                dang * dai0 * scale_ang * atm + ang * dri0 * atm * decay_prod +
+                                ang * rad_l * atmi0 * decay_prod + ang * rad_l * dec_i0 * atm;
+                            const double gj =
+                                dang * daj0 * scale_ang * atm + ang * drj0 * atm * decay_prod +
+                                ang * rad_l * atmj0 * decay_prod + ang * rad_l * dec_j0 * atm;
+                            const double gk =
+                                dang * dak0 * scale_ang * atm + ang * drk0 * atm * decay_prod +
+                                ang * rad_l * atmk0 * decay_prod + ang * rad_l * dec_k0 * atm;
                             atom_grad[((z0 + aidx) * natoms + i) * 3 + 0] += gi;
                             atom_grad[((z0 + aidx) * natoms + j) * 3 + 0] += gj;
                             atom_grad[((z0 + aidx) * natoms + k) * 3 + 0] += gk;
                         }
                         // dim 1
                         {
-                            const double gi = dang * dai1 * scale_ang * atm +
-                                              ang * dri1 * atm * decay_prod +
-                                              ang * rad_l * atmi1 * decay_prod +
-                                              ang * rad_l * dec_i1 * atm;
-                            const double gj = dang * daj1 * scale_ang * atm +
-                                              ang * drj1 * atm * decay_prod +
-                                              ang * rad_l * atmj1 * decay_prod +
-                                              ang * rad_l * dec_j1 * atm;
-                            const double gk = dang * dak1 * scale_ang * atm +
-                                              ang * drk1 * atm * decay_prod +
-                                              ang * rad_l * atmk1 * decay_prod +
-                                              ang * rad_l * dec_k1 * atm;
+                            const double gi =
+                                dang * dai1 * scale_ang * atm + ang * dri1 * atm * decay_prod +
+                                ang * rad_l * atmi1 * decay_prod + ang * rad_l * dec_i1 * atm;
+                            const double gj =
+                                dang * daj1 * scale_ang * atm + ang * drj1 * atm * decay_prod +
+                                ang * rad_l * atmj1 * decay_prod + ang * rad_l * dec_j1 * atm;
+                            const double gk =
+                                dang * dak1 * scale_ang * atm + ang * drk1 * atm * decay_prod +
+                                ang * rad_l * atmk1 * decay_prod + ang * rad_l * dec_k1 * atm;
                             atom_grad[((z0 + aidx) * natoms + i) * 3 + 1] += gi;
                             atom_grad[((z0 + aidx) * natoms + j) * 3 + 1] += gj;
                             atom_grad[((z0 + aidx) * natoms + k) * 3 + 1] += gk;
                         }
                         // dim 2
                         {
-                            const double gi = dang * dai2 * scale_ang * atm +
-                                              ang * dri2 * atm * decay_prod +
-                                              ang * rad_l * atmi2 * decay_prod +
-                                              ang * rad_l * dec_i2 * atm;
-                            const double gj = dang * daj2 * scale_ang * atm +
-                                              ang * drj2 * atm * decay_prod +
-                                              ang * rad_l * atmj2 * decay_prod +
-                                              ang * rad_l * dec_j2 * atm;
-                            const double gk = dang * dak2 * scale_ang * atm +
-                                              ang * drk2 * atm * decay_prod +
-                                              ang * rad_l * atmk2 * decay_prod +
-                                              ang * rad_l * dec_k2 * atm;
+                            const double gi =
+                                dang * dai2 * scale_ang * atm + ang * dri2 * atm * decay_prod +
+                                ang * rad_l * atmi2 * decay_prod + ang * rad_l * dec_i2 * atm;
+                            const double gj =
+                                dang * daj2 * scale_ang * atm + ang * drj2 * atm * decay_prod +
+                                ang * rad_l * atmj2 * decay_prod + ang * rad_l * dec_j2 * atm;
+                            const double gk =
+                                dang * dak2 * scale_ang * atm + ang * drk2 * atm * decay_prod +
+                                ang * rad_l * atmk2 * decay_prod + ang * rad_l * dec_k2 * atm;
                             atom_grad[((z0 + aidx) * natoms + i) * 3 + 2] += gi;
                             atom_grad[((z0 + aidx) * natoms + j) * 3 + 2] += gj;
                             atom_grad[((z0 + aidx) * natoms + k) * 3 + 2] += gk;
@@ -1728,29 +1875,22 @@ struct AtmGrad {
 };
 
 static inline AtmGrad compute_atm_grad(
-    double Ax, double Ay, double Az,
-    double Bx, double By, double Bz,
-    double Cx, double Cy, double Cz,
-    double invrij, double invrik, double invrjk,
-    double invrij2, double invrik2,
-    double cos_i, double cos_j, double cos_k,
-    double three_body_decay, double three_body_weight,
+    double Ax, double Ay, double Az, double Bx, double By, double Bz, double Cx, double Cy,
+    double Cz, double invrij, double invrik, double invrjk, double invrij2, double invrik2,
+    double cos_i, double cos_j, double cos_k, double three_body_decay, double three_body_weight,
     double atm  // pre-computed ATM value (including weight)
 ) {
     const double invrjk2 = invrjk * invrjk;
 
-    const double atm_i = (3.0 * cos_j * cos_k) * (atm / three_body_weight) * invrij * invrik /
-                         ((atm / three_body_weight) > 0
-                              ? 1.0
-                              : 1.0);  // just use the ratios directly
+    const double atm_i =
+        (3.0 * cos_j * cos_k) * (atm / three_body_weight) * invrij * invrik /
+        ((atm / three_body_weight) > 0 ? 1.0 : 1.0);  // just use the ratios directly
 
     // Recompute partial cos derivatives from the vectors
     // vi = dot(B->A, B->C), vj = dot(A->B, A->C), vk = dot(C->A, C->B) ... using coordinates
     const double vi = (Ax - Bx) * (Cx - Bx) + (Ay - By) * (Cy - By) + (Az - Bz) * (Cz - Bz);
-    const double vj =
-        (Cx - Ax) * (Bx - Ax) + (Cy - Ay) * (By - Ay) + (Cz - Az) * (Bz - Az);
-    const double vk =
-        (Bx - Cx) * (Ax - Cx) + (By - Cy) * (Ay - Cy) + (Bz - Cz) * (Az - Cz);
+    const double vj = (Cx - Ax) * (Bx - Ax) + (Cy - Ay) * (By - Ay) + (Cz - Az) * (Bz - Az);
+    const double vk = (Bx - Cx) * (Ax - Cx) + (By - Cy) * (Ay - Cy) + (Bz - Cz) * (Az - Cz);
 
     // invr_atm = (rij*rik*rjk)^-decay
     const double invr_atm_raw = std::pow(invrij * invrik * invrjk, three_body_decay);
@@ -1762,12 +1902,9 @@ static inline AtmGrad compute_atm_grad(
     const double atm_val = atm;  // includes weight
 
     // d_atm matrices (same as A1)
-    const double d_atm_ii0 =
-        2 * Bx - Ax - Cx - vi * ((Bx - Ax) * invrij2 + (Bx - Cx) * invrik2);
-    const double d_atm_ii1 =
-        2 * By - Ay - Cy - vi * ((By - Ay) * invrij2 + (By - Cy) * invrik2);
-    const double d_atm_ii2 =
-        2 * Bz - Az - Cz - vi * ((Bz - Az) * invrij2 + (Bz - Cz) * invrik2);
+    const double d_atm_ii0 = 2 * Bx - Ax - Cx - vi * ((Bx - Ax) * invrij2 + (Bx - Cx) * invrik2);
+    const double d_atm_ii1 = 2 * By - Ay - Cy - vi * ((By - Ay) * invrij2 + (By - Cy) * invrik2);
+    const double d_atm_ii2 = 2 * Bz - Az - Cz - vi * ((Bz - Az) * invrij2 + (Bz - Cz) * invrik2);
     const double d_atm_ij0 = Cx - Ax - vj * (Bx - Ax) * invrij2;
     const double d_atm_ij1 = Cy - Ay - vj * (By - Ay) * invrij2;
     const double d_atm_ij2 = Cz - Az - vj * (Bz - Az) * invrij2;
@@ -1778,12 +1915,9 @@ static inline AtmGrad compute_atm_grad(
     const double d_atm_ji0 = Cx - Bx - vi * (Ax - Bx) * invrij2;
     const double d_atm_ji1 = Cy - By - vi * (Ay - By) * invrij2;
     const double d_atm_ji2 = Cz - Bz - vi * (Az - Bz) * invrij2;
-    const double d_atm_jj0 =
-        2 * Ax - Bx - Cx - vj * ((Ax - Bx) * invrij2 + (Ax - Cx) * invrjk2);
-    const double d_atm_jj1 =
-        2 * Ay - By - Cy - vj * ((Ay - By) * invrij2 + (Ay - Cy) * invrjk2);
-    const double d_atm_jj2 =
-        2 * Az - Bz - Cz - vj * ((Az - Bz) * invrij2 + (Az - Cz) * invrjk2);
+    const double d_atm_jj0 = 2 * Ax - Bx - Cx - vj * ((Ax - Bx) * invrij2 + (Ax - Cx) * invrjk2);
+    const double d_atm_jj1 = 2 * Ay - By - Cy - vj * ((Ay - By) * invrij2 + (Ay - Cy) * invrjk2);
+    const double d_atm_jj2 = 2 * Az - Bz - Cz - vj * ((Az - Bz) * invrij2 + (Az - Cz) * invrjk2);
     const double d_atm_jk0 = Bx - Cx - vk * (Ax - Cx) * invrjk2;
     const double d_atm_jk1 = By - Cy - vk * (Ay - Cy) * invrjk2;
     const double d_atm_jk2 = Bz - Cz - vk * (Az - Cz) * invrjk2;
@@ -1794,56 +1928,38 @@ static inline AtmGrad compute_atm_grad(
     const double d_atm_kj0 = Bx - Ax - vj * (Cx - Ax) * invrjk2;
     const double d_atm_kj1 = By - Ay - vj * (Cy - Ay) * invrjk2;
     const double d_atm_kj2 = Bz - Az - vj * (Cz - Az) * invrjk2;
-    const double d_atm_kk0 =
-        2 * Cx - Ax - Bx - vk * ((Cx - Ax) * invrjk2 + (Cx - Bx) * invrik2);
-    const double d_atm_kk1 =
-        2 * Cy - Ay - By - vk * ((Cy - Ay) * invrjk2 + (Cy - By) * invrik2);
-    const double d_atm_kk2 =
-        2 * Cz - Az - Bz - vk * ((Cz - Az) * invrjk2 + (Cz - Bz) * invrik2);
+    const double d_atm_kk0 = 2 * Cx - Ax - Bx - vk * ((Cx - Ax) * invrjk2 + (Cx - Bx) * invrik2);
+    const double d_atm_kk1 = 2 * Cy - Ay - By - vk * ((Cy - Ay) * invrjk2 + (Cy - By) * invrik2);
+    const double d_atm_kk2 = 2 * Cz - Az - Bz - vk * ((Cz - Az) * invrjk2 + (Cz - Bz) * invrik2);
 
     const double atm_tbd = atm_val * tbd_over_w;
     const double d_extra_i0 = ((Ax - Bx) * invrij2 + (Cx - Bx) * invrik2) * atm_tbd;
     const double d_extra_i1 = ((Ay - By) * invrij2 + (Cy - By) * invrik2) * atm_tbd;
     const double d_extra_i2 = ((Az - Bz) * invrij2 + (Cz - Bz) * invrik2) * atm_tbd;
-    const double d_extra_j0 =
-        ((Bx - Ax) * invrij2 + (Cx - Ax) * invrjk2) * atm_tbd;
-    const double d_extra_j1 =
-        ((By - Ay) * invrij2 + (Cy - Ay) * invrjk2) * atm_tbd;
-    const double d_extra_j2 =
-        ((Bz - Az) * invrij2 + (Cz - Az) * invrjk2) * atm_tbd;
-    const double d_extra_k0 =
-        ((Ax - Cx) * invrjk2 + (Bx - Cx) * invrik2) * atm_tbd;
-    const double d_extra_k1 =
-        ((Ay - Cy) * invrjk2 + (By - Cy) * invrik2) * atm_tbd;
-    const double d_extra_k2 =
-        ((Az - Cz) * invrjk2 + (Bz - Cz) * invrik2) * atm_tbd;
+    const double d_extra_j0 = ((Bx - Ax) * invrij2 + (Cx - Ax) * invrjk2) * atm_tbd;
+    const double d_extra_j1 = ((By - Ay) * invrij2 + (Cy - Ay) * invrjk2) * atm_tbd;
+    const double d_extra_j2 = ((Bz - Az) * invrij2 + (Cz - Az) * invrjk2) * atm_tbd;
+    const double d_extra_k0 = ((Ax - Cx) * invrjk2 + (Bx - Cx) * invrik2) * atm_tbd;
+    const double d_extra_k1 = ((Ay - Cy) * invrjk2 + (By - Cy) * invrik2) * atm_tbd;
+    const double d_extra_k2 = ((Az - Cz) * invrjk2 + (Bz - Cz) * invrik2) * atm_tbd;
 
     AtmGrad ag;
-    ag.i0 = (a_i * d_atm_ii0 + a_j * d_atm_ij0 + a_k * d_atm_ik0 + d_extra_i0) *
-            three_body_weight;
-    ag.i1 = (a_i * d_atm_ii1 + a_j * d_atm_ij1 + a_k * d_atm_ik1 + d_extra_i1) *
-            three_body_weight;
-    ag.i2 = (a_i * d_atm_ii2 + a_j * d_atm_ij2 + a_k * d_atm_ik2 + d_extra_i2) *
-            three_body_weight;
-    ag.j0 = (a_i * d_atm_ji0 + a_j * d_atm_jj0 + a_k * d_atm_jk0 + d_extra_j0) *
-            three_body_weight;
-    ag.j1 = (a_i * d_atm_ji1 + a_j * d_atm_jj1 + a_k * d_atm_jk1 + d_extra_j1) *
-            three_body_weight;
-    ag.j2 = (a_i * d_atm_ji2 + a_j * d_atm_jj2 + a_k * d_atm_jk2 + d_extra_j2) *
-            three_body_weight;
-    ag.k0 = (a_i * d_atm_ki0 + a_j * d_atm_kj0 + a_k * d_atm_kk0 + d_extra_k0) *
-            three_body_weight;
-    ag.k1 = (a_i * d_atm_ki1 + a_j * d_atm_kj1 + a_k * d_atm_kk1 + d_extra_k1) *
-            three_body_weight;
-    ag.k2 = (a_i * d_atm_ki2 + a_j * d_atm_kj2 + a_k * d_atm_kk2 + d_extra_k2) *
-            three_body_weight;
+    ag.i0 = (a_i * d_atm_ii0 + a_j * d_atm_ij0 + a_k * d_atm_ik0 + d_extra_i0) * three_body_weight;
+    ag.i1 = (a_i * d_atm_ii1 + a_j * d_atm_ij1 + a_k * d_atm_ik1 + d_extra_i1) * three_body_weight;
+    ag.i2 = (a_i * d_atm_ii2 + a_j * d_atm_ij2 + a_k * d_atm_ik2 + d_extra_i2) * three_body_weight;
+    ag.j0 = (a_i * d_atm_ji0 + a_j * d_atm_jj0 + a_k * d_atm_jk0 + d_extra_j0) * three_body_weight;
+    ag.j1 = (a_i * d_atm_ji1 + a_j * d_atm_jj1 + a_k * d_atm_jk1 + d_extra_j1) * three_body_weight;
+    ag.j2 = (a_i * d_atm_ji2 + a_j * d_atm_jj2 + a_k * d_atm_jk2 + d_extra_j2) * three_body_weight;
+    ag.k0 = (a_i * d_atm_ki0 + a_j * d_atm_kj0 + a_k * d_atm_kk0 + d_extra_k0) * three_body_weight;
+    ag.k1 = (a_i * d_atm_ki1 + a_j * d_atm_kj1 + a_k * d_atm_kk1 + d_extra_k1) * three_body_weight;
+    ag.k2 = (a_i * d_atm_ki2 + a_j * d_atm_kj2 + a_k * d_atm_kk2 + d_extra_k2) * three_body_weight;
     return ag;
 }
 
 // A2 gradient: CosineSeries_Rbar + ATM
 static void three_body_a2_grad(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nabasis, const std::vector<double> &coords, const std::vector<double> &D,
+    std::size_t nabasis, const double *coords, const std::vector<double> &D,
     const std::vector<double> &D2, const std::vector<double> &invD,
     const std::vector<double> &invD2, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, double eta3, double acut, double three_body_decay,
@@ -1935,8 +2051,14 @@ static void three_body_a2_grad(
                 // so that  d(angular[m])/d(pos) = d_angular[m] * da?0 / sin_i  (cancels sin_i)
                 //         = m * U_{m-1} * d(cos_i)/d(pos)  ✓
                 const double sin_i = std::sqrt(std::max(0.0, 1.0 - cos_i * cos_i));
-                if (nabasis > 0) { angular[0] = 1.0;   d_angular[0] = 0.0; }
-                if (nabasis > 1) { angular[1] = cos_i; d_angular[1] = sin_i; }
+                if (nabasis > 0) {
+                    angular[0] = 1.0;
+                    d_angular[0] = 0.0;
+                }
+                if (nabasis > 1) {
+                    angular[1] = cos_i;
+                    d_angular[1] = sin_i;
+                }
                 {
                     double Um2 = 1.0, Um1 = 2.0 * cos_i;  // U_0, U_1
                     for (std::size_t m = 2; m < nabasis; ++m) {
@@ -1953,9 +2075,26 @@ static void three_body_a2_grad(
                     (1.0 + 3.0 * cos_i * cos_j * cos_k) * invr_atm * three_body_weight;
 
                 AtmGrad ag = compute_atm_grad(
-                    Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz,
-                    invrij, invrik, invrjk, invrij2, invrik2,
-                    cos_i, cos_j, cos_k, three_body_decay, three_body_weight, atm
+                    Ax,
+                    Ay,
+                    Az,
+                    Bx,
+                    By,
+                    Bz,
+                    Cx,
+                    Cy,
+                    Cz,
+                    invrij,
+                    invrik,
+                    invrjk,
+                    invrij2,
+                    invrik2,
+                    cos_i,
+                    cos_j,
+                    cos_k,
+                    three_body_decay,
+                    three_body_weight,
+                    atm
                 );
 
                 const double decay_ij = rdecay3[idx2(i, j, natoms)];
@@ -2070,8 +2209,8 @@ struct SplitRRadGrad {
 };
 
 static inline SplitRRadGrad splitr_radial_grad(
-    double rij, double rik, double Rs3_plus, double Rs3_minus_val,
-    double eta3, double eta3_minus, double phi_p, double phi_m
+    double rij, double rik, double Rs3_plus, double Rs3_minus_val, double eta3, double eta3_minus,
+    double phi_p, double phi_m
 ) {
     const double dp = rij + rik - Rs3_plus;
     const double diff = rij - rik;
@@ -2098,7 +2237,7 @@ static inline SplitRRadGrad splitr_radial_grad(
 // A3 gradient: OddFourier_SplitR + ATM
 static void three_body_a3_grad(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nbasis3_minus, std::size_t nabasis, const std::vector<double> &coords,
+    std::size_t nbasis3_minus, std::size_t nabasis, const double *coords,
     const std::vector<double> &D, const std::vector<double> &D2, const std::vector<double> &invD,
     const std::vector<double> &invD2, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
@@ -2210,7 +2349,10 @@ static void three_body_a3_grad(
                     for (int n = 2; n <= max_o; ++n) {
                         const double cn = two_cos * cn_1 - cn_2;
                         const double sn = two_cos * sn_1 - sn_2;
-                        cn_2 = cn_1; sn_2 = sn_1; cn_1 = cn; sn_1 = sn;
+                        cn_2 = cn_1;
+                        sn_2 = sn_1;
+                        cn_1 = cn;
+                        sn_1 = sn;
                         if (n == ang_o[harm_stored]) {
                             angular[2 * harm_stored] = ang_w[harm_stored] * cn;
                             angular[2 * harm_stored + 1] = ang_w[harm_stored] * sn;
@@ -2226,9 +2368,26 @@ static void three_body_a3_grad(
                     (1.0 + 3.0 * cos_i * cos_j * cos_k) * invr_atm * three_body_weight;
 
                 AtmGrad ag = compute_atm_grad(
-                    Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz,
-                    invrij, invrik, invrjk, invrij2, invrik2,
-                    cos_i, cos_j, cos_k, three_body_decay, three_body_weight, atm
+                    Ax,
+                    Ay,
+                    Az,
+                    Bx,
+                    By,
+                    Bz,
+                    Cx,
+                    Cy,
+                    Cz,
+                    invrij,
+                    invrik,
+                    invrjk,
+                    invrij2,
+                    invrik2,
+                    cos_i,
+                    cos_j,
+                    cos_k,
+                    three_body_decay,
+                    three_body_weight,
+                    atm
                 );
 
                 const double decay_ij = rdecay3[idx2(i, j, natoms)];
@@ -2263,9 +2422,9 @@ static void three_body_a3_grad(
                     const double dp = rij + rik - Rs3[l1];
                     const double phi_p = std::exp(-eta3 * dp * dp);
                     for (std::size_t l2 = 0; l2 < nbasis3_minus; ++l2) {
-                        const double phi_m_base =
-                            std::exp(-eta3_minus *
-                                     std::pow(std::abs(rij - rik) - Rs3_minus[l2], 2));
+                        const double phi_m_base = std::exp(
+                            -eta3_minus * std::pow(std::abs(rij - rik) - Rs3_minus[l2], 2)
+                        );
                         const double radial_val = phi_p * phi_m_base * decay_prod;
                         const double scale_val = radial_val * atm;
                         const std::size_t z0 = base + (l1 * nbasis3_minus + l2) * nabasis;
@@ -2273,9 +2432,16 @@ static void three_body_a3_grad(
                         for (std::size_t aidx = 0; aidx < nabasis; ++aidx)
                             atom_rep[z0 + aidx] += angular[aidx] * scale_val;
 
-                        SplitRRadGrad srg =
-                            splitr_radial_grad(rij, rik, Rs3[l1], Rs3_minus[l2], eta3,
-                                               eta3_minus, phi_p, phi_m_base);
+                        SplitRRadGrad srg = splitr_radial_grad(
+                            rij,
+                            rik,
+                            Rs3[l1],
+                            Rs3_minus[l2],
+                            eta3,
+                            eta3_minus,
+                            phi_p,
+                            phi_m_base
+                        );
                         // d(radial)/d(rij) = (d(phi_p*phi_m)/d(rij))*decay_prod
                         // d(radial)/d(rik) = (d(phi_p*phi_m)/d(rik))*decay_prod
                         const double drad_drij = srg.d_phi_d_rij * decay_prod;
@@ -2305,42 +2471,42 @@ static void three_body_a3_grad(
 
                             atom_grad[(feat * natoms + i) * 3 + 0] +=
                                 dang * dai0 * scale_ang * atm + ang * drad_i0 * atm +
-                                ang * radial_val * ag.i0 + ang * radial_val * dec_i0 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.i0 +
+                                ang * radial_val * dec_i0 * atm / decay_prod;
                             atom_grad[(feat * natoms + j) * 3 + 0] +=
                                 dang * daj0 * scale_ang * atm + ang * drad_j0 * atm +
-                                ang * radial_val * ag.j0 + ang * radial_val * dec_j0 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.j0 +
+                                ang * radial_val * dec_j0 * atm / decay_prod;
                             atom_grad[(feat * natoms + k) * 3 + 0] +=
                                 dang * dak0 * scale_ang * atm + ang * drad_k0 * atm +
-                                ang * radial_val * ag.k0 + ang * radial_val * dec_k0 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.k0 +
+                                ang * radial_val * dec_k0 * atm / decay_prod;
 
                             atom_grad[(feat * natoms + i) * 3 + 1] +=
                                 dang * dai1 * scale_ang * atm + ang * drad_i1 * atm +
-                                ang * radial_val * ag.i1 + ang * radial_val * dec_i1 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.i1 +
+                                ang * radial_val * dec_i1 * atm / decay_prod;
                             atom_grad[(feat * natoms + j) * 3 + 1] +=
                                 dang * daj1 * scale_ang * atm + ang * drad_j1 * atm +
-                                ang * radial_val * ag.j1 + ang * radial_val * dec_j1 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.j1 +
+                                ang * radial_val * dec_j1 * atm / decay_prod;
                             atom_grad[(feat * natoms + k) * 3 + 1] +=
                                 dang * dak1 * scale_ang * atm + ang * drad_k1 * atm +
-                                ang * radial_val * ag.k1 + ang * radial_val * dec_k1 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.k1 +
+                                ang * radial_val * dec_k1 * atm / decay_prod;
 
                             atom_grad[(feat * natoms + i) * 3 + 2] +=
                                 dang * dai2 * scale_ang * atm + ang * drad_i2 * atm +
-                                ang * radial_val * ag.i2 + ang * radial_val * dec_i2 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.i2 +
+                                ang * radial_val * dec_i2 * atm / decay_prod;
                             atom_grad[(feat * natoms + j) * 3 + 2] +=
                                 dang * daj2 * scale_ang * atm + ang * drad_j2 * atm +
-                                ang * radial_val * ag.j2 + ang * radial_val * dec_j2 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.j2 +
+                                ang * radial_val * dec_j2 * atm / decay_prod;
                             atom_grad[(feat * natoms + k) * 3 + 2] +=
                                 dang * dak2 * scale_ang * atm + ang * drad_k2 * atm +
-                                ang * radial_val * ag.k2 + ang * radial_val * dec_k2 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.k2 +
+                                ang * radial_val * dec_k2 * atm / decay_prod;
                         }
                     }
                 }
@@ -2362,7 +2528,7 @@ static void three_body_a3_grad(
 // Identical structure to A3 gradient but with cosine angular basis instead of OddFourier
 static void three_body_a4_grad(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nbasis3_minus, std::size_t nabasis, const std::vector<double> &coords,
+    std::size_t nbasis3_minus, std::size_t nabasis, const double *coords,
     const std::vector<double> &D, const std::vector<double> &D2, const std::vector<double> &invD,
     const std::vector<double> &invD2, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
@@ -2450,15 +2616,22 @@ static void three_body_a4_grad(
                 // Cosine series + Chebyshev derivative (same as A2):
                 // d_angular[m] = m * U_{m-1}(cos_i) * sin(theta_i)
                 const double sin_i4 = std::sqrt(std::max(0.0, 1.0 - cos_i * cos_i));
-                if (nabasis > 0) { angular[0] = 1.0;   d_angular[0] = 0.0; }
-                if (nabasis > 1) { angular[1] = cos_i; d_angular[1] = sin_i4; }
+                if (nabasis > 0) {
+                    angular[0] = 1.0;
+                    d_angular[0] = 0.0;
+                }
+                if (nabasis > 1) {
+                    angular[1] = cos_i;
+                    d_angular[1] = sin_i4;
+                }
                 {
                     double Um2 = 1.0, Um1 = 2.0 * cos_i;
                     for (std::size_t m = 2; m < nabasis; ++m) {
                         angular[m] = 2.0 * cos_i * angular[m - 1] - angular[m - 2];
                         d_angular[m] = static_cast<double>(m) * Um1 * sin_i4;
                         double Um = 2.0 * cos_i * Um1 - Um2;
-                        Um2 = Um1; Um1 = Um;
+                        Um2 = Um1;
+                        Um1 = Um;
                     }
                 }
 
@@ -2467,9 +2640,26 @@ static void three_body_a4_grad(
                     (1.0 + 3.0 * cos_i * cos_j * cos_k) * invr_atm * three_body_weight;
 
                 AtmGrad ag = compute_atm_grad(
-                    Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz,
-                    invrij, invrik, invrjk, invrij2, invrik2,
-                    cos_i, cos_j, cos_k, three_body_decay, three_body_weight, atm
+                    Ax,
+                    Ay,
+                    Az,
+                    Bx,
+                    By,
+                    Bz,
+                    Cx,
+                    Cy,
+                    Cz,
+                    invrij,
+                    invrik,
+                    invrjk,
+                    invrij2,
+                    invrik2,
+                    cos_i,
+                    cos_j,
+                    cos_k,
+                    three_body_decay,
+                    three_body_weight,
+                    atm
                 );
 
                 const double decay_ij = rdecay3[idx2(i, j, natoms)];
@@ -2503,9 +2693,9 @@ static void three_body_a4_grad(
                     const double dp = rij + rik - Rs3[l1];
                     const double phi_p = std::exp(-eta3 * dp * dp);
                     for (std::size_t l2 = 0; l2 < nbasis3_minus; ++l2) {
-                        const double phi_m_base =
-                            std::exp(-eta3_minus *
-                                     std::pow(std::abs(rij - rik) - Rs3_minus[l2], 2));
+                        const double phi_m_base = std::exp(
+                            -eta3_minus * std::pow(std::abs(rij - rik) - Rs3_minus[l2], 2)
+                        );
                         const double radial_val = phi_p * phi_m_base * decay_prod;
                         const double scale_val = radial_val * atm;
                         const std::size_t z0 = base + (l1 * nbasis3_minus + l2) * nabasis;
@@ -2513,9 +2703,16 @@ static void three_body_a4_grad(
                         for (std::size_t aidx = 0; aidx < nabasis; ++aidx)
                             atom_rep[z0 + aidx] += angular[aidx] * scale_val;
 
-                        SplitRRadGrad srg =
-                            splitr_radial_grad(rij, rik, Rs3[l1], Rs3_minus[l2], eta3,
-                                               eta3_minus, phi_p, phi_m_base);
+                        SplitRRadGrad srg = splitr_radial_grad(
+                            rij,
+                            rik,
+                            Rs3[l1],
+                            Rs3_minus[l2],
+                            eta3,
+                            eta3_minus,
+                            phi_p,
+                            phi_m_base
+                        );
                         const double drad_drij = srg.d_phi_d_rij * decay_prod;
                         const double drad_drik = srg.d_phi_d_rik * decay_prod;
 
@@ -2538,42 +2735,42 @@ static void three_body_a4_grad(
 
                             atom_grad[(feat * natoms + i) * 3 + 0] +=
                                 dang * dai0 * scale_ang * atm + ang * drad_i0 * atm +
-                                ang * radial_val * ag.i0 + ang * radial_val * dec_i0 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.i0 +
+                                ang * radial_val * dec_i0 * atm / decay_prod;
                             atom_grad[(feat * natoms + j) * 3 + 0] +=
                                 dang * daj0 * scale_ang * atm + ang * drad_j0 * atm +
-                                ang * radial_val * ag.j0 + ang * radial_val * dec_j0 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.j0 +
+                                ang * radial_val * dec_j0 * atm / decay_prod;
                             atom_grad[(feat * natoms + k) * 3 + 0] +=
                                 dang * dak0 * scale_ang * atm + ang * drad_k0 * atm +
-                                ang * radial_val * ag.k0 + ang * radial_val * dec_k0 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.k0 +
+                                ang * radial_val * dec_k0 * atm / decay_prod;
 
                             atom_grad[(feat * natoms + i) * 3 + 1] +=
                                 dang * dai1 * scale_ang * atm + ang * drad_i1 * atm +
-                                ang * radial_val * ag.i1 + ang * radial_val * dec_i1 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.i1 +
+                                ang * radial_val * dec_i1 * atm / decay_prod;
                             atom_grad[(feat * natoms + j) * 3 + 1] +=
                                 dang * daj1 * scale_ang * atm + ang * drad_j1 * atm +
-                                ang * radial_val * ag.j1 + ang * radial_val * dec_j1 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.j1 +
+                                ang * radial_val * dec_j1 * atm / decay_prod;
                             atom_grad[(feat * natoms + k) * 3 + 1] +=
                                 dang * dak1 * scale_ang * atm + ang * drad_k1 * atm +
-                                ang * radial_val * ag.k1 + ang * radial_val * dec_k1 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.k1 +
+                                ang * radial_val * dec_k1 * atm / decay_prod;
 
                             atom_grad[(feat * natoms + i) * 3 + 2] +=
                                 dang * dai2 * scale_ang * atm + ang * drad_i2 * atm +
-                                ang * radial_val * ag.i2 + ang * radial_val * dec_i2 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.i2 +
+                                ang * radial_val * dec_i2 * atm / decay_prod;
                             atom_grad[(feat * natoms + j) * 3 + 2] +=
                                 dang * daj2 * scale_ang * atm + ang * drad_j2 * atm +
-                                ang * radial_val * ag.j2 + ang * radial_val * dec_j2 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.j2 +
+                                ang * radial_val * dec_j2 * atm / decay_prod;
                             atom_grad[(feat * natoms + k) * 3 + 2] +=
                                 dang * dak2 * scale_ang * atm + ang * drad_k2 * atm +
-                                ang * radial_val * ag.k2 + ang * radial_val * dec_k2 * atm /
-                                    decay_prod;
+                                ang * radial_val * ag.k2 +
+                                ang * radial_val * dec_k2 * atm / decay_prod;
                         }
                     }
                 }
@@ -2594,13 +2791,12 @@ static void three_body_a4_grad(
 // A5 gradient: CosineSeries_SplitR_NoATM (ATM factor = 1, weight = three_body_weight)
 static void three_body_a5_grad(
     std::size_t natoms, std::size_t nelements, std::size_t nbasis2, std::size_t nbasis3,
-    std::size_t nbasis3_minus, std::size_t nabasis, const std::vector<double> &coords,
+    std::size_t nbasis3_minus, std::size_t nabasis, const double *coords,
     const std::vector<double> &D, const std::vector<double> &D2, const std::vector<double> &invD,
     const std::vector<double> &invD2, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
-    double eta3_minus, double acut, double three_body_weight,
-    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep,
-    std::vector<double> &grad
+    double eta3_minus, double acut, double three_body_weight, const std::vector<int> &elem_of_atom,
+    std::size_t rep_size, std::vector<double> &rep, std::vector<double> &grad
 ) {
     const std::size_t three_offset = nelements * nbasis2;
     const std::size_t three_block_size = rep_size - three_offset;
@@ -2676,22 +2872,29 @@ static void three_body_a5_grad(
                 // Cosine series + Chebyshev derivative (same as A2):
                 // d_angular[m] = m * U_{m-1}(cos_i) * sin(theta_i)
                 const double sin_i5 = std::sqrt(std::max(0.0, 1.0 - cos_i * cos_i));
-                if (nabasis > 0) { angular[0] = 1.0;   d_angular[0] = 0.0; }
-                if (nabasis > 1) { angular[1] = cos_i; d_angular[1] = sin_i5; }
+                if (nabasis > 0) {
+                    angular[0] = 1.0;
+                    d_angular[0] = 0.0;
+                }
+                if (nabasis > 1) {
+                    angular[1] = cos_i;
+                    d_angular[1] = sin_i5;
+                }
                 {
                     double Um2 = 1.0, Um1 = 2.0 * cos_i;
                     for (std::size_t m = 2; m < nabasis; ++m) {
                         angular[m] = 2.0 * cos_i * angular[m - 1] - angular[m - 2];
                         d_angular[m] = static_cast<double>(m) * Um1 * sin_i5;
                         double Um = 2.0 * cos_i * Um1 - Um2;
-                        Um2 = Um1; Um1 = Um;
+                        Um2 = Um1;
+                        Um1 = Um;
                     }
                 }
 
-                 const double decay_ij = rdecay3[idx2(i, j, natoms)];
-                 const double decay_ik = rdecay3[idx2(i, k, natoms)];
-                 const double s_ik =
-                     -M_PI * std::sin(M_PI * rik * inv_acut) * 0.5 * invrik * inv_acut;
+                const double decay_ij = rdecay3[idx2(i, j, natoms)];
+                const double decay_ik = rdecay3[idx2(i, k, natoms)];
+                const double s_ik =
+                    -M_PI * std::sin(M_PI * rik * inv_acut) * 0.5 * invrik * inv_acut;
                 const double d_ijd0 = s_ij * (Bx - Ax), d_ijd1 = s_ij * (By - Ay),
                              d_ijd2 = s_ij * (Bz - Az);
                 const double d_ikd0 = s_ik * (Bx - Cx), d_ikd1 = s_ik * (By - Cy),
@@ -2719,18 +2922,25 @@ static void three_body_a5_grad(
                     const double dp = rij + rik - Rs3[l1];
                     const double phi_p = std::exp(-eta3 * dp * dp);
                     for (std::size_t l2 = 0; l2 < nbasis3_minus; ++l2) {
-                        const double phi_m_base =
-                            std::exp(-eta3_minus *
-                                     std::pow(std::abs(rij - rik) - Rs3_minus[l2], 2));
+                        const double phi_m_base = std::exp(
+                            -eta3_minus * std::pow(std::abs(rij - rik) - Rs3_minus[l2], 2)
+                        );
                         const double radial_val = phi_p * phi_m_base * decay_prod;
                         const std::size_t z0 = base + (l1 * nbasis3_minus + l2) * nabasis;
 
                         for (std::size_t aidx = 0; aidx < nabasis; ++aidx)
                             atom_rep[z0 + aidx] += angular[aidx] * radial_val * three_body_weight;
 
-                        SplitRRadGrad srg =
-                            splitr_radial_grad(rij, rik, Rs3[l1], Rs3_minus[l2], eta3,
-                                               eta3_minus, phi_p, phi_m_base);
+                        SplitRRadGrad srg = splitr_radial_grad(
+                            rij,
+                            rik,
+                            Rs3[l1],
+                            Rs3_minus[l2],
+                            eta3,
+                            eta3_minus,
+                            phi_p,
+                            phi_m_base
+                        );
                         const double drad_drij = srg.d_phi_d_rij * decay_prod;
                         const double drad_drik = srg.d_phi_d_rik * decay_prod;
 
@@ -2762,24 +2972,15 @@ static void three_body_a5_grad(
                             // Actually dec_X = d(decay_ij * decay_ik)/d(pos_X) already
                             // Let total_rad_i = drad_i (phi part only) + phi_p*phi_m*dec_i
                             const double phi_val = phi_p * phi_m_base;
-                            const double total_drad_i0 =
-                                drad_i0 + phi_val * dec_i0;
-                            const double total_drad_i1 =
-                                drad_i1 + phi_val * dec_i1;
-                            const double total_drad_i2 =
-                                drad_i2 + phi_val * dec_i2;
-                            const double total_drad_j0 =
-                                drad_j0 + phi_val * dec_j0;
-                            const double total_drad_j1 =
-                                drad_j1 + phi_val * dec_j1;
-                            const double total_drad_j2 =
-                                drad_j2 + phi_val * dec_j2;
-                            const double total_drad_k0 =
-                                drad_k0 + phi_val * dec_k0;
-                            const double total_drad_k1 =
-                                drad_k1 + phi_val * dec_k1;
-                            const double total_drad_k2 =
-                                drad_k2 + phi_val * dec_k2;
+                            const double total_drad_i0 = drad_i0 + phi_val * dec_i0;
+                            const double total_drad_i1 = drad_i1 + phi_val * dec_i1;
+                            const double total_drad_i2 = drad_i2 + phi_val * dec_i2;
+                            const double total_drad_j0 = drad_j0 + phi_val * dec_j0;
+                            const double total_drad_j1 = drad_j1 + phi_val * dec_j1;
+                            const double total_drad_j2 = drad_j2 + phi_val * dec_j2;
+                            const double total_drad_k0 = drad_k0 + phi_val * dec_k0;
+                            const double total_drad_k1 = drad_k1 + phi_val * dec_k1;
+                            const double total_drad_k2 = drad_k2 + phi_val * dec_k2;
 
                             atom_grad[(feat * natoms + i) * 3 + 0] +=
                                 w * (dang * dai0 * radial_val + ang * total_drad_i0);
@@ -2821,49 +3022,144 @@ static void three_body_a5_grad(
 // Dispatch three-body gradient
 static void three_body_grad(
     ThreeBodyType type, std::size_t natoms, std::size_t nelements, std::size_t nbasis2,
-    std::size_t nbasis3, std::size_t nabasis, const std::vector<double> &coords,
-    const std::vector<double> &D, const std::vector<double> &D2, const std::vector<double> &invD,
+    std::size_t nbasis3, std::size_t nabasis, const double *coords, const std::vector<double> &D,
+    const std::vector<double> &D2, const std::vector<double> &invD,
     const std::vector<double> &invD2, const std::vector<double> &rdecay3,
     const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta3,
-    double eta3_minus, double zeta, double acut, double three_body_decay,
-    double three_body_weight, const std::vector<int> &elem_of_atom, std::size_t rep_size,
-    std::vector<double> &rep, std::vector<double> &grad
+    double eta3_minus, double zeta, double acut, double three_body_decay, double three_body_weight,
+    const std::vector<int> &elem_of_atom, std::size_t rep_size, std::vector<double> &rep,
+    std::vector<double> &grad
 ) {
     const std::size_t nbasis3_minus = Rs3_minus.size();
     switch (type) {
         case ThreeBodyType::OddFourier_Rbar:
             three_body_a1_grad(
-                natoms, nelements, nbasis2, nbasis3, nabasis, coords, D, D2, invD, invD2, rdecay3,
-                Rs3, eta3, zeta, acut, three_body_decay, three_body_weight, elem_of_atom, rep_size,
-                rep, grad
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nabasis,
+                coords,
+                D,
+                D2,
+                invD,
+                invD2,
+                rdecay3,
+                Rs3,
+                eta3,
+                zeta,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case ThreeBodyType::CosineSeries_Rbar:
             three_body_a2_grad(
-                natoms, nelements, nbasis2, nbasis3, nabasis, coords, D, D2, invD, invD2, rdecay3,
-                Rs3, eta3, acut, three_body_decay, three_body_weight, elem_of_atom, rep_size,
-                rep, grad
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nabasis,
+                coords,
+                D,
+                D2,
+                invD,
+                invD2,
+                rdecay3,
+                Rs3,
+                eta3,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case ThreeBodyType::OddFourier_SplitR:
             three_body_a3_grad(
-                natoms, nelements, nbasis2, nbasis3, nbasis3_minus, nabasis, coords, D, D2, invD,
-                invD2, rdecay3, Rs3, Rs3_minus, eta3, eta3_minus, zeta, acut, three_body_decay,
-                three_body_weight, elem_of_atom, rep_size, rep, grad
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nbasis3_minus,
+                nabasis,
+                coords,
+                D,
+                D2,
+                invD,
+                invD2,
+                rdecay3,
+                Rs3,
+                Rs3_minus,
+                eta3,
+                eta3_minus,
+                zeta,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case ThreeBodyType::CosineSeries_SplitR:
             three_body_a4_grad(
-                natoms, nelements, nbasis2, nbasis3, nbasis3_minus, nabasis, coords, D, D2, invD,
-                invD2, rdecay3, Rs3, Rs3_minus, eta3, eta3_minus, acut, three_body_decay,
-                three_body_weight, elem_of_atom, rep_size, rep, grad
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nbasis3_minus,
+                nabasis,
+                coords,
+                D,
+                D2,
+                invD,
+                invD2,
+                rdecay3,
+                Rs3,
+                Rs3_minus,
+                eta3,
+                eta3_minus,
+                acut,
+                three_body_decay,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
         case ThreeBodyType::CosineSeries_SplitR_NoATM:
             three_body_a5_grad(
-                natoms, nelements, nbasis2, nbasis3, nbasis3_minus, nabasis, coords, D, D2, invD,
-                invD2, rdecay3, Rs3, Rs3_minus, eta3, eta3_minus, acut, three_body_weight,
-                elem_of_atom, rep_size, rep, grad
+                natoms,
+                nelements,
+                nbasis2,
+                nbasis3,
+                nbasis3_minus,
+                nabasis,
+                coords,
+                D,
+                D2,
+                invD,
+                invD2,
+                rdecay3,
+                Rs3,
+                Rs3_minus,
+                eta3,
+                eta3_minus,
+                acut,
+                three_body_weight,
+                elem_of_atom,
+                rep_size,
+                rep,
+                grad
             );
             break;
     }
@@ -2872,17 +3168,13 @@ static void three_body_grad(
 // ==================== Public API ====================
 
 void generate(
-    const std::vector<double> &coords, const std::vector<int> &nuclear_z,
+    const double *coords, const int *nuclear_z, std::size_t natoms,
     const std::vector<int> &elements, const std::vector<double> &Rs2,
-    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2,
-    double eta3, double eta3_minus, double zeta, double rcut, double acut,
-    double two_body_decay, double three_body_decay, double three_body_weight,
-    TwoBodyType two_body_type, ThreeBodyType three_body_type, int nabasis,
-    std::vector<double> &rep
+    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2, double eta3,
+    double eta3_minus, double zeta, double rcut, double acut, double two_body_decay,
+    double three_body_decay, double three_body_weight, TwoBodyType two_body_type,
+    ThreeBodyType three_body_type, int nabasis, std::vector<double> &rep
 ) {
-    const std::size_t natoms = nuclear_z.size();
-    if (coords.size() != natoms * 3) throw std::invalid_argument("coords size must be natoms*3");
-
     const std::size_t nelements = elements.size();
     const std::size_t nbasis2 = Rs2.size();
     const std::size_t nbasis3 = Rs3.size();
@@ -2902,32 +3194,56 @@ void generate(
 
     // Two-body
     two_body_forward(
-        two_body_type, natoms, nbasis2, nelements, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-        elem_of_atom, rep_size, rep
+        two_body_type,
+        natoms,
+        nbasis2,
+        nelements,
+        D,
+        rdecay2,
+        Rs2,
+        eta2,
+        two_body_decay,
+        rcut,
+        elem_of_atom,
+        rep_size,
+        rep
     );
 
     // Three-body
     if (three_body_weight != 0.0) {
         three_body_forward(
-            three_body_type, natoms, nelements, nbasis2, nbasis3, nab, coords, D, rdecay3, Rs3,
-            Rs3_minus, eta3, eta3_minus, zeta, acut, three_body_decay, three_body_weight,
-            elem_of_atom, rep_size, rep
+            three_body_type,
+            natoms,
+            nelements,
+            nbasis2,
+            nbasis3,
+            nab,
+            coords,
+            D,
+            rdecay3,
+            Rs3,
+            Rs3_minus,
+            eta3,
+            eta3_minus,
+            zeta,
+            acut,
+            three_body_decay,
+            three_body_weight,
+            elem_of_atom,
+            rep_size,
+            rep
         );
     }
 }
 
 void generate_and_gradients(
-    const std::vector<double> &coords, const std::vector<int> &nuclear_z,
+    const double *coords, const int *nuclear_z, std::size_t natoms,
     const std::vector<int> &elements, const std::vector<double> &Rs2,
-    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2,
-    double eta3, double eta3_minus, double zeta, double rcut, double acut,
-    double two_body_decay, double three_body_decay, double three_body_weight,
-    TwoBodyType two_body_type, ThreeBodyType three_body_type, int nabasis,
-    std::vector<double> &rep, std::vector<double> &grad
+    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2, double eta3,
+    double eta3_minus, double zeta, double rcut, double acut, double two_body_decay,
+    double three_body_decay, double three_body_weight, TwoBodyType two_body_type,
+    ThreeBodyType three_body_type, int nabasis, std::vector<double> &rep, std::vector<double> &grad
 ) {
-    const std::size_t natoms = nuclear_z.size();
-    if (coords.size() != natoms * 3) throw std::invalid_argument("coords size must be natoms*3");
-
     const std::size_t nelements = elements.size();
     const std::size_t nbasis2 = Rs2.size();
     const std::size_t nbasis3 = Rs3.size();
@@ -2968,16 +3284,49 @@ void generate_and_gradients(
 
     // Two-body (values + gradients)
     two_body_grad(
-        two_body_type, natoms, nbasis2, coords, D, rdecay2, Rs2, eta2, two_body_decay, rcut,
-        elem_of_atom, rep_size, rep, grad
+        two_body_type,
+        natoms,
+        nbasis2,
+        coords,
+        D,
+        rdecay2,
+        Rs2,
+        eta2,
+        two_body_decay,
+        rcut,
+        elem_of_atom,
+        rep_size,
+        rep,
+        grad
     );
 
     // Three-body (values + gradients)
     if (three_body_weight != 0.0) {
         three_body_grad(
-            three_body_type, natoms, nelements, nbasis2, nbasis3, nab, coords, D, D2, invD, invD2,
-            rdecay3, Rs3, Rs3_minus, eta3, eta3_minus, zeta, acut, three_body_decay,
-            three_body_weight, elem_of_atom, rep_size, rep, grad
+            three_body_type,
+            natoms,
+            nelements,
+            nbasis2,
+            nbasis3,
+            nab,
+            coords,
+            D,
+            D2,
+            invD,
+            invD2,
+            rdecay3,
+            Rs3,
+            Rs3_minus,
+            eta3,
+            eta3_minus,
+            zeta,
+            acut,
+            three_body_decay,
+            three_body_weight,
+            elem_of_atom,
+            rep_size,
+            rep,
+            grad
         );
     }
 }

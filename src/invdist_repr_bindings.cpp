@@ -2,7 +2,6 @@
 
 // C++ standard library
 #include <stdexcept>
-#include <vector>
 
 // Third-party libraries
 #include <pybind11/numpy.h>
@@ -29,19 +28,11 @@ py::array_t<double> inverse_distance_upper_py(
     const std::size_t N = static_cast<std::size_t>(R.shape(0));
     const std::size_t M = kf::invdist::num_pairs(N);
 
-    // flatten coords
-    std::vector<double> Rflat(3 * N);
-    auto Rv = R.unchecked<2>();
-    for (std::size_t i = 0; i < N; ++i) {
-        Rflat[3 * i + 0] = Rv(i, 0);
-        Rflat[3 * i + 1] = Rv(i, 1);
-        Rflat[3 * i + 2] = Rv(i, 2);
-    }
-
     py::array_t<double> x((py::ssize_t)M);
     auto xv = x.mutable_unchecked<1>();
 
-    kf::invdist::inverse_distance_upper(Rflat.data(), N, eps, xv.mutable_data(0));
+    // C-contiguous (N,3) is already flat row-major — no Rflat copy.
+    kf::invdist::inverse_distance_upper(R.data(), N, eps, xv.mutable_data(0));
 
     return x;
 }
@@ -52,24 +43,15 @@ py::tuple inverse_distance_upper_and_jacobian_py(
     check_R(R);
     const std::size_t N = static_cast<std::size_t>(R.shape(0));
     const std::size_t M = kf::invdist::num_pairs(N);
-    const std::size_t D = 3 * N;
-
-    std::vector<double> Rflat(3 * N);
-    auto Rv = R.unchecked<2>();
-    for (std::size_t i = 0; i < N; ++i) {
-        Rflat[3 * i + 0] = Rv(i, 0);
-        Rflat[3 * i + 1] = Rv(i, 1);
-        Rflat[3 * i + 2] = Rv(i, 2);
-    }
 
     py::array_t<double> x((py::ssize_t)M);
-    py::array_t<double> J({(py::ssize_t)D, (py::ssize_t)M});
+    py::array_t<double> J({(py::ssize_t)(3 * N), (py::ssize_t)M});
 
     auto xv = x.mutable_unchecked<1>();
     auto Jv = J.mutable_unchecked<2>();
 
     kf::invdist::inverse_distance_upper_and_jacobian(
-        Rflat.data(),
+        R.data(),
         N,
         eps,
         xv.mutable_data(0),

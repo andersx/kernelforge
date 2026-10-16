@@ -19,7 +19,7 @@ enum class TwoBodyType {
 enum class ThreeBodyType {
     OddFourier_Rbar,           // A1: odd cos+sin harmonics, r_bar radial
     CosineSeries_Rbar,         // A2: full cosine series, r_bar radial
-    OddFourier_SplitR,        // A3: odd cos+sin harmonics, r_plus/r_minus radial
+    OddFourier_SplitR,         // A3: odd cos+sin harmonics, r_plus/r_minus radial
     CosineSeries_SplitR,       // A4: full cosine series, r_plus/r_minus radial
     CosineSeries_SplitR_NoATM  // A5: full cosine series, r_plus/r_minus, no ATM factor
 };
@@ -40,24 +40,22 @@ std::size_t compute_rep_size(
 
 // Forward pass only: compute representation
 void generate(
-    const std::vector<double> &coords, const std::vector<int> &nuclear_z,
+    const double *coords, const int *nuclear_z, std::size_t natoms,
     const std::vector<int> &elements, const std::vector<double> &Rs2,
-    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2,
-    double eta3, double eta3_minus, double zeta, double rcut, double acut,
-    double two_body_decay, double three_body_decay, double three_body_weight,
-    TwoBodyType two_body_type, ThreeBodyType three_body_type, int nabasis,
-    std::vector<double> &rep
+    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2, double eta3,
+    double eta3_minus, double zeta, double rcut, double acut, double two_body_decay,
+    double three_body_decay, double three_body_weight, TwoBodyType two_body_type,
+    ThreeBodyType three_body_type, int nabasis, std::vector<double> &rep
 );
 
 // Forward + Jacobian: compute representation and its gradient wrt coordinates
 void generate_and_gradients(
-    const std::vector<double> &coords, const std::vector<int> &nuclear_z,
+    const double *coords, const int *nuclear_z, std::size_t natoms,
     const std::vector<int> &elements, const std::vector<double> &Rs2,
-    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2,
-    double eta3, double eta3_minus, double zeta, double rcut, double acut,
-    double two_body_decay, double three_body_decay, double three_body_weight,
-    TwoBodyType two_body_type, ThreeBodyType three_body_type, int nabasis,
-    std::vector<double> &rep, std::vector<double> &grad
+    const std::vector<double> &Rs3, const std::vector<double> &Rs3_minus, double eta2, double eta3,
+    double eta3_minus, double zeta, double rcut, double acut, double two_body_decay,
+    double three_body_decay, double three_body_weight, TwoBodyType two_body_type,
+    ThreeBodyType three_body_type, int nabasis, std::vector<double> &rep, std::vector<double> &grad
 );
 
 }  // namespace fchl19v2

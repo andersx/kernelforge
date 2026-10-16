@@ -59,8 +59,9 @@ static void build_repr(
         std::vector<double> x_mol;
         std::vector<int> nn_mol;
         kf::fchl18::generate_fchl18(
-            mols[a].coords,
-            mols[a].z,
+            mols[a].coords.data(),
+            mols[a].z.data(),
+            mols[a].n_atoms,
             max_size_out,
             cut_distance,
             x_mol,
@@ -142,12 +143,12 @@ py::array_t<double> kernel_gaussian_full_py(
         // full_cols. Write into a temp buffer then scatter.
         std::vector<double> K_scalar(N_A * N_B, 0.0);
         kf::fchl18::kernel_gaussian(
-            x_A,
-            x_B,
-            n_A_v,
-            n_B_v,
-            nn_A,
-            nn_B,
+            x_A.data(),
+            x_B.data(),
+            n_A_v.data(),
+            n_B_v.data(),
+            nn_A.data(),
+            nn_B.data(),
             N_A,
             N_B,
             max_size_A,
@@ -180,16 +181,17 @@ py::array_t<double> kernel_gaussian_full_py(
             std::vector<std::vector<double>> coords_A_vecs(static_cast<std::size_t>(N_A));
             std::vector<std::vector<int>> z_A_vecs(static_cast<std::size_t>(N_A));
             for (int i = 0; i < N_A; ++i) {
-                coords_A_vecs[static_cast<std::size_t>(i)] = mols_A[static_cast<std::size_t>(i)].coords;
+                coords_A_vecs[static_cast<std::size_t>(i)] =
+                    mols_A[static_cast<std::size_t>(i)].coords;
                 z_A_vecs[static_cast<std::size_t>(i)] = mols_A[static_cast<std::size_t>(i)].z;
             }
             std::vector<double> J(static_cast<std::size_t>(D_A) * N_B, 0.0);
             kf::fchl18::kernel_gaussian_jacobian(
                 coords_A_vecs,
                 z_A_vecs,
-                x_B,
-                n_B_v,
-                nn_B,
+                x_B.data(),
+                n_B_v.data(),
+                nn_B.data(),
                 N_B,
                 max_size_B,
                 sigma,
@@ -220,16 +222,17 @@ py::array_t<double> kernel_gaussian_full_py(
             std::vector<std::vector<double>> coords_B_vecs(static_cast<std::size_t>(N_B));
             std::vector<std::vector<int>> z_B_vecs(static_cast<std::size_t>(N_B));
             for (int j = 0; j < N_B; ++j) {
-                coords_B_vecs[static_cast<std::size_t>(j)] = mols_B[static_cast<std::size_t>(j)].coords;
+                coords_B_vecs[static_cast<std::size_t>(j)] =
+                    mols_B[static_cast<std::size_t>(j)].coords;
                 z_B_vecs[static_cast<std::size_t>(j)] = mols_B[static_cast<std::size_t>(j)].z;
             }
             std::vector<double> Jt(static_cast<std::size_t>(N_A) * D_B, 0.0);
             kf::fchl18::kernel_gaussian_jacobian_t(
                 coords_B_vecs,
                 z_B_vecs,
-                x_A,
-                n_A_v,
-                nn_A,
+                x_A.data(),
+                n_A_v.data(),
+                nn_A.data(),
                 N_A,
                 max_size_A,
                 sigma,
@@ -261,11 +264,13 @@ py::array_t<double> kernel_gaussian_full_py(
             std::vector<std::vector<double>> coords_B_vecs(static_cast<std::size_t>(N_B));
             std::vector<std::vector<int>> z_B_vecs(static_cast<std::size_t>(N_B));
             for (int i = 0; i < N_A; ++i) {
-                coords_A_vecs[static_cast<std::size_t>(i)] = mols_A[static_cast<std::size_t>(i)].coords;
+                coords_A_vecs[static_cast<std::size_t>(i)] =
+                    mols_A[static_cast<std::size_t>(i)].coords;
                 z_A_vecs[static_cast<std::size_t>(i)] = mols_A[static_cast<std::size_t>(i)].z;
             }
             for (int j = 0; j < N_B; ++j) {
-                coords_B_vecs[static_cast<std::size_t>(j)] = mols_B[static_cast<std::size_t>(j)].coords;
+                coords_B_vecs[static_cast<std::size_t>(j)] =
+                    mols_B[static_cast<std::size_t>(j)].coords;
                 z_B_vecs[static_cast<std::size_t>(j)] = mols_B[static_cast<std::size_t>(j)].z;
             }
             std::vector<double> H(static_cast<std::size_t>(D_A) * D_B, 0.0);
@@ -343,9 +348,9 @@ py::array_t<double> kernel_gaussian_full_symm_py(
         // ---- Scalar block (symmetric): K[0:nm, 0:nm] ----
         std::vector<double> K_scalar(nm * nm, 0.0);
         kf::fchl18::kernel_gaussian_symm(
-            x_all,
-            n_all,
-            nn_all,
+            x_all.data(),
+            n_all.data(),
+            nn_all.data(),
             nm,
             max_size,
             sigma,
@@ -382,9 +387,9 @@ py::array_t<double> kernel_gaussian_full_symm_py(
             kf::fchl18::kernel_gaussian_jacobian(
                 coords_vecs,
                 z_vecs,
-                x_all,
-                n_all,
-                nn_all,
+                x_all.data(),
+                n_all.data(),
+                nn_all.data(),
                 nm,
                 max_size,
                 sigma,
@@ -492,9 +497,9 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
         // Only upper triangle RFP: rfp_index_upper_N(BIG, col=b, row=a) with b <= a.
         std::vector<double> K_scalar(nm * nm, 0.0);
         kf::fchl18::kernel_gaussian_symm(
-            x_all,
-            n_all,
-            nn_all,
+            x_all.data(),
+            n_all.data(),
+            nn_all.data(),
             nm,
             max_size,
             sigma,
@@ -530,9 +535,9 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
             kf::fchl18::kernel_gaussian_jacobian(
                 coords_vecs,
                 z_vecs,
-                x_all,
-                n_all,
-                nn_all,
+                x_all.data(),
+                n_all.data(),
+                nn_all.data(),
                 nm,
                 max_size,
                 sigma,
@@ -649,12 +654,8 @@ py::tuple kernel_gaussian_full_matvec_py(
         z_B_vecs[b] = mols_B[b].z;
     }
 
-    auto alpha_E_vec = std::vector<double>(
-        alpha_E.data(), alpha_E.data() + alpha_E.shape(0)
-    );
-    auto alpha_F_vec = std::vector<double>(
-        alpha_F.data(), alpha_F.data() + alpha_F.shape(0)
-    );
+    auto alpha_E_vec = std::vector<double>(alpha_E.data(), alpha_E.data() + alpha_E.shape(0));
+    auto alpha_F_vec = std::vector<double>(alpha_F.data(), alpha_F.data() + alpha_F.shape(0));
 
     int max_size_A = 0, max_size_B = 0;
     std::vector<double> x_A, x_B;
@@ -668,12 +669,12 @@ py::tuple kernel_gaussian_full_matvec_py(
         if (compute_energy) {
             std::vector<double> K_scalar(static_cast<std::size_t>(N_A) * N_B, 0.0);
             kf::fchl18::kernel_gaussian(
-                x_A,
-                x_B,
-                n_A_v,
-                n_B_v,
-                nn_A,
-                nn_B,
+                x_A.data(),
+                x_B.data(),
+                n_A_v.data(),
+                n_B_v.data(),
+                nn_A.data(),
+                nn_B.data(),
                 N_A,
                 N_B,
                 max_size_A,
@@ -703,12 +704,12 @@ py::tuple kernel_gaussian_full_matvec_py(
             kf::fchl18::kernel_gaussian_jacobian_t_matvec(
                 coords_B_vecs,
                 z_B_vecs,
-                x_A,
-                n_A_v,
-                nn_A,
+                x_A.data(),
+                n_A_v.data(),
+                nn_A.data(),
                 N_A,
                 max_size_A,
-                alpha_F_vec,
+                alpha_F_vec.data(),
                 sigma,
                 two_body_scaling,
                 two_body_width,
@@ -727,12 +728,12 @@ py::tuple kernel_gaussian_full_matvec_py(
         kf::fchl18::kernel_gaussian_jacobian_matvec(
             coords_A_vecs,
             z_A_vecs,
-            x_B,
-            n_B_v,
-            nn_B,
+            x_B.data(),
+            n_B_v.data(),
+            nn_B.data(),
             N_B,
             max_size_B,
-            alpha_E_vec,
+            alpha_E_vec.data(),
             sigma,
             two_body_scaling,
             two_body_width,
@@ -752,7 +753,7 @@ py::tuple kernel_gaussian_full_matvec_py(
             z_A_vecs,
             coords_B_vecs,
             z_B_vecs,
-            alpha_F_vec,
+            alpha_F_vec.data(),
             sigma,
             two_body_scaling,
             two_body_width,

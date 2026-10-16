@@ -62,25 +62,18 @@ static py::tuple generate_fchl18_batch_py(
             py::cast<py::array>(coords_list[a])
                 .cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
         std::size_t n_atoms_a = 0;
-        std::vector<double> coords_v;
 
+        const double *coords_ptr = nullptr;
         if (coords_arr.ndim() == 2) {
             n_atoms_a = static_cast<std::size_t>(coords_arr.shape(0));
             if (coords_arr.shape(1) != 3)
                 throw std::invalid_argument("coords must have shape (n_atoms, 3)");
-            coords_v.resize(n_atoms_a * 3);
-            auto r = coords_arr.unchecked<2>();
-            for (std::size_t i = 0; i < n_atoms_a; ++i) {
-                coords_v[3 * i + 0] = r(i, 0);
-                coords_v[3 * i + 1] = r(i, 1);
-                coords_v[3 * i + 2] = r(i, 2);
-            }
+            coords_ptr = coords_arr.data();
         } else if (coords_arr.ndim() == 1) {
             if (coords_arr.shape(0) % 3 != 0)
                 throw std::invalid_argument("1D coords length must be divisible by 3");
             n_atoms_a = static_cast<std::size_t>(coords_arr.shape(0)) / 3;
-            auto r = coords_arr.unchecked<1>();
-            coords_v.assign(r.data(0), r.data(0) + n_atoms_a * 3);
+            coords_ptr = coords_arr.data();
         } else {
             throw std::invalid_argument("coords must be a 1D or 2D array");
         }
@@ -95,8 +88,6 @@ static py::tuple generate_fchl18_batch_py(
             throw std::invalid_argument(
                 "nuclear_z length must equal n_atoms for molecule " + std::to_string(a)
             );
-        auto zr = z_arr.unchecked<1>();
-        std::vector<int> z_v(zr.data(0), zr.data(0) + n_atoms_a);
 
         na_buf(a) = static_cast<int32_t>(n_atoms_a);
 
@@ -105,7 +96,15 @@ static py::tuple generate_fchl18_batch_py(
         std::vector<int> nn_mol;
         {
             py::gil_scoped_release release;
-            kf::fchl18::generate_fchl18(coords_v, z_v, max_size, cut_distance, x_mol, nn_mol);
+            kf::fchl18::generate_fchl18(
+                coords_ptr,
+                z_arr.data(),
+                static_cast<int>(n_atoms_a),
+                max_size,
+                cut_distance,
+                x_mol,
+                nn_mol
+            );
         }
 
         // Copy x_mol (max_size, 5, max_size) into x_out[a, :, :, :]
