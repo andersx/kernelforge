@@ -84,14 +84,14 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
             nn_all[static_cast<std::size_t>(a) * max_size + i] = nn_mol[i];
     }
 
-    // Allocate full (nm x nm) temporary matrix for kernel_gaussian_symm
     const std::size_t N = static_cast<std::size_t>(nm);
-    std::vector<double> K_full(N * N, 0.0);
+    const std::size_t rfp_len = N * (N + 1) / 2;
+    py::array_t<double> K_rfp(static_cast<py::ssize_t>(rfp_len));
 
     {
         py::gil_scoped_release release;
-
-        kf::fchl18::kernel_gaussian_symm(
+        // Writes the upper triangle directly into RFP storage (no N*N temporary).
+        kf::fchl18::kernel_gaussian_symm_rfp_core(
             x_all,
             n_all,
             nn_all,
@@ -108,23 +108,8 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K_full.data()
+            K_rfp.mutable_data()
         );
-    }
-
-    // Allocate RFP output and pack upper triangle
-    const std::size_t rfp_len = N * (N + 1) / 2;
-    py::array_t<double> K_rfp(static_cast<py::ssize_t>(rfp_len));
-    {
-        double *rfp_ptr = K_rfp.mutable_data();
-        // kernel_gaussian_symm fills the full matrix (lower + upper).
-        // We read the lower triangle (b <= a) and write to RFP upper convention:
-        //   rfp_index_upper_N(col=b, row=a) with b <= a
-        for (std::size_t a = 0; a < N; ++a) {
-            for (std::size_t b = 0; b <= a; ++b) {
-                rfp_ptr[kf::rfp_index_upper_N(N, b, a)] = K_full[a * N + b];
-            }
-        }
     }
 
     return K_rfp;
