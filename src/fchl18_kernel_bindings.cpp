@@ -398,8 +398,9 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
 
     {
         py::gil_scoped_release release;
-        std::vector<double> H(static_cast<std::size_t>(D) * D, 0.0);
-        kf::fchl18::kernel_gaussian_hessian_symm_blocks(
+        kf::fchl18::hess_phase_reset();
+        // Direct RFP write — no dense D×D temporary.
+        kf::fchl18::kernel_gaussian_hessian_symm_rfp_blocks(
             coords_vecs,
             z_vecs,
             sigma,
@@ -413,16 +414,9 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
             cut_distance,
             fourier_order,
             use_atm,
-            H.data()
+            H_rfp.mutable_data()
         );
-        double *rfp_ptr = H_rfp.mutable_data();
-        for (int row = 0; row < D; ++row) {
-            for (int col = 0; col <= row; ++col) {
-                rfp_ptr[kf::rfp_index_upper_N(BIG, static_cast<std::size_t>(col),
-                                              static_cast<std::size_t>(row))] =
-                    H[static_cast<std::size_t>(row) * D + col];
-            }
-        }
+        kf::fchl18::hess_phase_report("hessian_symm_rfp");
     }
 
     return H_rfp;
@@ -446,8 +440,7 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
     if (static_cast<int>(z_train_list.size()) != N_train)
         throw std::invalid_argument("coords_train_list and z_train_list must have the same length");
     if (x_test.ndim() != 4 || x_test.shape(2) != 5)
-        throw std::invalid_argument(
-            "X_test must be 4-D with shape (N_test, max_size, 5, max_size)"
+        throw std::invalid_argument("X_test must be 4-D with shape (N_test, max_size, 5, max_size)"
         );
     if (N_train == 0) throw std::invalid_argument("kernel_gaussian_jacobian_t: empty training set");
 
@@ -506,8 +499,8 @@ static py::array_t<double> kernel_gaussian_hessian_matvec_py(
     const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
     const py::list &z_B_list, const py::array_t<double> &alpha_F, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
-    double three_body_scaling, double three_body_width, double three_body_power,
-    double cut_start, double cut_distance, int fourier_order, bool use_atm
+    double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
+    double cut_distance, int fourier_order, bool use_atm
 ) {
     const int N_A = static_cast<int>(coords_A_list.size());
     const int N_B = static_cast<int>(coords_B_list.size());
@@ -578,7 +571,8 @@ static py::array_t<double> kernel_gaussian_jacobian_t_matvec_py(
     if (static_cast<int>(z_train_list.size()) != N_train)
         throw std::invalid_argument("coords_train_list and z_train_list size mismatch");
     if (x_test.ndim() != 4 || x_test.shape(2) != 5)
-        throw std::invalid_argument("X_test must be 4-D with shape (N_test, max_size, 5, max_size)");
+        throw std::invalid_argument("X_test must be 4-D with shape (N_test, max_size, 5, max_size)"
+        );
 
     const int N_test = static_cast<int>(x_test.shape(0));
     const int max_size = static_cast<int>(x_test.shape(1));
