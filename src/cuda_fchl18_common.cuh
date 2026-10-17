@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include <cuda_runtime.h>
 
@@ -249,6 +250,64 @@ inline int build_element_map_from_flags(const int *z_present, int *z_to_idx) {
         }
     }
     return pmax;
+}
+
+// Host helper (defined in cuda_fchl18_kernel.cu): device exclusive scan
+// offset[0]=0, offset[a+1]=offset[a]+3*n[a].
+// If expected_dim >= 0, throws if offset[nm] != expected_dim.
+void fill_coord_offsets_device(
+    const int *d_n, int **d_offset, size_t *offset_cap, int nm, int expected_dim, const char *what
+);
+
+// Cheap device-side fingerprint of a float/double buffer (first + mid + last words).
+// Used to guard train-side workspace caches against CUDA allocator pointer reuse.
+template <typename T>
+inline unsigned long long buffer_fingerprint(const T *d_ptr, size_t n_elem) {
+    if (d_ptr == nullptr || n_elem == 0) {
+        return 0;
+    }
+    T samples[3];
+    const size_t i0 = 0;
+    const size_t i1 = n_elem / 2;
+    const size_t i2 = n_elem - 1;
+    CUDA_CHECK(cudaMemcpy(&samples[0], d_ptr + i0, sizeof(T), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&samples[1], d_ptr + i1, sizeof(T), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(&samples[2], d_ptr + i2, sizeof(T), cudaMemcpyDeviceToHost));
+    unsigned long long fp = 0;
+    for (int i = 0; i < 3; ++i) {
+        unsigned long long w = 0;
+        static_assert(sizeof(T) <= sizeof(w), "fingerprint word");
+        std::memcpy(&w, &samples[i], sizeof(T));
+        fp ^= w + 0x9e3779b97f4a7c15ULL + (fp << 6) + (fp >> 2);
+    }
+    fp ^= static_cast<unsigned long long>(n_elem);
+    return fp;
+}
+
+// Warp-shuffle block reduction (blockDim.x must be a multiple of 32, <= 1024).
+template <typename T>
+__device__ inline T block_reduce_sum(T val) {
+    constexpr unsigned mask = 0xffffffffu;
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(mask, val, offset);
+    }
+    __shared__ T warp_sums[32];
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int wid = static_cast<int>(threadIdx.x) >> 5;
+    if (lane == 0) {
+        warp_sums[wid] = val;
+    }
+    __syncthreads();
+    const int nwarps = static_cast<int>(blockDim.x) >> 5;
+    val = (static_cast<int>(threadIdx.x) < nwarps) ? warp_sums[lane] : Math<T>::zero();
+    if (wid == 0) {
+#pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            val += __shfl_down_sync(mask, val, offset);
+        }
+    }
+    return val;
 }
 
 }  // namespace fchl18

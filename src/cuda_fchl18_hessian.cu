@@ -527,13 +527,13 @@ __device__ T hess_scalar_and_grad_amu(
 
             T angular = Math<T>::zero();
             T d_angular = Math<T>::zero();
-            for (int m = 0; m < order; m += 2) {
-                const T spf = s_prefactor[m];
+            if (order == 1) {
+                const T spf = s_prefactor[0];
                 T ang_m = Math<T>::zero();
                 T dang_m = Math<T>::zero();
                 for (int p = 0; p < pmax; ++p) {
-                    const long long i1 = hess_fourier_idx(p, m, i, order, max_size1);
-                    const long long i2 = hess_fourier_idx(p, m, j, order, max_size2);
+                    const long long i1 = hess_fourier_idx(p, 0, i, order, max_size1);
+                    const long long i2 = hess_fourier_idx(p, 0, j, order, max_size2);
                     const T c2 = cos2[i2];
                     const T s2 = sin2[i2];
                     ang_m += cos1[i1] * c2 + sin1[i1] * s2;
@@ -541,8 +541,26 @@ __device__ T hess_scalar_and_grad_amu(
                         dang_m += dcos1[i1 * na3 + amu] * c2 + dsin1[i1 * na3 + amu] * s2;
                     }
                 }
-                angular += ang_m * spf;
-                d_angular += dang_m * spf;
+                angular = ang_m * spf;
+                d_angular = dang_m * spf;
+            } else {
+                for (int m = 0; m < order; m += 2) {
+                    const T spf = s_prefactor[m];
+                    T ang_m = Math<T>::zero();
+                    T dang_m = Math<T>::zero();
+                    for (int p = 0; p < pmax; ++p) {
+                        const long long i1 = hess_fourier_idx(p, m, i, order, max_size1);
+                        const long long i2 = hess_fourier_idx(p, m, j, order, max_size2);
+                        const T c2 = cos2[i2];
+                        const T s2 = sin2[i2];
+                        ang_m += cos1[i1] * c2 + sin1[i1] * s2;
+                        if (want_grad) {
+                            dang_m += dcos1[i1 * na3 + amu] * c2 + dsin1[i1 * na3 + amu] * s2;
+                        }
+                    }
+                    angular += ang_m * spf;
+                    d_angular += dang_m * spf;
+                }
             }
 
             const T ksi2_j = ksi2[j];
@@ -1318,11 +1336,37 @@ __global__ void hess_self_scalar_kernel(
     const T *dsinp = dsinp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
     T *dss = dss_out + static_cast<long long>(flat_idx) * na3_max;
 
-    T ss = Math<T>::zero();
+    // Value-only self-scalar once (thread 0); grads in parallel — avoids na3× rescans.
+    if (threadIdx.x == 0) {
+        T *no_ds = nullptr;
+        ss_out[flat_idx] = hess_scalar_and_grad_amu(
+            x_chan,
+            max_size,
+            n_neigh,
+            ksi,
+            dksi,
+            dri,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp,
+            x_chan,
+            max_size,
+            n_neigh,
+            ksi,
+            cosp,
+            sinp,
+            params,
+            s_prefactor,
+            na3,
+            -1,
+            no_ds
+        );
+    }
     for (int amu = static_cast<int>(threadIdx.x); amu < na3;
          amu += static_cast<int>(blockDim.x)) {
         T ds = Math<T>::zero();
-        ss = hess_scalar_and_grad_amu(
+        (void)hess_scalar_and_grad_amu(
             x_chan,
             max_size,
             n_neigh,
@@ -1346,11 +1390,6 @@ __global__ void hess_self_scalar_kernel(
             &ds
         );
         dss[amu] = T(2) * ds;
-    }
-
-    // na3 >= 3, so thread 0 always ran at least one iteration.
-    if (threadIdx.x == 0) {
-        ss_out[flat_idx] = ss;
     }
 }
 
@@ -1390,11 +1429,18 @@ struct HessWorkspace {
     HessSideBuffers<T> b;
     HessSideBuffers<T> b_train;
     const T *b_train_x = nullptr;
+    const int *b_train_n = nullptr;
+    const int *b_train_nn = nullptr;
+    const T *b_train_coords = nullptr;
+    const int *b_train_z = nullptr;
+    unsigned long long b_train_fp = 0;
     int b_train_nm = 0;
     int b_train_max = 0;
     int b_train_pmax = -1;
     T *s_prefactor = nullptr;
     size_t s_prefactor_cap = 0;
+    T *rfp_dense = nullptr;
+    size_t rfp_dense_cap = 0;
     int *z_present = nullptr;
     int *z_to_idx = nullptr;
 };
@@ -1503,31 +1549,7 @@ template <typename T>
 void hess_upload_offsets(
     HessSideBuffers<T> &buf, const int *d_n, int nm, int expected_dim, const char *what
 ) {
-    if (nm == 1) {
-        int h_offset[2] = {0, expected_dim};
-        ensure_capacity(&buf.offset, &buf.offset_cap, 2);
-        CUDA_CHECK(cudaMemcpy(buf.offset, h_offset, 2 * sizeof(int), cudaMemcpyHostToDevice));
-        return;
-    }
-    std::vector<int> h_n(static_cast<size_t>(nm));
-    CUDA_CHECK(cudaMemcpy(
-        h_n.data(), d_n, static_cast<size_t>(nm) * sizeof(int), cudaMemcpyDeviceToHost
-    ));
-    std::vector<int> h_offset(static_cast<size_t>(nm) + 1, 0);
-    for (int a = 0; a < nm; ++a) {
-        h_offset[static_cast<size_t>(a) + 1] =
-            h_offset[static_cast<size_t>(a)] + h_n[static_cast<size_t>(a)] * 3;
-    }
-    if (h_offset[static_cast<size_t>(nm)] != expected_dim) {
-        throw std::invalid_argument(what);
-    }
-    ensure_capacity(&buf.offset, &buf.offset_cap, static_cast<size_t>(nm) + 1);
-    CUDA_CHECK(cudaMemcpy(
-        buf.offset,
-        h_offset.data(),
-        (static_cast<size_t>(nm) + 1) * sizeof(int),
-        cudaMemcpyHostToDevice
-    ));
+    fill_coord_offsets_device(d_n, &buf.offset, &buf.offset_cap, nm, expected_dim, what);
 }
 
 template <typename T>
@@ -1589,8 +1611,14 @@ void kernel_gaussian_hessian_cu_impl(
         CUDA_CHECK(cudaMalloc(&ws.z_to_idx, 256 * sizeof(int)));
     }
 
-    const bool train_hit = !lower_triangle && d_x2 == ws.b_train_x && nm2 == ws.b_train_nm &&
-                           max_size2 == ws.b_train_max;
+    // Pointer + content fingerprint: allocator may reuse the whole tensor set.
+    const size_t x2_n =
+        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
+    const unsigned long long x2_fp = buffer_fingerprint(d_x2, x2_n);
+    const bool train_hit = !lower_triangle && d_x2 == ws.b_train_x && d_n2 == ws.b_train_n &&
+                           d_nn2 == ws.b_train_nn && d_coords2 == ws.b_train_coords &&
+                           d_z2 == ws.b_train_z && nm2 == ws.b_train_nm &&
+                           max_size2 == ws.b_train_max && x2_fp == ws.b_train_fp;
     int pmax = 0;
     if (train_hit) {
         pmax = ws.b_train_pmax;
@@ -1707,11 +1735,20 @@ void kernel_gaussian_hessian_cu_impl(
                 ws.s_prefactor
             );
             ws.b_train_x = d_x2;
+            ws.b_train_n = d_n2;
+            ws.b_train_nn = d_nn2;
+            ws.b_train_coords = d_coords2;
+            ws.b_train_z = d_z2;
+            ws.b_train_fp = x2_fp;
             ws.b_train_nm = nm2;
             ws.b_train_max = max_size2;
             ws.b_train_pmax = pmax;
         }
         b_side = &ws.b_train;
+    } else if (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 && d_coords1 == d_coords2 &&
+               d_z1 == d_z2 && nm1 == nm2 && max_size1 == max_size2 && d_a_rows == d_b_cols) {
+        // Symmetric path with identical sides: reuse A-side precompute (halves VRAM + time).
+        b_side = &ws.a;
     } else {
         hess_upload_offsets(
             ws.b, d_n2, nm2, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
@@ -1833,8 +1870,14 @@ void hess_full_matvec_fused_launch(
 ) {
     HessWorkspace<T> &ws = hess_workspace<T>();
 
-    const bool train_hit = d_x_tr == ws.b_train_x && nm_tr == ws.b_train_nm &&
-                           max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax;
+    const size_t x_tr_n = static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * 5 *
+                          static_cast<size_t>(max_size_tr);
+    const unsigned long long x_tr_fp = buffer_fingerprint(d_x_tr, x_tr_n);
+    const bool train_hit = d_x_tr == ws.b_train_x && d_n_tr == ws.b_train_n &&
+                           d_nn_tr == ws.b_train_nn && d_coords_tr == ws.b_train_coords &&
+                           d_z_tr == ws.b_train_z && nm_tr == ws.b_train_nm &&
+                           max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax &&
+                           x_tr_fp == ws.b_train_fp;
     if (!train_hit) {
         hess_upload_offsets(
             ws.b_train, d_n_tr, nm_tr, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
@@ -1855,6 +1898,11 @@ void hess_full_matvec_fused_launch(
             d_s_prefactor
         );
         ws.b_train_x = d_x_tr;
+        ws.b_train_n = d_n_tr;
+        ws.b_train_nn = d_nn_tr;
+        ws.b_train_coords = d_coords_tr;
+        ws.b_train_z = d_z_tr;
+        ws.b_train_fp = x_tr_fp;
         ws.b_train_nm = nm_tr;
         ws.b_train_max = max_size_tr;
         ws.b_train_pmax = pmax;
@@ -2194,16 +2242,16 @@ static void kernel_gaussian_hessian_symm_rfp_cu_impl(
         throw std::invalid_argument("kernel_gaussian_hessian_symm_rfp: empty molecule set");
     }
 
-    T *d_hess = nullptr;
+    HessWorkspace<T> &ws = hess_workspace<T>();
     const size_t hess_n = static_cast<size_t>(d_rows) * static_cast<size_t>(d_rows);
-    CUDA_CHECK(cudaMalloc(&d_hess, hess_n * sizeof(T)));
+    ensure_capacity(&ws.rfp_dense, &ws.rfp_dense_cap, hess_n);
     kernel_gaussian_hessian_symm_cu(
         d_x,
         d_n,
         d_nn,
         d_coords,
         d_z,
-        d_hess,
+        ws.rfp_dense,
         sigma,
         nm,
         max_size,
@@ -2222,9 +2270,8 @@ static void kernel_gaussian_hessian_symm_rfp_cu_impl(
 
     const long long rfp_n = static_cast<long long>(d_rows) * (d_rows + 1) / 2;
     const int grid = static_cast<int>((rfp_n + kHessRfpPackBlock - 1) / kHessRfpPackBlock);
-    hess_pack_rfp_kernel<<<grid, kHessRfpPackBlock>>>(d_hess, d_rfp_out, d_rows);
+    hess_pack_rfp_kernel<<<grid, kHessRfpPackBlock>>>(ws.rfp_dense, d_rfp_out, d_rows);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaFree(d_hess));
 }
 
 void kernel_gaussian_hessian_symm_cu(

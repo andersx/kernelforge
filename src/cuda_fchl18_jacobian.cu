@@ -1336,11 +1336,37 @@ __global__ void jac_self_scalar_a_kernel(
     const T *dsinp = dsinp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
     T *dss = dss_out + static_cast<long long>(flat_idx) * na3_max;
 
-    T ss = Math<T>::zero();
+    // Value-only self-scalar once (thread 0); grads in parallel — avoids na3× rescans.
+    if (threadIdx.x == 0) {
+        T *no_ds = nullptr;
+        ss_out[flat_idx] = scalar_noalchemy_and_grad_amu(
+            x_chan,
+            max_size1,
+            n_neigh,
+            ksi,
+            dksi,
+            dri,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp,
+            x_chan,
+            max_size1,
+            n_neigh,
+            ksi,
+            cosp,
+            sinp,
+            params,
+            s_prefactor,
+            na3,
+            -1,
+            no_ds
+        );
+    }
     for (int amu = static_cast<int>(threadIdx.x); amu < na3;
          amu += static_cast<int>(blockDim.x)) {
         T ds = Math<T>::zero();
-        ss = scalar_noalchemy_and_grad_amu(
+        (void)scalar_noalchemy_and_grad_amu(
             x_chan,
             max_size1,
             n_neigh,
@@ -1364,11 +1390,6 @@ __global__ void jac_self_scalar_a_kernel(
             &ds
         );
         dss[amu] = T(2) * ds;
-    }
-
-    // na3 >= 3, so thread 0 always ran at least one iteration.
-    if (threadIdx.x == 0) {
-        ss_out[flat_idx] = ss;
     }
 }
 
@@ -1932,6 +1953,9 @@ struct JacWorkspace {
     size_t tr_nbr1_cap = 0;
     size_t tr_row_offset_cap = 0;
     const T *tr_A_x = nullptr;
+    const int *tr_A_n = nullptr;
+    const int *tr_A_nn = nullptr;
+    unsigned long long tr_A_fp = 0;
     int tr_A_nm = 0;
     int tr_A_max = 0;
     int tr_A_pmax = -1;
@@ -1956,6 +1980,9 @@ struct JacWorkspace {
     size_t tr_pack_cos2_cap = 0;
     size_t tr_pack_sin2_cap = 0;
     const T *tr_B_x = nullptr;
+    const int *tr_B_n = nullptr;
+    const int *tr_B_nn = nullptr;
+    unsigned long long tr_B_fp = 0;
     int tr_B_nm = 0;
     int tr_B_max = 0;
     int tr_B_pmax = -1;
@@ -2016,10 +2043,18 @@ void kernel_gaussian_jacobian_cu_impl(
 
     const bool cache_A = (nm1 > nm2);
     const bool cache_B = (nm2 > nm1);
-    const bool hit_A =
-        cache_A && d_x1 == ws.tr_A_x && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max;
-    const bool hit_B =
-        cache_B && d_x2 == ws.tr_B_x && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max;
+    const size_t x1_n =
+        static_cast<size_t>(nm1) * static_cast<size_t>(max_size1) * 5 * static_cast<size_t>(max_size1);
+    const size_t x2_n =
+        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
+    const unsigned long long x1_fp = buffer_fingerprint(d_x1, x1_n);
+    const unsigned long long x2_fp = buffer_fingerprint(d_x2, x2_n);
+    const bool hit_A = cache_A && d_x1 == ws.tr_A_x && d_n1 == ws.tr_A_n &&
+                       d_nn1 == ws.tr_A_nn && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max &&
+                       x1_fp == ws.tr_A_fp;
+    const bool hit_B = cache_B && d_x2 == ws.tr_B_x && d_n2 == ws.tr_B_n &&
+                       d_nn2 == ws.tr_B_nn && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max &&
+                       x2_fp == ws.tr_B_fp;
 
     const size_t n_atoms1 = static_cast<size_t>(nm1) * max_size1;
     const size_t n_atoms2 = static_cast<size_t>(nm2) * max_size2;
@@ -2098,29 +2133,14 @@ void kernel_gaussian_jacobian_cu_impl(
 
     // Row offsets: molecule a owns rows [offset[a], offset[a] + 3*n1[a]).
     if (!hit_A) {
-        std::vector<int> h_row_offset(static_cast<size_t>(nm1) + 1, 0);
-        if (nm1 == 1) {
-            h_row_offset[1] = d_a_rows;
-        } else {
-            std::vector<int> h_n1(static_cast<size_t>(nm1));
-            CUDA_CHECK(cudaMemcpy(
-                h_n1.data(), d_n1, static_cast<size_t>(nm1) * sizeof(int), cudaMemcpyDeviceToHost
-            ));
-            for (int a = 0; a < nm1; ++a) {
-                h_row_offset[static_cast<size_t>(a) + 1] =
-                    h_row_offset[static_cast<size_t>(a)] + h_n1[static_cast<size_t>(a)] * 3;
-            }
-            if (h_row_offset[static_cast<size_t>(nm1)] != d_a_rows) {
-                throw std::invalid_argument("jacobian output rows must equal 3 * sum(n1)");
-            }
-        }
-        ensure_capacity(&ws.row_offset, &ws.row_offset_cap, static_cast<size_t>(nm1) + 1);
-        CUDA_CHECK(cudaMemcpy(
-            ws.row_offset,
-            h_row_offset.data(),
-            (static_cast<size_t>(nm1) + 1) * sizeof(int),
-            cudaMemcpyHostToDevice
-        ));
+        fill_coord_offsets_device(
+            d_n1,
+            &ws.row_offset,
+            &ws.row_offset_cap,
+            nm1,
+            d_a_rows,
+            "jacobian output rows must equal 3 * sum(n1)"
+        );
     }
 
     const size_t na3_max = static_cast<size_t>(max_size1) * 3;
@@ -2147,10 +2167,14 @@ void kernel_gaussian_jacobian_cu_impl(
     ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms1);
     ensure_capacity(&ws.dss1, &ws.dss1_cap, dss1_need);
     ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi1_need);
-    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
-    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp2_need);
-    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp2_need);
-    ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms2);
+    const bool same_ab_early =
+        (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 && nm1 == nm2 && max_size1 == max_size2);
+    if (!same_ab_early) {
+        ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
+        ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp2_need);
+        ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp2_need);
+        ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms2);
+    }
 
     const bool pack_b = (sizeof(T) == 4);
     const size_t pack_bj_need =
@@ -2289,33 +2313,46 @@ void kernel_gaussian_jacobian_cu_impl(
         CUDA_CHECK(cudaGetLastError());
         if (cache_A) {
             ws.tr_A_x = d_x1;
+            ws.tr_A_n = d_n1;
+            ws.tr_A_nn = d_nn1;
+            ws.tr_A_fp = x1_fp;
             ws.tr_A_nm = nm1;
             ws.tr_A_max = max_size1;
             ws.tr_A_pmax = pmax;
         }
     }
 
+    // Identical A/B representations: reuse A light buffers (ksi/cos/sin/ss).
+    const bool same_ab = same_ab_early;
+
     if (!hit_B) {
-        CUDA_CHECK(cudaMemset(cosp2, 0, cosp2_need * sizeof(T)));
-        CUDA_CHECK(cudaMemset(sinp2, 0, cosp2_need * sizeof(T)));
-        jac_precompute_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-            d_x2, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params, ws.z_to_idx
-        );
-        CUDA_CHECK(cudaGetLastError());
-        jac_self_scalar_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-            d_x2,
-            d_n2,
-            d_nn2,
-            ksi2,
-            cosp2,
-            sinp2,
-            ss2,
-            nm2,
-            max_size2,
-            params,
-            ws.s_prefactor
-        );
-        CUDA_CHECK(cudaGetLastError());
+        if (same_ab) {
+            ksi2 = ksi1;
+            cosp2 = cosp1;
+            sinp2 = sinp1;
+            ss2 = ss1;
+        } else {
+            CUDA_CHECK(cudaMemset(cosp2, 0, cosp2_need * sizeof(T)));
+            CUDA_CHECK(cudaMemset(sinp2, 0, cosp2_need * sizeof(T)));
+            jac_precompute_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+                d_x2, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params, ws.z_to_idx
+            );
+            CUDA_CHECK(cudaGetLastError());
+            jac_self_scalar_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+                d_x2,
+                d_n2,
+                d_nn2,
+                ksi2,
+                cosp2,
+                sinp2,
+                ss2,
+                nm2,
+                max_size2,
+                params,
+                ws.s_prefactor
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
         if (pack_b) {
             jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
                 d_x2,
@@ -2335,8 +2372,12 @@ void kernel_gaussian_jacobian_cu_impl(
             );
             CUDA_CHECK(cudaGetLastError());
         }
-        if (cache_B) {
+        // Do not cache B when aliased to A — tr_ksi2 was never written.
+        if (cache_B && !same_ab) {
             ws.tr_B_x = d_x2;
+            ws.tr_B_n = d_n2;
+            ws.tr_B_nn = d_nn2;
+            ws.tr_B_fp = x2_fp;
             ws.tr_B_nm = nm2;
             ws.tr_B_max = max_size2;
             ws.tr_B_pmax = pmax;
@@ -2550,12 +2591,17 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
 
     const bool cache_tr_A = (nm_tr > nm_q);
     const bool cache_tr_B = (nm_tr > nm_q);
-    const bool hit_tr_A =
-        cache_tr_A && d_x_tr == ws.tr_A_x && nm_tr == ws.tr_A_nm && max_size_tr == ws.tr_A_max &&
-        pmax == ws.tr_A_pmax;
-    const bool hit_tr_B =
-        cache_tr_B && d_x_tr == ws.tr_B_x && nm_tr == ws.tr_B_nm && max_size_tr == ws.tr_B_max &&
-        pmax == ws.tr_B_pmax;
+    const size_t x_tr_n = static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * 5 *
+                          static_cast<size_t>(max_size_tr);
+    const unsigned long long x_tr_fp = buffer_fingerprint(d_x_tr, x_tr_n);
+    const bool hit_tr_A = cache_tr_A && d_x_tr == ws.tr_A_x && d_n_tr == ws.tr_A_n &&
+                          d_nn_tr == ws.tr_A_nn && nm_tr == ws.tr_A_nm &&
+                          max_size_tr == ws.tr_A_max && pmax == ws.tr_A_pmax &&
+                          x_tr_fp == ws.tr_A_fp;
+    const bool hit_tr_B = cache_tr_B && d_x_tr == ws.tr_B_x && d_n_tr == ws.tr_B_n &&
+                          d_nn_tr == ws.tr_B_nn && nm_tr == ws.tr_B_nm &&
+                          max_size_tr == ws.tr_B_max && pmax == ws.tr_B_pmax &&
+                          x_tr_fp == ws.tr_B_fp;
 
     if (cache_tr_A) {
         ensure_capacity(&ws.tr_ksi1, &ws.tr_ksi1_cap, ksi_tr_need);
@@ -2780,27 +2826,19 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         );
         CUDA_CHECK(cudaGetLastError());
         if (cache_tr_A) {
-            if (!hit_tr_A) {
-                std::vector<int> h_row_offset(static_cast<size_t>(nm_tr) + 1, 0);
-                std::vector<int> h_n_tr(static_cast<size_t>(nm_tr));
-                CUDA_CHECK(cudaMemcpy(
-                    h_n_tr.data(),
-                    d_n_tr,
-                    static_cast<size_t>(nm_tr) * sizeof(int),
-                    cudaMemcpyDeviceToHost
-                ));
-                for (int a = 0; a < nm_tr; ++a) {
-                    h_row_offset[static_cast<size_t>(a) + 1] =
-                        h_row_offset[static_cast<size_t>(a)] + h_n_tr[static_cast<size_t>(a)] * 3;
-                }
-                CUDA_CHECK(cudaMemcpy(
-                    tr_row_off,
-                    h_row_offset.data(),
-                    (static_cast<size_t>(nm_tr) + 1) * sizeof(int),
-                    cudaMemcpyHostToDevice
-                ));
-            }
+            fill_coord_offsets_device(
+                d_n_tr,
+                &ws.tr_row_offset,
+                &ws.tr_row_offset_cap,
+                nm_tr,
+                -1,
+                "jacobian_t train row offsets"
+            );
+            tr_row_off = ws.tr_row_offset;
             ws.tr_A_x = d_x_tr;
+            ws.tr_A_n = d_n_tr;
+            ws.tr_A_nn = d_nn_tr;
+            ws.tr_A_fp = x_tr_fp;
             ws.tr_A_nm = nm_tr;
             ws.tr_A_max = max_size_tr;
             ws.tr_A_pmax = pmax;
@@ -2858,6 +2896,9 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         }
         if (cache_tr_B) {
             ws.tr_B_x = d_x_tr;
+            ws.tr_B_n = d_n_tr;
+            ws.tr_B_nn = d_nn_tr;
+            ws.tr_B_fp = x_tr_fp;
             ws.tr_B_nm = nm_tr;
             ws.tr_B_max = max_size_tr;
             ws.tr_B_pmax = pmax;

@@ -38,6 +38,52 @@ int get_fchl18_three_body_weight_mode() { return get_fchl18_three_body_weight_mo
 
 namespace {
 
+__global__ void fill_coord_offsets_kernel(
+    const int *n, int *offset, int nm, int expected_dim, int *ok
+) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) {
+        return;
+    }
+    offset[0] = 0;
+    for (int a = 0; a < nm; ++a) {
+        offset[a + 1] = offset[a] + n[a] * 3;
+    }
+    if (ok != nullptr) {
+        *ok = (expected_dim < 0 || offset[nm] == expected_dim) ? 1 : 0;
+    }
+}
+
+}  // namespace
+
+void fill_coord_offsets_device(
+    const int *d_n, int **d_offset, size_t *offset_cap, int nm, int expected_dim, const char *what
+) {
+    if (nm == 1 && expected_dim >= 0) {
+        int h_offset[2] = {0, expected_dim};
+        ensure_capacity(d_offset, offset_cap, 2);
+        CUDA_CHECK(cudaMemcpy(*d_offset, h_offset, 2 * sizeof(int), cudaMemcpyHostToDevice));
+        return;
+    }
+    ensure_capacity(d_offset, offset_cap, static_cast<size_t>(nm) + 1);
+    if (expected_dim < 0) {
+        fill_coord_offsets_kernel<<<1, 1>>>(d_n, *d_offset, nm, -1, nullptr);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+    int *d_ok = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_ok, sizeof(int)));
+    fill_coord_offsets_kernel<<<1, 1>>>(d_n, *d_offset, nm, expected_dim, d_ok);
+    CUDA_CHECK(cudaGetLastError());
+    int h_ok = 0;
+    CUDA_CHECK(cudaMemcpy(&h_ok, d_ok, sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_ok));
+    if (!h_ok) {
+        throw std::invalid_argument(what);
+    }
+}
+
+namespace {
+
 constexpr int kPairBlockSize = 128;
 
 // Slim params for hot scalar/rect kernels — no z_to_idx[256] by value
@@ -348,7 +394,20 @@ __device__ inline T angular_dot_generic(
     return angular;
 }
 
-// Hot path for default fourier_order=2: fully unrolled m, contiguous p stride.
+// Hot path for fourier_order=1 (QML / kernelbench default): contiguous p stride.
+template <typename T>
+__device__ inline T angular_dot_order1(
+    const T *cos1, const T *sin1, const T *cos2, const T *sin2, int pmax, T s0
+) {
+    T ang0 = Math<T>::zero();
+#pragma unroll 4
+    for (int p = 0; p < pmax; ++p) {
+        ang0 += cos1[p] * cos2[p] + sin1[p] * sin2[p];
+    }
+    return ang0 * s0;
+}
+
+// Hot path for fourier_order=2: fully unrolled m, contiguous p stride.
 // cos1/sin1 already point at neighbor-i's Fourier block; cos2/sin2 at neighbor-j.
 template <typename T>
 __device__ inline T angular_dot_order2(
@@ -404,8 +463,9 @@ __device__ T scalar_noalchemy_precomputed(
     const T ang_scale = params.true_angular_scale;
     const T s0 = params.s0;
     const T s1 = params.s1;
+    const bool order1 = (order == 1);
     const bool order2 = (order == 2);
-    const int fblock = pmax * (order2 ? 2 : order);
+    const int fblock = pmax * order;
 
     T aadist = Math<T>::one();
 
@@ -447,7 +507,11 @@ __device__ T scalar_noalchemy_precomputed(
 
                 const T d = Math<T>::exp_(r2 * inv_width);
                 T angular;
-                if (order2) {
+                if (order1) {
+                    const T *cos2_j = cos2 + static_cast<long long>(jj) * fblock;
+                    const T *sin2_j = sin2 + static_cast<long long>(jj) * fblock;
+                    angular = angular_dot_order1(cos1_i, sin1_i, cos2_j, sin2_j, pmax, s0);
+                } else if (order2) {
                     const T *cos2_j = cos2 + static_cast<long long>(jj) * fblock;
                     const T *sin2_j = sin2 + static_cast<long long>(jj) * fblock;
                     angular = angular_dot_order2(cos1_i, sin1_i, cos2_j, sin2_j, pmax, s0, s1);
@@ -508,19 +572,21 @@ __global__ void sort_neighbors_by_z_kernel(
 
     const int a = flat_idx / max_size;
     const int i = flat_idx % max_size;
-    const T *src = atom_slice(x_in, max_size, a, i);
-    T *dst = x_out + static_cast<long long>(flat_idx) * 5 * max_size;
-    for (int channel = 0; channel < 5; ++channel) {
-        for (int k = 0; k < max_size; ++k) {
-            dst[channel * max_size + k] = src[channel * max_size + k];
-        }
-    }
-
+    // Padding atoms past n[a] are never read by later kernels — skip the copy.
     if (i >= n[a]) {
         return;
     }
 
+    const T *src = atom_slice(x_in, max_size, a, i);
+    T *dst = x_out + static_cast<long long>(flat_idx) * 5 * max_size;
     const int n_neigh = nn[flat_idx];
+    // Only copy occupied neighbor slots (plus leave center at k=0).
+    for (int channel = 0; channel < 5; ++channel) {
+        for (int k = 0; k < n_neigh; ++k) {
+            dst[channel * max_size + k] = src[channel * max_size + k];
+        }
+    }
+
     T *z_chan = dst + max_size;
     for (int k = 2; k < n_neigh; ++k) {
         // Save all channels of key k before shifting (dst[...,k] is overwritten).
@@ -563,21 +629,15 @@ __global__ void precompute_atom_data_kernel(
 
     const int a = flat_idx / max_size;
     const int i = flat_idx % max_size;
+    // Padding atoms are never consumed by pair kernels — skip zero-fills.
+    if (i >= n[a]) {
+        return;
+    }
+
     const long long fstride = fourier_atom_stride(params.pmax, params.fourier_order, max_size);
     T *ksi_out = ksi + static_cast<long long>(flat_idx) * max_size;
     T *cosp_out = cosp + static_cast<long long>(flat_idx) * fstride;
     T *sinp_out = sinp + static_cast<long long>(flat_idx) * fstride;
-
-    if (i >= n[a]) {
-        for (int k = 0; k < max_size; ++k) {
-            ksi_out[k] = Math<T>::zero();
-        }
-        for (long long t = 0; t < fstride; ++t) {
-            cosp_out[t] = Math<T>::zero();
-            sinp_out[t] = Math<T>::zero();
-        }
-        return;
-    }
 
     const T *atom_chan = atom_slice(x, max_size, a, i);
     const int n_neigh = nn[flat_idx];
@@ -781,18 +841,9 @@ __global__ void __launch_bounds__(128, 8) kernel_gaussian_rect_precomputed_kerne
         kab += Math<T>::exp_((sii + sjj - T(2) * s12) * params.inv_sigma2);
     }
 
-    __shared__ T smem[kPairBlockSize];
-    const int tid = static_cast<int>(threadIdx.x);
-    smem[tid] = kab;
-    __syncthreads();
-    for (int stride = static_cast<int>(blockDim.x) / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            smem[tid] += smem[tid + stride];
-        }
-        __syncthreads();
-    }
-    if (tid == 0) {
-        kernel_out[static_cast<long long>(a) * nm2 + b] = smem[0];
+    kab = block_reduce_sum(kab);
+    if (threadIdx.x == 0) {
+        kernel_out[static_cast<long long>(a) * nm2 + b] = kab;
     }
 }
 
@@ -876,20 +927,10 @@ __global__ void __launch_bounds__(128, 8) kernel_gaussian_symm_precomputed_kerne
         kab += Math<T>::exp_((sii + sjj - T(2) * s12) * params.inv_sigma2);
     }
 
-    __shared__ T smem[kPairBlockSize];
-    const int tid = static_cast<int>(threadIdx.x);
-    smem[tid] = kab;
-    __syncthreads();
-    for (int stride = static_cast<int>(blockDim.x) / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            smem[tid] += smem[tid + stride];
-        }
-        __syncthreads();
-    }
-    if (tid == 0) {
-        const T val = smem[0];
-        kernel_out[static_cast<long long>(a) * nm + b] = val;
-        kernel_out[static_cast<long long>(b) * nm + a] = val;
+    kab = block_reduce_sum(kab);
+    if (threadIdx.x == 0) {
+        kernel_out[static_cast<long long>(a) * nm + b] = kab;
+        kernel_out[static_cast<long long>(b) * nm + a] = kab;
     }
 }
 
@@ -972,18 +1013,9 @@ __global__ void __launch_bounds__(128, 8) kernel_gaussian_symm_rfp_precomputed_k
         kab += Math<T>::exp_((sii + sjj - T(2) * s12) * params.inv_sigma2);
     }
 
-    __shared__ T smem[kPairBlockSize];
-    const int tid = static_cast<int>(threadIdx.x);
-    smem[tid] = kab;
-    __syncthreads();
-    for (int stride = static_cast<int>(blockDim.x) / 2; stride > 0; stride >>= 1) {
-        if (tid < stride) {
-            smem[tid] += smem[tid + stride];
-        }
-        __syncthreads();
-    }
-    if (tid == 0) {
-        kernel_rfp_out[rfp_index_upper_N_dev(nm, a, b)] = smem[0];
+    kab = block_reduce_sum(kab);
+    if (threadIdx.x == 0) {
+        kernel_rfp_out[rfp_index_upper_N_dev(nm, a, b)] = kab;
     }
 }
 
@@ -1022,6 +1054,10 @@ void kernel_gaussian_rect_cu_impl(
     }
     CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
 
+    // Identical query/train tensors (common in benches): share sorted + precomputed side.
+    const bool same_side = (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 && nm1 == nm2 &&
+                            max_size1 == max_size2);
+
     const int block_ss = 256;
     const size_t ss1_need = static_cast<size_t>(nm1) * max_size1;
     const size_t ss2_need = static_cast<size_t>(nm2) * max_size2;
@@ -1031,24 +1067,30 @@ void kernel_gaussian_rect_cu_impl(
     const int grid_ss2 = static_cast<int>((ss2_need + block_ss - 1) / block_ss);
 
     ensure_capacity(&ws.x1_sorted, &ws.x1_sorted_cap, x1_need);
-    ensure_capacity(&ws.x2_sorted, &ws.x2_sorted_cap, x2_need);
     sort_neighbors_by_z_kernel<<<grid_ss1, block_ss>>>(
         d_x1, d_n1, d_nn1, ws.x1_sorted, nm1, max_size1
     );
     CUDA_CHECK(cudaGetLastError());
-    sort_neighbors_by_z_kernel<<<grid_ss2, block_ss>>>(
-        d_x2, d_n2, d_nn2, ws.x2_sorted, nm2, max_size2
-    );
-    CUDA_CHECK(cudaGetLastError());
+    T *x2_sorted = ws.x1_sorted;
+    if (!same_side) {
+        ensure_capacity(&ws.x2_sorted, &ws.x2_sorted_cap, x2_need);
+        sort_neighbors_by_z_kernel<<<grid_ss2, block_ss>>>(
+            d_x2, d_n2, d_nn2, ws.x2_sorted, nm2, max_size2
+        );
+        CUDA_CHECK(cudaGetLastError());
+        x2_sorted = ws.x2_sorted;
+    }
 
     mark_elements_kernel<<<grid_ss1, block_ss>>>(
         ws.x1_sorted, d_n1, d_nn1, nm1, max_size1, ws.z_present
     );
     CUDA_CHECK(cudaGetLastError());
-    mark_elements_kernel<<<grid_ss2, block_ss>>>(
-        ws.x2_sorted, d_n2, d_nn2, nm2, max_size2, ws.z_present
-    );
-    CUDA_CHECK(cudaGetLastError());
+    if (!same_side) {
+        mark_elements_kernel<<<grid_ss2, block_ss>>>(
+            x2_sorted, d_n2, d_nn2, nm2, max_size2, ws.z_present
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     int h_z_present[256];
     CUDA_CHECK(cudaMemcpy(h_z_present, ws.z_present, 256 * sizeof(int), cudaMemcpyDeviceToHost));
@@ -1095,22 +1137,35 @@ void kernel_gaussian_rect_cu_impl(
         ss2_need * static_cast<size_t>(params.pmax) * fourier_order * max_size2;
 
     ensure_capacity(&ws.ss1, &ws.ss1_cap, ss1_need);
-    ensure_capacity(&ws.ss2, &ws.ss2_cap, ss2_need);
     ensure_capacity(&ws.ksi1, &ws.ksi1_cap, ksi1_need);
-    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
     ensure_capacity(&ws.cosp1, &ws.cosp1_cap, f1_need);
     ensure_capacity(&ws.sinp1, &ws.sinp1_cap, f1_need);
-    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, f2_need);
-    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, f2_need);
+
+    T *ss2 = ws.ss1;
+    T *ksi2 = ws.ksi1;
+    T *cosp2 = ws.cosp1;
+    T *sinp2 = ws.sinp1;
+    if (!same_side) {
+        ensure_capacity(&ws.ss2, &ws.ss2_cap, ss2_need);
+        ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
+        ensure_capacity(&ws.cosp2, &ws.cosp2_cap, f2_need);
+        ensure_capacity(&ws.sinp2, &ws.sinp2_cap, f2_need);
+        ss2 = ws.ss2;
+        ksi2 = ws.ksi2;
+        cosp2 = ws.cosp2;
+        sinp2 = ws.sinp2;
+    }
 
     precompute_atom_data_kernel<<<grid_ss1, block_ss>>>(
         ws.x1_sorted, d_n1, d_nn1, ws.ksi1, ws.cosp1, ws.sinp1, nm1, max_size1, params
     );
     CUDA_CHECK(cudaGetLastError());
-    precompute_atom_data_kernel<<<grid_ss2, block_ss>>>(
-        ws.x2_sorted, d_n2, d_nn2, ws.ksi2, ws.cosp2, ws.sinp2, nm2, max_size2, params
-    );
-    CUDA_CHECK(cudaGetLastError());
+    if (!same_side) {
+        precompute_atom_data_kernel<<<grid_ss2, block_ss>>>(
+            x2_sorted, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     const ScalarParams<T> scalar_params = params.to_scalar();
     const HotParams<T> hot_params = to_hot(scalar_params);
@@ -1137,37 +1192,39 @@ void kernel_gaussian_rect_cu_impl(
         ws.s_prefactor
     );
     CUDA_CHECK(cudaGetLastError());
-    compute_self_scalars_precomputed_kernel<<<grid_ss2, block_ss>>>(
-        ws.x2_sorted,
-        d_n2,
-        d_nn2,
-        ws.ksi2,
-        ws.cosp2,
-        ws.sinp2,
-        ws.ss2,
-        nm2,
-        max_size2,
-        hot_params,
-        ws.s_prefactor
-    );
-    CUDA_CHECK(cudaGetLastError());
+    if (!same_side) {
+        compute_self_scalars_precomputed_kernel<<<grid_ss2, block_ss>>>(
+            x2_sorted,
+            d_n2,
+            d_nn2,
+            ksi2,
+            cosp2,
+            sinp2,
+            ss2,
+            nm2,
+            max_size2,
+            hot_params,
+            ws.s_prefactor
+        );
+        CUDA_CHECK(cudaGetLastError());
+    }
 
     const long long n_pairs = static_cast<long long>(nm1) * nm2;
     kernel_gaussian_rect_precomputed_kernel<<<static_cast<int>(n_pairs), kPairBlockSize>>>(
         ws.x1_sorted,
-        ws.x2_sorted,
+        x2_sorted,
         d_n1,
         d_n2,
         d_nn1,
         d_nn2,
         ws.ss1,
-        ws.ss2,
+        ss2,
         ws.ksi1,
-        ws.ksi2,
+        ksi2,
         ws.cosp1,
         ws.sinp1,
-        ws.cosp2,
-        ws.sinp2,
+        cosp2,
+        sinp2,
         d_kernel_out,
         nm1,
         nm2,
