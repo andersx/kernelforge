@@ -45,6 +45,10 @@ from kernelforge.local_kernels import (
     kernel_gaussian_hessian_symm_rfp,
     kernel_gaussian_jacobian,
     kernel_gaussian_jacobian_t,
+    kernel_gaussian_local_compute_alpha_desc,
+    kernel_gaussian_local_full_matvec,
+    kernel_gaussian_local_hessian_matvec,
+    kernel_gaussian_local_jacobian_t_matvec,
     kernel_gaussian_symm,
     kernel_gaussian_symm_rfp,
 )
@@ -561,6 +565,122 @@ def benchmark_global_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
         elapsed,
         f"global::kernel_gaussian_full_symm_rfp"
         f" (N={n}, rep_size={rep_size}, n_atoms={n_atoms}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_compute_alpha_desc() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_compute_alpha_desc (Ethanol invdist, N=5000)."""
+    data = load_ethanol_raw_data()
+    n = 5000
+    R = data["R"][:n]
+
+    dX_list = []
+    for r in R:
+        _, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        dX_list.append(dx)
+    dX = np.array(dX_list)
+    ncoords = dX.shape[1]
+    rng = np.random.default_rng(42)
+    alpha = rng.standard_normal((n, ncoords))
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_compute_alpha_desc(dX, alpha)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_compute_alpha_desc (N={n}, n_atoms={ncoords // 3}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_hessian_matvec() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_hessian_matvec (Ethanol invdist, N=1000)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    ncoords = dX.shape[1]
+    sigma = 2.5
+    rng = np.random.default_rng(42)
+    alpha = rng.standard_normal((n, ncoords))
+    alpha_desc = global_kernels.kernel_gaussian_compute_alpha_desc(dX, alpha)
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_hessian_matvec(X, dX, X, alpha_desc, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_hessian_matvec"
+        f" (N={n}, rep_size={X.shape[1]}, n_atoms={ncoords // 3}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_jacobian_t_matvec() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_jacobian_t_matvec (Ethanol invdist, N=1000)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    ncoords = dX.shape[1]
+    sigma = 2.5
+    rng = np.random.default_rng(42)
+    alpha = rng.standard_normal((n, ncoords))
+    alpha_desc = global_kernels.kernel_gaussian_compute_alpha_desc(dX, alpha)
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_jacobian_t_matvec(X, X, alpha_desc, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_jacobian_t_matvec"
+        f" (N={n}, rep_size={X.shape[1]}, n_atoms={ncoords // 3}, Ethanol)",
+    )
+
+
+def benchmark_global_kernel_gaussian_full_matvec() -> tuple[float, str]:
+    """Benchmark global kernel_gaussian_full_matvec (Ethanol invdist, N=1000)."""
+    data = load_ethanol_raw_data()
+    n = 1000
+    R = data["R"][:n]
+
+    X_list, dX_list = [], []
+    for r in R:
+        x, dx = invdist_repr.inverse_distance_upper_and_jacobian(r)
+        X_list.append(x)
+        dX_list.append(dx)
+    X = np.array(X_list)
+    dX = np.array(dX_list)
+    ncoords = dX.shape[1]
+    sigma = 2.5
+    rng = np.random.default_rng(42)
+    alpha_E = rng.standard_normal(n)
+    alpha_F = rng.standard_normal((n, ncoords))
+    alpha_desc_F = global_kernels.kernel_gaussian_compute_alpha_desc(dX, alpha_F)
+
+    start = time.perf_counter()
+    _ = global_kernels.kernel_gaussian_full_matvec(X, dX, X, alpha_E, alpha_desc_F, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return (
+        elapsed,
+        f"global::kernel_gaussian_full_matvec"
+        f" (N={n}, rep_size={X.shape[1]}, n_atoms={ncoords // 3}, Ethanol)",
     )
 
 
@@ -1309,6 +1429,88 @@ def benchmark_local_kernel_gaussian_full_symm_rfp() -> tuple[float, str]:
     return elapsed, f"local::kernel_gaussian_full_symm_rfp (Ethanol, N={n})"
 
 
+def benchmark_local_kernel_gaussian_compute_alpha_desc() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_local_compute_alpha_desc (Ethanol, N=1000)."""
+    n = 1000
+    data = prepare_ethanol_fchl19(n)
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    naq = int(np.sum(N)) * 3
+    rng = np.random.default_rng(42)
+    alpha = rng.standard_normal(naq)
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_local_compute_alpha_desc(dX, Q, N, alpha)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_local_compute_alpha_desc (Ethanol, N={n})"
+
+
+def benchmark_local_kernel_gaussian_hessian_matvec() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_local_hessian_matvec (Ethanol, N=500)."""
+    n = 500
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
+    naq = int(np.sum(N)) * 3
+    rng = np.random.default_rng(42)
+    alpha = rng.standard_normal(naq)
+    alpha_desc = kernel_gaussian_local_compute_alpha_desc(dX, Q, N, alpha)
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_local_hessian_matvec(X, dX, X, alpha_desc, Q, Q, N, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_local_hessian_matvec (Ethanol, N={n})"
+
+
+def benchmark_local_kernel_gaussian_jacobian_t_matvec() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_local_jacobian_t_matvec (Ethanol, N=500)."""
+    n = 500
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
+    naq = int(np.sum(N)) * 3
+    rng = np.random.default_rng(42)
+    alpha = rng.standard_normal(naq)
+    alpha_desc = kernel_gaussian_local_compute_alpha_desc(dX, Q, N, alpha)
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_local_jacobian_t_matvec(X, X, alpha_desc, Q, Q, N, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_local_jacobian_t_matvec (Ethanol, N={n})"
+
+
+def benchmark_local_kernel_gaussian_full_matvec() -> tuple[float, str]:
+    """Benchmark local kernel_gaussian_local_full_matvec (Ethanol, N=500)."""
+    n = 500
+    data = prepare_ethanol_fchl19(n)
+    X = data["X"][:n]
+    dX = data["dX"][:n]
+    Q = data["Q"][:n]
+    N = data["N"][:n]
+    sigma = 2.5
+    naq = int(np.sum(N)) * 3
+    rng = np.random.default_rng(42)
+    alpha_E = rng.standard_normal(n)
+    alpha_F = rng.standard_normal(naq)
+    alpha_desc_F = kernel_gaussian_local_compute_alpha_desc(dX, Q, N, alpha_F)
+
+    start = time.perf_counter()
+    _ = kernel_gaussian_local_full_matvec(X, dX, X, alpha_desc_F, alpha_E, Q, Q, N, N, sigma)
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"local::kernel_gaussian_local_full_matvec (Ethanol, N={n})"
+
+
 @cache
 def _make_ethanol_inputs(
     n: int, D: int, seed: int = 42, include_dX: bool = False
@@ -1706,6 +1908,21 @@ _FCHL18_KERNEL_ARGS = {
     "cut_start": 0.5,
     "cut_distance": 1e6,
     "fourier_order": 2,
+    "use_atm": True,
+}
+
+# Hessian / full / matvec defaults (match binding defaults)
+_FCHL18_HESSIAN_ARGS = {
+    "two_body_width": 0.1,
+    "two_body_scaling": 2.0,
+    "two_body_power": 6.0,
+    "three_body_width": 3.0,
+    "three_body_scaling": 2.0,
+    "three_body_power": 3.0,
+    "cut_start": 1.0,
+    "cut_distance": 1e6,
+    "fourier_order": 1,
+    "use_atm": False,
 }
 
 
@@ -1713,15 +1930,30 @@ _FCHL18_KERNEL_ARGS = {
 def _prepare_fchl18_qm7b(n: int) -> dict[str, Any]:
     """Generate FCHL18 representations for the first n QM7b molecules (cached)."""
     data = load_qm7b_raw_data()
-    coords_list = list(data["R"][:n])
+    coords_list = [np.asarray(r, dtype=np.float64) for r in data["R"][:n]]
     z_list = [zi.astype(np.int32) for zi in data["z"][:n]]
+    max_size = max(len(z) for z in z_list)
     x, na, nn = fchl18_repr.generate(
         coords_list,
         z_list,
-        max_size=23,
+        max_size=max_size,
         cut_distance=_FCHL18_KERNEL_ARGS["cut_distance"],
     )
-    return {"x": x, "na": na, "nn": nn}
+    return {"x": x, "na": na, "nn": nn, "coords": coords_list, "z": z_list, "max_size": max_size}
+
+
+def _pad_fchl18_coords_z(
+    coords_list: list[NDArray[Any]], z_list: list[NDArray[Any]], max_size: int
+) -> tuple[NDArray[np.float64], NDArray[np.int32]]:
+    """Pad coordinate / nuclear-charge lists to (nm, max_size, 3) and (nm, max_size)."""
+    nm = len(coords_list)
+    coords_pad = np.zeros((nm, max_size, 3), dtype=np.float64)
+    z_pad = np.zeros((nm, max_size), dtype=np.int32)
+    for i, (c, z) in enumerate(zip(coords_list, z_list, strict=True)):
+        n_atoms = len(z)
+        coords_pad[i, :n_atoms] = c
+        z_pad[i, :n_atoms] = z
+    return coords_pad, z_pad
 
 
 def benchmark_fchl18_kernel_gaussian_symm_qm7b() -> tuple[float, str]:
@@ -1731,21 +1963,7 @@ def benchmark_fchl18_kernel_gaussian_symm_qm7b() -> tuple[float, str]:
     x, na, nn = d["x"], d["na"], d["nn"]
 
     start = time.perf_counter()
-    _ = fchl18_kernel.kernel_gaussian_symm(
-        x,
-        na,
-        nn,
-        sigma=2.5,
-        two_body_width=_FCHL18_KERNEL_ARGS["two_body_width"],
-        two_body_scaling=_FCHL18_KERNEL_ARGS["two_body_scaling"],
-        two_body_power=_FCHL18_KERNEL_ARGS["two_body_power"],
-        three_body_width=_FCHL18_KERNEL_ARGS["three_body_width"],
-        three_body_scaling=_FCHL18_KERNEL_ARGS["three_body_scaling"],
-        three_body_power=_FCHL18_KERNEL_ARGS["three_body_power"],
-        cut_start=_FCHL18_KERNEL_ARGS["cut_start"],
-        cut_distance=_FCHL18_KERNEL_ARGS["cut_distance"],
-        fourier_order=int(_FCHL18_KERNEL_ARGS["fourier_order"]),
-    )
+    _ = fchl18_kernel.kernel_gaussian_symm(x, na, nn, sigma=2.5, **_FCHL18_KERNEL_ARGS)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"fchl18::kernel_gaussian_symm (QM7b, N={n})"
@@ -1758,27 +1976,747 @@ def benchmark_fchl18_kernel_gaussian_qm7b() -> tuple[float, str]:
     x, na, nn = d["x"], d["na"], d["nn"]
 
     start = time.perf_counter()
-    _ = fchl18_kernel.kernel_gaussian(
-        x,
-        x,
-        na,
-        na,
-        nn,
-        nn,
-        sigma=2.5,
-        two_body_width=_FCHL18_KERNEL_ARGS["two_body_width"],
-        two_body_scaling=_FCHL18_KERNEL_ARGS["two_body_scaling"],
-        two_body_power=_FCHL18_KERNEL_ARGS["two_body_power"],
-        three_body_width=_FCHL18_KERNEL_ARGS["three_body_width"],
-        three_body_scaling=_FCHL18_KERNEL_ARGS["three_body_scaling"],
-        three_body_power=_FCHL18_KERNEL_ARGS["three_body_power"],
-        cut_start=_FCHL18_KERNEL_ARGS["cut_start"],
-        cut_distance=_FCHL18_KERNEL_ARGS["cut_distance"],
-        fourier_order=int(_FCHL18_KERNEL_ARGS["fourier_order"]),
-    )
+    _ = fchl18_kernel.kernel_gaussian(x, x, na, na, nn, nn, sigma=2.5, **_FCHL18_KERNEL_ARGS)
     elapsed = (time.perf_counter() - start) * 1000
 
     return elapsed, f"fchl18::kernel_gaussian (QM7b, N={n}x{n})"
+
+
+def benchmark_fchl18_kernel_gaussian_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_symm_rfp on QM7b (N=1000)."""
+    n = 1000
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_symm_rfp(
+        d["coords"], d["z"], sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_symm_rfp (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_gradient_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_gradient (1 query vs N=1000 train, QM7b)."""
+    n = 1000
+    d = _prepare_fchl18_qm7b(n)
+    coords_a = d["coords"][0]
+    z_a = d["z"][0]
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_gradient(
+        coords_a, z_a, d["x"], d["na"], d["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_gradient (QM7b, 1x{n})"
+
+
+def benchmark_fchl18_kernel_gaussian_jacobian_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_jacobian on QM7b (N=100)."""
+    n = 100
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_jacobian(
+        d["coords"], d["z"], d["x"], d["na"], d["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_jacobian (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_jacobian_t_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_jacobian_t on QM7b (N=100)."""
+    n = 100
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_jacobian_t(
+        d["coords"], d["z"], d["x"], d["na"], d["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_jacobian_t (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_hessian_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_hessian on QM7b (N=40)."""
+    n = 40
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_hessian(
+        d["coords"], d["z"], d["coords"], d["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_hessian (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_hessian_symm_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_hessian_symm on QM7b (N=40)."""
+    n = 40
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_hessian_symm(
+        d["coords"], d["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_hessian_symm (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_hessian_symm_rfp on QM7b (N=40)."""
+    n = 40
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_hessian_symm_rfp(
+        d["coords"], d["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_hessian_symm_rfp (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_full_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_full on QM7b (N=25)."""
+    n = 25
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_full(
+        d["coords"], d["z"], d["coords"], d["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_full (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_full_symm_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_full_symm on QM7b (N=25)."""
+    n = 25
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_full_symm(
+        d["coords"], d["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_full_symm (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_full_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_full_symm_rfp on QM7b (N=25)."""
+    n = 25
+    d = _prepare_fchl18_qm7b(n)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_full_symm_rfp(
+        d["coords"], d["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_full_symm_rfp (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_hessian_matvec_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_hessian_matvec on QM7b (N=100)."""
+    n = 100
+    d = _prepare_fchl18_qm7b(n)
+    d_total = int(np.sum(d["na"])) * 3
+    rng = np.random.default_rng(42)
+    alpha_F = rng.standard_normal(d_total)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_hessian_matvec(
+        d["coords"], d["z"], d["coords"], d["z"], alpha_F, sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_hessian_matvec (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_jacobian_t_matvec on QM7b (N=100)."""
+    n = 100
+    d = _prepare_fchl18_qm7b(n)
+    d_total = int(np.sum(d["na"])) * 3
+    rng = np.random.default_rng(42)
+    alpha_F = rng.standard_normal(d_total)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_jacobian_t_matvec(
+        d["coords"],
+        d["z"],
+        d["x"],
+        d["na"],
+        d["nn"],
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_jacobian_t_matvec (QM7b, N={n})"
+
+
+def benchmark_fchl18_kernel_gaussian_full_matvec_qm7b() -> tuple[float, str]:
+    """Benchmark fchl18::kernel_gaussian_full_matvec on QM7b (N=100)."""
+    n = 100
+    d = _prepare_fchl18_qm7b(n)
+    d_total = int(np.sum(d["na"])) * 3
+    rng = np.random.default_rng(42)
+    alpha_E = rng.standard_normal(n)
+    alpha_F = rng.standard_normal(d_total)
+
+    start = time.perf_counter()
+    _ = fchl18_kernel.kernel_gaussian_full_matvec(
+        d["coords"],
+        d["z"],
+        d["coords"],
+        d["z"],
+        alpha_E,
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"fchl18::kernel_gaussian_full_matvec (QM7b, N={n})"
+
+
+# ---------------------------------------------------------------------------
+# cuda_fchl18_kernel benchmarks — require GPU + cuda_fchl18_kernel build
+# ---------------------------------------------------------------------------
+
+
+def _cuda_fchl18_tensors(n: int) -> dict[str, Any]:
+    """Prepare padded FCHL18 QM7b tensors on CUDA (float32)."""
+    import torch
+
+    d = _prepare_fchl18_qm7b(n)
+    coords_pad, z_pad = _pad_fchl18_coords_z(d["coords"], d["z"], d["max_size"])
+    return {
+        "x": torch.from_numpy(d["x"].astype(np.float32)).cuda(),
+        "na": torch.from_numpy(d["na"].astype(np.int32)).cuda(),
+        "nn": torch.from_numpy(d["nn"].astype(np.int32)).cuda(),
+        "coords": torch.from_numpy(coords_pad.astype(np.float32)).cuda(),
+        "z": torch.from_numpy(z_pad.astype(np.int32)).cuda(),
+        "n_atoms_total": int(np.sum(d["na"])),
+    }
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian on QM7b (N=1000)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 1000
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian(
+        t["x"], t["x"], t["na"], t["na"], t["nn"], t["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian(
+        t["x"], t["x"], t["na"], t["na"], t["nn"], t["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian (QM7b, N={n}x{n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_symm_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_symm on QM7b (N=1000)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 1000
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_symm(t["x"], t["na"], t["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_symm(t["x"], t["na"], t["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_symm (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_symm_rfp on QM7b (N=1000)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 1000
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_symm_rfp(t["x"], t["na"], t["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_symm_rfp(t["x"], t["na"], t["nn"], sigma=2.5, **_FCHL18_KERNEL_ARGS)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_symm_rfp (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_gradient_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_gradient (1 query vs N=1000, QM7b)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 1000
+    t = _cuda_fchl18_tensors(n)
+    x1 = t["x"][:1]
+    n1 = t["na"][:1]
+    nn1 = t["nn"][:1]
+    c1 = t["coords"][:1]
+    z1 = t["z"][:1]
+
+    _ = _cf.kernel_gaussian_gradient(
+        x1, t["x"], n1, t["na"], nn1, t["nn"], c1, z1, sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_gradient(
+        x1, t["x"], n1, t["na"], nn1, t["nn"], c1, z1, sigma=2.5, **_FCHL18_KERNEL_ARGS
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_gradient (QM7b, 1x{n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_jacobian_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_jacobian on QM7b (N=100)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 100
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_jacobian(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_KERNEL_ARGS,
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_jacobian(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_KERNEL_ARGS,
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_jacobian (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_jacobian_t on QM7b (N=100)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 100
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_jacobian_t(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_KERNEL_ARGS,
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_jacobian_t(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_KERNEL_ARGS,
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_jacobian_t (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_hessian_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian on QM7b (N=40)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 40
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_hessian(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_hessian(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_hessian (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian_symm on QM7b (N=40)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 40
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_hessian_symm(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_hessian_symm(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_hessian_symm (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian_symm_rfp on QM7b (N=40)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 40
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_hessian_symm_rfp(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_hessian_symm_rfp(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_hessian_symm_rfp (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_full_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_full on QM7b (N=25)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 25
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_full(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_full(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_full (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_full_symm_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_full_symm on QM7b (N=25)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 25
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_full_symm(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_full_symm(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_full_symm (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_full_symm_rfp_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_full_symm_rfp on QM7b (N=25)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 25
+    t = _cuda_fchl18_tensors(n)
+    _ = _cf.kernel_gaussian_full_symm_rfp(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_full_symm_rfp(
+        t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_HESSIAN_ARGS
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_full_symm_rfp (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_hessian_matvec_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian_matvec on QM7b (N=100)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 100
+    t = _cuda_fchl18_tensors(n)
+    d_total = t["n_atoms_total"] * 3
+    alpha_F = torch.from_numpy(
+        np.random.default_rng(42).standard_normal(d_total).astype(np.float32)
+    ).cuda()
+
+    _ = _cf.kernel_gaussian_hessian_matvec(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_hessian_matvec(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_hessian_matvec (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_jacobian_t_matvec on QM7b (N=100)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 100
+    t = _cuda_fchl18_tensors(n)
+    d_total = t["n_atoms_total"] * 3
+    alpha_F = torch.from_numpy(
+        np.random.default_rng(42).standard_normal(d_total).astype(np.float32)
+    ).cuda()
+
+    _ = _cf.kernel_gaussian_jacobian_t_matvec(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_jacobian_t_matvec(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_jacobian_t_matvec (QM7b, N={n})"
+
+
+def benchmark_cuda_fchl18_kernel_gaussian_full_matvec_qm7b() -> tuple[float, str]:
+    """Benchmark cuda_fchl18::kernel_gaussian_full_matvec on QM7b (N=100)."""
+    import torch
+
+    from kernelforge import cuda_fchl18_kernel as _cf
+
+    n = 100
+    t = _cuda_fchl18_tensors(n)
+    d_total = t["n_atoms_total"] * 3
+    rng = np.random.default_rng(42)
+    alpha_E = torch.from_numpy(rng.standard_normal(n).astype(np.float32)).cuda()
+    alpha_F = torch.from_numpy(rng.standard_normal(d_total).astype(np.float32)).cuda()
+
+    _ = _cf.kernel_gaussian_full_matvec(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        alpha_E,
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    _ = _cf.kernel_gaussian_full_matvec(
+        t["x"],
+        t["x"],
+        t["na"],
+        t["na"],
+        t["nn"],
+        t["nn"],
+        t["coords"],
+        t["z"],
+        t["coords"],
+        t["z"],
+        alpha_E,
+        alpha_F,
+        sigma=2.5,
+        **_FCHL18_HESSIAN_ARGS,
+    )
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) * 1000
+
+    return elapsed, f"cuda_fchl18::kernel_gaussian_full_matvec (QM7b, N={n})"
 
 
 # ---------------------------------------------------------------------------
@@ -2026,6 +2964,14 @@ BENCHMARKS = {
     "global_kernel_gaussian_full": benchmark_global_kernel_gaussian_full,
     "global_kernel_gaussian_full_symm": benchmark_global_kernel_gaussian_full_symm,
     "global_kernel_gaussian_full_symm_rfp": benchmark_global_kernel_gaussian_full_symm_rfp,
+    "global_kernel_gaussian_compute_alpha_desc": (
+        benchmark_global_kernel_gaussian_compute_alpha_desc
+    ),
+    "global_kernel_gaussian_hessian_matvec": benchmark_global_kernel_gaussian_hessian_matvec,
+    "global_kernel_gaussian_jacobian_t_matvec": (
+        benchmark_global_kernel_gaussian_jacobian_t_matvec
+    ),
+    "global_kernel_gaussian_full_matvec": benchmark_global_kernel_gaussian_full_matvec,
     "local_kernel_gaussian_symm": benchmark_local_kernel_gaussian_symm,
     "local_kernel_gaussian_symm_rfp": benchmark_local_kernel_gaussian_symm_rfp,
     "local_kernel_gaussian": benchmark_local_kernel_gaussian,
@@ -2056,6 +3002,12 @@ BENCHMARKS = {
     "local_kernel_gaussian_full": benchmark_local_kernel_gaussian_full,
     "local_kernel_gaussian_full_symm": benchmark_local_kernel_gaussian_full_symm,
     "local_kernel_gaussian_full_symm_rfp": benchmark_local_kernel_gaussian_full_symm_rfp,
+    "local_kernel_gaussian_compute_alpha_desc": (
+        benchmark_local_kernel_gaussian_compute_alpha_desc
+    ),
+    "local_kernel_gaussian_hessian_matvec": benchmark_local_kernel_gaussian_hessian_matvec,
+    "local_kernel_gaussian_jacobian_t_matvec": (benchmark_local_kernel_gaussian_jacobian_t_matvec),
+    "local_kernel_gaussian_full_matvec": benchmark_local_kernel_gaussian_full_matvec,
     "rff_features": benchmark_rff_features,
     "rff_gradient": benchmark_rff_gradient,
     "rff_full": benchmark_rff_full,
@@ -2076,6 +3028,68 @@ BENCHMARKS = {
     "rff_full_gramian_elemental_rfp": benchmark_rff_full_gramian_elemental_rfp,
     "fchl18_kernel_gaussian_symm_qm7b": benchmark_fchl18_kernel_gaussian_symm_qm7b,
     "fchl18_kernel_gaussian_qm7b": benchmark_fchl18_kernel_gaussian_qm7b,
+    "fchl18_kernel_gaussian_symm_rfp_qm7b": benchmark_fchl18_kernel_gaussian_symm_rfp_qm7b,
+    "fchl18_kernel_gaussian_gradient_qm7b": benchmark_fchl18_kernel_gaussian_gradient_qm7b,
+    "fchl18_kernel_gaussian_jacobian_qm7b": benchmark_fchl18_kernel_gaussian_jacobian_qm7b,
+    "fchl18_kernel_gaussian_jacobian_t_qm7b": benchmark_fchl18_kernel_gaussian_jacobian_t_qm7b,
+    "fchl18_kernel_gaussian_hessian_qm7b": benchmark_fchl18_kernel_gaussian_hessian_qm7b,
+    "fchl18_kernel_gaussian_hessian_symm_qm7b": (
+        benchmark_fchl18_kernel_gaussian_hessian_symm_qm7b
+    ),
+    "fchl18_kernel_gaussian_hessian_symm_rfp_qm7b": (
+        benchmark_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b
+    ),
+    "fchl18_kernel_gaussian_full_qm7b": benchmark_fchl18_kernel_gaussian_full_qm7b,
+    "fchl18_kernel_gaussian_full_symm_qm7b": benchmark_fchl18_kernel_gaussian_full_symm_qm7b,
+    "fchl18_kernel_gaussian_full_symm_rfp_qm7b": (
+        benchmark_fchl18_kernel_gaussian_full_symm_rfp_qm7b
+    ),
+    "fchl18_kernel_gaussian_hessian_matvec_qm7b": (
+        benchmark_fchl18_kernel_gaussian_hessian_matvec_qm7b
+    ),
+    "fchl18_kernel_gaussian_jacobian_t_matvec_qm7b": (
+        benchmark_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b
+    ),
+    "fchl18_kernel_gaussian_full_matvec_qm7b": (benchmark_fchl18_kernel_gaussian_full_matvec_qm7b),
+    "cuda_fchl18_kernel_gaussian_qm7b": benchmark_cuda_fchl18_kernel_gaussian_qm7b,
+    "cuda_fchl18_kernel_gaussian_symm_qm7b": benchmark_cuda_fchl18_kernel_gaussian_symm_qm7b,
+    "cuda_fchl18_kernel_gaussian_symm_rfp_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_symm_rfp_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_gradient_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_gradient_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_jacobian_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_jacobian_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_jacobian_t_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_hessian_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_hessian_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_hessian_symm_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_full_qm7b": benchmark_cuda_fchl18_kernel_gaussian_full_qm7b,
+    "cuda_fchl18_kernel_gaussian_full_symm_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_full_symm_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_full_symm_rfp_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_full_symm_rfp_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_hessian_matvec_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_hessian_matvec_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b
+    ),
+    "cuda_fchl18_kernel_gaussian_full_matvec_qm7b": (
+        benchmark_cuda_fchl18_kernel_gaussian_full_matvec_qm7b
+    ),
     "cuda_fchl19_repr_qm7b": benchmark_cuda_fchl19_repr_qm7b,
     "cuda_fchl19_repr_qm7b_n200": benchmark_cuda_fchl19_repr_qm7b_n200,
     "cuda_fchl19_grad_ethanol_n1000": benchmark_cuda_fchl19_grad_ethanol_n1000,
@@ -2102,6 +3116,10 @@ SUITES = {
         "global_kernel_gaussian_full",
         "global_kernel_gaussian_full_symm",
         "global_kernel_gaussian_full_symm_rfp",
+        "global_kernel_gaussian_compute_alpha_desc",
+        "global_kernel_gaussian_hessian_matvec",
+        "global_kernel_gaussian_jacobian_t_matvec",
+        "global_kernel_gaussian_full_matvec",
     ],
     "local-kernels": [
         "local_kernel_gaussian_symm",
@@ -2118,6 +3136,10 @@ SUITES = {
         "local_kernel_gaussian_full",
         "local_kernel_gaussian_full_symm",
         "local_kernel_gaussian_full_symm_rfp",
+        "local_kernel_gaussian_compute_alpha_desc",
+        "local_kernel_gaussian_hessian_matvec",
+        "local_kernel_gaussian_jacobian_t_matvec",
+        "local_kernel_gaussian_full_matvec",
     ],
     "cuda-global-kernels": [
         "cuda_global_kernel_gaussian_symm_rfp",
@@ -2164,6 +3186,37 @@ SUITES = {
 SUITES["fchl18"] = [
     "fchl18_kernel_gaussian_symm_qm7b",
     "fchl18_kernel_gaussian_qm7b",
+    "fchl18_kernel_gaussian_symm_rfp_qm7b",
+    "fchl18_kernel_gaussian_gradient_qm7b",
+    "fchl18_kernel_gaussian_jacobian_qm7b",
+    "fchl18_kernel_gaussian_jacobian_t_qm7b",
+    "fchl18_kernel_gaussian_hessian_qm7b",
+    "fchl18_kernel_gaussian_hessian_symm_qm7b",
+    "fchl18_kernel_gaussian_hessian_symm_rfp_qm7b",
+    "fchl18_kernel_gaussian_full_qm7b",
+    "fchl18_kernel_gaussian_full_symm_qm7b",
+    "fchl18_kernel_gaussian_full_symm_rfp_qm7b",
+    "fchl18_kernel_gaussian_hessian_matvec_qm7b",
+    "fchl18_kernel_gaussian_jacobian_t_matvec_qm7b",
+    "fchl18_kernel_gaussian_full_matvec_qm7b",
+]
+
+SUITES["cuda-fchl18"] = [
+    "cuda_fchl18_kernel_gaussian_qm7b",
+    "cuda_fchl18_kernel_gaussian_symm_qm7b",
+    "cuda_fchl18_kernel_gaussian_symm_rfp_qm7b",
+    "cuda_fchl18_kernel_gaussian_gradient_qm7b",
+    "cuda_fchl18_kernel_gaussian_jacobian_qm7b",
+    "cuda_fchl18_kernel_gaussian_jacobian_t_qm7b",
+    "cuda_fchl18_kernel_gaussian_hessian_qm7b",
+    "cuda_fchl18_kernel_gaussian_hessian_symm_qm7b",
+    "cuda_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b",
+    "cuda_fchl18_kernel_gaussian_full_qm7b",
+    "cuda_fchl18_kernel_gaussian_full_symm_qm7b",
+    "cuda_fchl18_kernel_gaussian_full_symm_rfp_qm7b",
+    "cuda_fchl18_kernel_gaussian_hessian_matvec_qm7b",
+    "cuda_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b",
+    "cuda_fchl18_kernel_gaussian_full_matvec_qm7b",
 ]
 
 SUITES["cuda-representations"] = [
