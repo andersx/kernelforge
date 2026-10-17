@@ -63,11 +63,8 @@ static void decay_matrix(
 }
 
 // Compute full pairwise distance matrix (natoms x natoms, row-major)
-static std::vector<double> pairwise_distances(
-    const std::vector<double> &coords, std::size_t natoms
-) {
-    if (coords.size() != natoms * 3)
-        throw std::invalid_argument("coords.size() must equal natoms*3");
+static std::vector<double> pairwise_distances(const double *coords, std::size_t natoms) {
+    if (natoms == 0) throw std::invalid_argument("natoms must be > 0");
     std::vector<double> D(natoms * natoms, 0.0);
     for (std::size_t i = 0; i < natoms; ++i) {
         const double *ri = &coords[3 * i];
@@ -87,15 +84,12 @@ static std::vector<double> pairwise_distances(
 // ==================== FCHL19 Representation Functions ====================
 
 void generate_fchl_acsf(
-    const std::vector<double> &coords, const std::vector<int> &nuclear_z,
+    const double *coords, const int *nuclear_z, std::size_t natoms,
     const std::vector<int> &elements, const std::vector<double> &Rs2,
     const std::vector<double> &Rs3, const std::vector<double> &Ts, double eta2, double eta3,
     double zeta, double rcut, double acut, double two_body_decay, double three_body_decay,
     double three_body_weight, std::vector<double> &rep
 ) {
-    const size_t natoms = nuclear_z.size();
-    if (coords.size() != natoms * 3) throw std::invalid_argument("coords size must be natoms*3");
-
     const size_t nelements = elements.size();
     const size_t nbasis2 = Rs2.size();
     const size_t nbasis3 = Rs3.size();
@@ -306,14 +300,12 @@ void generate_fchl_acsf(
 // rep:  shape (natoms, rep_size) in row-major (flattened to size natoms*rep_size)
 // grad: shape (natoms, rep_size, natoms, 3) flattened to size natoms*rep_size*natoms*3
 void generate_fchl_acsf_and_gradients(
-    const std::vector<double> &coords, const std::vector<int> &nuclear_z,
+    const double *coords, const int *nuclear_z, std::size_t natoms,
     const std::vector<int> &elements, const std::vector<double> &Rs2,
     const std::vector<double> &Rs3, const std::vector<double> &Ts, double eta2, double eta3,
     double zeta, double rcut, double acut, double two_body_decay, double three_body_decay,
     double three_body_weight, std::vector<double> &rep, std::vector<double> &grad
 ) {
-    const size_t natoms = nuclear_z.size();
-    if (coords.size() != natoms * 3) throw std::invalid_argument("coords size must be natoms*3");
     const size_t nelements = elements.size();
     const size_t nbasis2 = Rs2.size();
     const size_t nbasis3 = Rs3.size();

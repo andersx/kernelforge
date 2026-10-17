@@ -66,8 +66,9 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
         std::vector<double> x_mol;
         std::vector<int> nn_mol;
         kf::fchl18::generate_fchl18(
-            mols[a].coords,
-            mols[a].z,
+            mols[a].coords.data(),
+            mols[a].z.data(),
+            mols[a].n_atoms,
             max_size,
             cut_distance,
             x_mol,
@@ -92,9 +93,9 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
         py::gil_scoped_release release;
         // Writes the upper triangle directly into RFP storage (no N*N temporary).
         kf::fchl18::kernel_gaussian_symm_rfp_core(
-            x_all,
-            n_all,
-            nn_all,
+            x_all.data(),
+            n_all.data(),
+            nn_all.data(),
             nm,
             max_size,
             sigma,

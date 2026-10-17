@@ -5,12 +5,12 @@
 //   exploiting symmetry (only lower triangle b <= a computed, then mirrored).
 //   Returns shape (D, D) where D = sum_i n_atoms_i * 3.
 
+#include "fchl18_kernel.hpp"
+#include "fchl18_kernel_common.hpp"
+
 #include <cstring>
 #include <stdexcept>
 #include <vector>
-
-#include "fchl18_kernel.hpp"
-#include "fchl18_kernel_common.hpp"
 
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>

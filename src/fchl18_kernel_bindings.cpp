@@ -28,36 +28,12 @@
 
 namespace py = pybind11;
 
-// ---------------------------------------------------------------------------
-// Helper: convert a 2-D contiguous int32 NumPy array to std::vector<int>
-// ---------------------------------------------------------------------------
-static std::vector<int> as_int_vector_2d(
+static_assert(sizeof(int) == sizeof(int32_t), "int must be 32-bit for zero-copy int32 arrays");
+
+static inline const int *i32_data(
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &arr
 ) {
-    const std::size_t n = static_cast<std::size_t>(arr.size());
-    std::vector<int> out(n);
-    const int32_t *src = arr.data();
-    for (std::size_t i = 0; i < n; ++i)
-        out[i] = static_cast<int>(src[i]);
-    return out;
-}
-
-static std::vector<int> as_int_vector_1d(
-    const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &arr
-) {
-    const std::size_t n = static_cast<std::size_t>(arr.size());
-    std::vector<int> out(n);
-    const int32_t *src = arr.data();
-    for (std::size_t i = 0; i < n; ++i)
-        out[i] = static_cast<int>(src[i]);
-    return out;
-}
-
-static std::vector<double> as_double_vector(
-    const py::array_t<double, py::array::c_style | py::array::forcecast> &arr
-) {
-    const std::size_t n = static_cast<std::size_t>(arr.size());
-    return std::vector<double>(arr.data(), arr.data() + n);
+    return reinterpret_cast<const int *>(arr.data());
 }
 
 // ---------------------------------------------------------------------------
@@ -88,24 +64,17 @@ static py::array_t<double> kernel_gaussian_py(
     const int nm2 = static_cast<int>(x2.shape(0));
     const int max_size2 = static_cast<int>(x2.shape(1));
 
-    auto x1_v = as_double_vector(x1);
-    auto x2_v = as_double_vector(x2);
-    auto n1_v = as_int_vector_1d(n1);
-    auto n2_v = as_int_vector_1d(n2);
-    auto nn1_v = as_int_vector_2d(nn1);
-    auto nn2_v = as_int_vector_2d(nn2);
-
     py::array_t<double> K({(py::ssize_t)nm1, (py::ssize_t)nm2});
 
     {
         py::gil_scoped_release release;
         kf::fchl18::kernel_gaussian(
-            x1_v,
-            x2_v,
-            n1_v,
-            n2_v,
-            nn1_v,
-            nn2_v,
+            x1.data(),
+            x2.data(),
+            i32_data(n1),
+            i32_data(n2),
+            i32_data(nn1),
+            i32_data(nn2),
             nm1,
             nm2,
             max_size1,
@@ -145,18 +114,14 @@ static py::array_t<double> kernel_gaussian_symm_py(
     const int nm = static_cast<int>(x.shape(0));
     const int max_size = static_cast<int>(x.shape(1));
 
-    auto x_v = as_double_vector(x);
-    auto n_v = as_int_vector_1d(n);
-    auto nn_v = as_int_vector_2d(nn);
-
     py::array_t<double> K({(py::ssize_t)nm, (py::ssize_t)nm});
 
     {
         py::gil_scoped_release release;
         kf::fchl18::kernel_gaussian_symm(
-            x_v,
-            n_v,
-            nn_v,
+            x.data(),
+            i32_data(n),
+            i32_data(nn),
             nm,
             max_size,
             sigma,
@@ -210,39 +175,16 @@ static py::array_t<double> kernel_gaussian_gradient_py(
     const int nm2 = static_cast<int>(x2.shape(0));
     const int max_size2 = static_cast<int>(x2.shape(1));
 
-    // Convert coords_A to flat vector (n_atoms_A * 3)
-    std::vector<double> coords_v(static_cast<std::size_t>(n_atoms_A) * 3);
-    {
-        auto r = coords_A.unchecked<2>();
-        for (int i = 0; i < n_atoms_A; ++i) {
-            coords_v[i * 3 + 0] = r(i, 0);
-            coords_v[i * 3 + 1] = r(i, 1);
-            coords_v[i * 3 + 2] = r(i, 2);
-        }
-    }
-
-    // Convert z_A
-    std::vector<int> z_v(n_atoms_A);
-    {
-        auto r = z_A.unchecked<1>();
-        for (int i = 0; i < n_atoms_A; ++i)
-            z_v[i] = static_cast<int>(r(i));
-    }
-
-    auto x2_v = as_double_vector(x2);
-    auto n2_v = as_int_vector_1d(n2);
-    auto nn2_v = as_int_vector_2d(nn2);
-
     py::array_t<double> grad({(py::ssize_t)n_atoms_A, (py::ssize_t)3, (py::ssize_t)nm2});
 
     {
         py::gil_scoped_release release;
         kf::fchl18::kernel_gaussian_gradient(
-            coords_v,
-            z_v,
-            x2_v,
-            n2_v,
-            nn2_v,
+            coords_A.data(),
+            i32_data(z_A),
+            x2.data(),
+            i32_data(n2),
+            i32_data(nn2),
             n_atoms_A,
             nm2,
             max_size2,
@@ -328,10 +270,10 @@ static py::array_t<double> kernel_gaussian_hessian_py(
                 std::vector<double> block(static_cast<std::size_t>(na3A) * na3B, 0.0);
 
                 kf::fchl18::kernel_gaussian_hessian(
-                    ma.coords,
-                    ma.z,
-                    mb.coords,
-                    mb.z,
+                    ma.coords.data(),
+                    ma.z.data(),
+                    mb.coords.data(),
+                    mb.z.data(),
                     ma.n_atoms,
                     mb.n_atoms,
                     sigma,
@@ -447,10 +389,6 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
     const int N_test = static_cast<int>(x_test.shape(0));
     const int max_size = static_cast<int>(x_test.shape(1));
 
-    auto x_te_flat = as_double_vector(x_test);
-    auto n_te_flat = as_int_vector_1d(n_test);
-    auto nn_te_flat = as_int_vector_2d(nn_test);
-
     std::vector<std::vector<double>> coords_A(static_cast<std::size_t>(N_train));
     std::vector<std::vector<int>> z_A(static_cast<std::size_t>(N_train));
     int D_total = 0;
@@ -469,9 +407,9 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
         kf::fchl18::kernel_gaussian_jacobian_t(
             coords_A,
             z_A,
-            x_te_flat,
-            n_te_flat,
-            nn_te_flat,
+            x_test.data(),
+            i32_data(n_test),
+            i32_data(nn_test),
             N_test,
             max_size,
             sigma,
@@ -527,8 +465,6 @@ static py::array_t<double> kernel_gaussian_hessian_matvec_py(
 
     py::array_t<double> F({(py::ssize_t)D_A});
     std::memset(F.mutable_data(), 0, sizeof(double) * D_A);
-    auto alpha_vec = std::vector<double>(alpha_F.data(), alpha_F.data() + D_B);
-
     {
         py::gil_scoped_release release;
         kf::fchl18::kernel_gaussian_hessian_matvec(
@@ -536,7 +472,7 @@ static py::array_t<double> kernel_gaussian_hessian_matvec_py(
             z_A,
             coords_B,
             z_B,
-            alpha_vec,
+            alpha_F.data(),
             sigma,
             two_body_scaling,
             two_body_width,
@@ -589,11 +525,6 @@ static py::array_t<double> kernel_gaussian_jacobian_t_matvec_py(
     if (alpha_F.ndim() != 1 || alpha_F.shape(0) != D_B)
         throw std::invalid_argument("alpha_F must have shape (D_B,)");
 
-    auto x_te_flat = as_double_vector(x_test);
-    auto n_te_flat = as_int_vector_1d(n_test);
-    auto nn_te_flat = as_int_vector_2d(nn_test);
-    auto alpha_vec = std::vector<double>(alpha_F.data(), alpha_F.data() + D_B);
-
     py::array_t<double> E({(py::ssize_t)N_test});
     std::memset(E.mutable_data(), 0, sizeof(double) * N_test);
 
@@ -602,12 +533,12 @@ static py::array_t<double> kernel_gaussian_jacobian_t_matvec_py(
         kf::fchl18::kernel_gaussian_jacobian_t_matvec(
             coords_B,
             z_B,
-            x_te_flat,
-            n_te_flat,
-            nn_te_flat,
+            x_test.data(),
+            i32_data(n_test),
+            i32_data(nn_test),
             N_test,
             max_size,
-            alpha_vec,
+            alpha_F.data(),
             sigma,
             two_body_scaling,
             two_body_width,

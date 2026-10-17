@@ -24,9 +24,9 @@ namespace fchl18 {
 //
 // Fortran-equivalent: generate_fchl18 from fchl_representations.py
 void generate_fchl18(
-    const std::vector<double> &coords,  // (n_atoms, 3) row-major
-    const std::vector<int> &nuclear_z,  // (n_atoms)
-    int max_size, double cut_distance,
+    const double *coords,  // (n_atoms, 3) row-major
+    const int *nuclear_z,  // (n_atoms)
+    int n_atoms, int max_size, double cut_distance,
     std::vector<double> &x,        // (max_size, 5, max_size) row-major OUT
     std::vector<int> &n_neighbors  // (max_size) OUT
 );
