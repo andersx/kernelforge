@@ -39,7 +39,19 @@ install-linux-mkl-icpx:
 	CC=icx CXX=icpx CMAKE_ARGS="-DKF_USE_NATIVE=ON -DKF_BLAS_VENDOR=MKL" uv pip install -e .[test,dev] --verbose
 
 install-linux-mkl-ilp64-cuda:
-	TORCH_CUDA_ARCH_LIST="$${TORCH_CUDA_ARCH_LIST:-$(if $(TORCH_CUDA_ARCH_LIST),$(TORCH_CUDA_ARCH_LIST),12.0)}" CMAKE_BUILD_PARALLEL_LEVEL="$(NPROC)" CMAKE_ARGS="$(CUDA_LOCAL_FAST_CMAKE_ARGS)" uv pip install -e .[test,dev] --verbose
+	@uv pip install 'torch>=2.2' || { \
+	  echo "error: could not install torch (needed for KF_WITH_CUDA)."; \
+	  exit 1; \
+	}
+	@uv run python -c "import torch; assert torch.cuda.is_available(), 'torch.cuda is not available'" || { \
+	  echo "error: torch imported but CUDA is unavailable (check driver / torch CUDA build)."; \
+	  exit 1; \
+	}
+	CUDA_HOME="$${CUDA_HOME:-/usr/local/cuda}" PATH="$${CUDA_HOME}/bin:$${PATH}" \
+	TORCH_CUDA_ARCH_LIST="$${TORCH_CUDA_ARCH_LIST:-$(if $(TORCH_CUDA_ARCH_LIST),$(TORCH_CUDA_ARCH_LIST),12.0)}" \
+	CMAKE_BUILD_PARALLEL_LEVEL="$(NPROC)" \
+	CMAKE_ARGS="$(CUDA_LOCAL_FAST_CMAKE_ARGS)" \
+	uv pip install -e .[test,dev] --verbose
 
 # Build CPU + companion CUDA wheels into dist/ (split PyPI layout).
 wheel-cpu:

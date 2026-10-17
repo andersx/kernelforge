@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
 project(kernelforge LANGUAGES C CXX)
 
-# C++ standard
+# C++ standard. CPU-only builds stay on C++17; Torch CUDA extensions need C++20
+# (PyTorch >= 2.14 checks __cplusplus and rejects C++17).
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -27,6 +28,10 @@ if(KF_WITH_CUDA)
       "Install a CUDA toolkit / set CMAKE_CUDA_COMPILER, or build with -DKF_WITH_CUDA=OFF.")
   endif()
   enable_language(CUDA)
+  # Torch headers require C++20 for both host (.cpp) and device (.cu) TUs.
+  set(CMAKE_CXX_STANDARD 20)
+  set(CMAKE_CUDA_STANDARD 20)
+  set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
 if(APPLE)
@@ -369,7 +374,8 @@ if(KF_WITH_CUDA)
         CUDA::cublas
         CUDA::cusolver)
 
-      set_property(TARGET cuda_global_kernels PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_global_kernels PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_global_kernels PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_global_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
       # Torch injects nvcc arch flags via TORCH_CUDA_ARCH_LIST and explicitly
       # ignores CMAKE_CUDA_ARCHITECTURES. Disable CMake's own arch emission for
@@ -399,7 +405,8 @@ if(KF_WITH_CUDA)
         kf_blas
         OpenMP::OpenMP_CXX)
 
-      set_property(TARGET cuda_local_kernels PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_local_kernels PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_local_kernels PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_local_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
       set_property(TARGET cuda_local_kernels PROPERTY CUDA_ARCHITECTURES OFF)
 
@@ -425,7 +432,8 @@ if(KF_WITH_CUDA)
         "${TORCH_LIBRARIES}"
         "${_LIBTORCH_PYTHON}")
 
-      set_property(TARGET cuda_fchl18_kernel PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_fchl18_kernel PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_fchl18_kernel PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_fchl18_kernel PROPERTY POSITION_INDEPENDENT_CODE ON)
       set_property(TARGET cuda_fchl18_kernel PROPERTY CUDA_ARCHITECTURES OFF)
 
@@ -448,7 +456,8 @@ if(KF_WITH_CUDA)
         "${TORCH_LIBRARIES}"
         "${_LIBTORCH_PYTHON}")
 
-      set_property(TARGET cuda_fchl18_repr PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_fchl18_repr PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_fchl18_repr PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_fchl18_repr PROPERTY POSITION_INDEPENDENT_CODE ON)
       set_property(TARGET cuda_fchl18_repr PROPERTY CUDA_ARCHITECTURES OFF)
 
@@ -471,7 +480,8 @@ if(KF_WITH_CUDA)
         "${TORCH_LIBRARIES}"
         "${_LIBTORCH_PYTHON}")
 
-      set_property(TARGET cuda_invdist_repr PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_invdist_repr PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_invdist_repr PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_invdist_repr PROPERTY POSITION_INDEPENDENT_CODE ON)
       set_property(TARGET cuda_invdist_repr PROPERTY CUDA_ARCHITECTURES OFF)
 
@@ -500,7 +510,8 @@ if(KF_WITH_CUDA)
         CUDA::cublas
         CUDA::cusolver)
 
-      set_property(TARGET cuda_rff_features PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_rff_features PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_rff_features PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_rff_features PROPERTY POSITION_INDEPENDENT_CODE ON)
       set_property(TARGET cuda_rff_features PROPERTY CUDA_ARCHITECTURES OFF)
 
@@ -523,7 +534,8 @@ if(KF_WITH_CUDA)
         "${TORCH_LIBRARIES}"
         "${_LIBTORCH_PYTHON}")
 
-      set_property(TARGET cuda_fchl19_repr PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_fchl19_repr PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_fchl19_repr PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_fchl19_repr PROPERTY POSITION_INDEPENDENT_CODE ON)
       set_property(TARGET cuda_fchl19_repr PROPERTY CUDA_ARCHITECTURES OFF)
 
@@ -548,7 +560,8 @@ if(KF_WITH_CUDA)
         CUDA::cublas
         CUDA::cusolver)
 
-      set_property(TARGET cuda_solvers PROPERTY CUDA_STANDARD 17)
+      set_property(TARGET cuda_solvers PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_solvers PROPERTY CXX_STANDARD 20)
       set_property(TARGET cuda_solvers PROPERTY POSITION_INDEPENDENT_CODE ON)
       set_property(TARGET cuda_solvers PROPERTY CUDA_ARCHITECTURES OFF)
 
