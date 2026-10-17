@@ -43,18 +43,24 @@ constexpr int kHessMaxNa3 = 384;  // up to 128 atoms per molecule
 constexpr int kHessSharedHMax = 8192;
 constexpr size_t kHessMaxShmemBytes = 48 * 1024;
 
+// How many Hij elements fit in dynamic shared memory after reserving dsA/dsB/dVA/dVB/sij.
+// Previously required strideA*strideB <= kHessSharedHMax, which disabled shared Hij whenever
+// max_size was padded large even if every real molecule had na3*nb3 << cap.
 template <typename T>
 __host__ __device__ inline int hess_shared_h_cap(int strideA, int strideB) {
-    const int n = strideA * strideB;
-    if (n <= 0 || n > kHessSharedHMax) {
+    if (strideA <= 0 || strideB <= 0) {
         return 0;
     }
-    const size_t bytes =
-        sizeof(T) * static_cast<size_t>(2 * strideA + 2 * strideB + n + 1);
-    if (bytes > kHessMaxShmemBytes) {
+    const size_t base =
+        sizeof(T) * static_cast<size_t>(2 * strideA + 2 * strideB + 1);
+    if (base >= kHessMaxShmemBytes) {
         return 0;
     }
-    return n;
+    int cap = static_cast<int>((kHessMaxShmemBytes - base) / sizeof(T));
+    if (cap > kHessSharedHMax) {
+        cap = kHessSharedHMax;
+    }
+    return cap;
 }
 
 // Write H[row,col] into a dense matrix, or F[row] += H[row,col] * alpha_F[col].

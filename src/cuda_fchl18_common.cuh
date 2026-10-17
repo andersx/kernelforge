@@ -229,6 +229,15 @@ void ensure_capacity(T **ptr, size_t *cap, size_t need) {
 }
 
 inline double get_angular_norm2(double t_width) {
+    // Cache by width — the 20k-term sum is identical across FCHL18 calls with fixed hypers.
+    struct Cache {
+        double width = -1.0;
+        double value = 0.0;
+    };
+    static Cache cache;
+    if (cache.width == t_width) {
+        return cache.value;
+    }
     constexpr int limit = 10000;
     constexpr double pi = 3.14159265358979323846;
     double ang_norm2 = 0.0;
@@ -236,7 +245,9 @@ inline double get_angular_norm2(double t_width) {
         const double tn = t_width * n;
         ang_norm2 += std::exp(-(tn * tn)) * (2.0 - 2.0 * std::cos(n * pi));
     }
-    return std::sqrt(ang_norm2 * pi) * 2.0;
+    cache.width = t_width;
+    cache.value = std::sqrt(ang_norm2 * pi) * 2.0;
+    return cache.value;
 }
 
 inline int build_element_map_from_flags(const int *z_present, int *z_to_idx) {

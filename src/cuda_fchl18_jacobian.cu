@@ -2157,58 +2157,21 @@ void kernel_gaussian_jacobian_cu_impl(
     const size_t ksi2_need = n_atoms2 * static_cast<size_t>(max_size2);
     const size_t cosp2_need = n_atoms2 * fstride2;
 
-    ensure_capacity(&ws.ksi1, &ws.ksi1_cap, ksi1_need);
-    ensure_capacity(&ws.dksi1, &ws.dksi1_cap, dksi1_need);
-    ensure_capacity(&ws.dri1, &ws.dri1_cap, dksi1_need);
-    ensure_capacity(&ws.cosp1, &ws.cosp1_cap, cosp1_need);
-    ensure_capacity(&ws.sinp1, &ws.sinp1_cap, cosp1_need);
-    ensure_capacity(&ws.dcosp1, &ws.dcosp1_cap, dcosp1_need);
-    ensure_capacity(&ws.dsinp1, &ws.dsinp1_cap, dcosp1_need);
-    ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms1);
-    ensure_capacity(&ws.dss1, &ws.dss1_cap, dss1_need);
-    ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi1_need);
+    // Allocate into the active pool only — avoid doubling peak when train-cache is on.
     const bool same_ab_early =
         (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 && nm1 == nm2 && max_size1 == max_size2);
-    if (!same_ab_early) {
-        ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
-        ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp2_need);
-        ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp2_need);
-        ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms2);
-    }
 
-    const bool pack_b = (sizeof(T) == 4);
-    const size_t pack_bj_need =
-        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * static_cast<size_t>(max_size2);
-    const size_t pack_f_need = pack_bj_need * static_cast<size_t>(pmax) * fourier_order;
-    if (pack_b) {
-        ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
-        ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
-        ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
-        ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
-        ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
-    }
-
-    T *ksi1 = ws.ksi1;
-    T *dksi1 = ws.dksi1;
-    T *dri1 = ws.dri1;
-    T *cosp1 = ws.cosp1;
-    T *sinp1 = ws.sinp1;
-    T *dcosp1 = ws.dcosp1;
-    T *dsinp1 = ws.dsinp1;
-    T *ss1 = ws.ss1;
-    T *dss1 = ws.dss1;
-    int *nbr1 = ws.nbr1;
+    T *ksi1 = nullptr;
+    T *dksi1 = nullptr;
+    T *dri1 = nullptr;
+    T *cosp1 = nullptr;
+    T *sinp1 = nullptr;
+    T *dcosp1 = nullptr;
+    T *dsinp1 = nullptr;
+    T *ss1 = nullptr;
+    T *dss1 = nullptr;
+    int *nbr1 = nullptr;
     int *row_off = ws.row_offset;
-    T *ksi2 = ws.ksi2;
-    T *cosp2 = ws.cosp2;
-    T *sinp2 = ws.sinp2;
-    T *ss2 = ws.ss2;
-    T *pack_dist2 = ws.pack_dist2;
-    T *pack_z2 = ws.pack_z2;
-    T *pack_ksi2 = ws.pack_ksi2;
-    T *pack_cos2 = ws.pack_cos2;
-    T *pack_sin2 = ws.pack_sin2;
-
     if (cache_A) {
         ensure_capacity(&ws.tr_ksi1, &ws.tr_ksi1_cap, ksi1_need);
         ensure_capacity(&ws.tr_dksi1, &ws.tr_dksi1_cap, dksi1_need);
@@ -2240,28 +2203,99 @@ void kernel_gaussian_jacobian_cu_impl(
                 cudaMemcpyDeviceToDevice
             ));
         }
+    } else {
+        ensure_capacity(&ws.ksi1, &ws.ksi1_cap, ksi1_need);
+        ensure_capacity(&ws.dksi1, &ws.dksi1_cap, dksi1_need);
+        ensure_capacity(&ws.dri1, &ws.dri1_cap, dksi1_need);
+        ensure_capacity(&ws.cosp1, &ws.cosp1_cap, cosp1_need);
+        ensure_capacity(&ws.sinp1, &ws.sinp1_cap, cosp1_need);
+        ensure_capacity(&ws.dcosp1, &ws.dcosp1_cap, dcosp1_need);
+        ensure_capacity(&ws.dsinp1, &ws.dsinp1_cap, dcosp1_need);
+        ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms1);
+        ensure_capacity(&ws.dss1, &ws.dss1_cap, dss1_need);
+        ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi1_need);
+        ksi1 = ws.ksi1;
+        dksi1 = ws.dksi1;
+        dri1 = ws.dri1;
+        cosp1 = ws.cosp1;
+        sinp1 = ws.sinp1;
+        dcosp1 = ws.dcosp1;
+        dsinp1 = ws.dsinp1;
+        ss1 = ws.ss1;
+        dss1 = ws.dss1;
+        nbr1 = ws.nbr1;
     }
-    if (cache_B) {
-        ensure_capacity(&ws.tr_ksi2, &ws.tr_ksi2_cap, ksi2_need);
-        ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp2_need);
-        ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp2_need);
-        ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms2);
-        ksi2 = ws.tr_ksi2;
-        cosp2 = ws.tr_cosp2;
-        sinp2 = ws.tr_sinp2;
-        ss2 = ws.tr_ss2;
-        if (pack_b) {
-            ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_need);
-            ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_need);
-            ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_need);
-            ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_need);
-            ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_need);
-            pack_dist2 = ws.tr_pack_dist2;
-            pack_z2 = ws.tr_pack_z2;
-            pack_ksi2 = ws.tr_pack_ksi2;
-            pack_cos2 = ws.tr_pack_cos2;
-            pack_sin2 = ws.tr_pack_sin2;
+
+    const bool pack_b = (sizeof(T) == 4);
+    const size_t pack_bj_need =
+        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * static_cast<size_t>(max_size2);
+    const size_t pack_f_need = pack_bj_need * static_cast<size_t>(pmax) * fourier_order;
+
+    T *ksi2 = nullptr;
+    T *cosp2 = nullptr;
+    T *sinp2 = nullptr;
+    T *ss2 = nullptr;
+    T *pack_dist2 = nullptr;
+    T *pack_z2 = nullptr;
+    T *pack_ksi2 = nullptr;
+    T *pack_cos2 = nullptr;
+    T *pack_sin2 = nullptr;
+    if (!same_ab_early) {
+        if (cache_B) {
+            ensure_capacity(&ws.tr_ksi2, &ws.tr_ksi2_cap, ksi2_need);
+            ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp2_need);
+            ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp2_need);
+            ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms2);
+            ksi2 = ws.tr_ksi2;
+            cosp2 = ws.tr_cosp2;
+            sinp2 = ws.tr_sinp2;
+            ss2 = ws.tr_ss2;
+            if (pack_b) {
+                ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_need);
+                ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_need);
+                ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_need);
+                ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_need);
+                ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_need);
+                pack_dist2 = ws.tr_pack_dist2;
+                pack_z2 = ws.tr_pack_z2;
+                pack_ksi2 = ws.tr_pack_ksi2;
+                pack_cos2 = ws.tr_pack_cos2;
+                pack_sin2 = ws.tr_pack_sin2;
+            }
+        } else {
+            ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
+            ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp2_need);
+            ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp2_need);
+            ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms2);
+            ksi2 = ws.ksi2;
+            cosp2 = ws.cosp2;
+            sinp2 = ws.sinp2;
+            ss2 = ws.ss2;
+            if (pack_b) {
+                ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
+                ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
+                ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
+                ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
+                ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
+                pack_dist2 = ws.pack_dist2;
+                pack_z2 = ws.pack_z2;
+                pack_ksi2 = ws.pack_ksi2;
+                pack_cos2 = ws.pack_cos2;
+                pack_sin2 = ws.pack_sin2;
+            }
         }
+    } else if (pack_b) {
+        // Aliased A/B still needs a B-layout pack for the fp32 hot path.
+        ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
+        ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
+        ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
+        ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
+        ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
+        pack_dist2 = ws.pack_dist2;
+        pack_z2 = ws.pack_z2;
+        pack_ksi2 = ws.pack_ksi2;
+        pack_cos2 = ws.pack_cos2;
+        pack_sin2 = ws.pack_sin2;
     }
 
     if (!hit_A) {
