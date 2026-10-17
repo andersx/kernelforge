@@ -1921,7 +1921,7 @@ _FCHL18_KERNEL_ARGS: _Fchl18KernelArgs = {
     "three_body_width": float(np.pi),  # ≈ 3.141592653589793
     "three_body_power": 2.0,
     "cut_start": 1.0,
-    "cut_distance": 5.0,
+    "cut_distance": 1e6,
     "fourier_order": 1,
     "use_atm": False,
 }
