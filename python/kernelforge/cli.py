@@ -5,7 +5,7 @@ import urllib.request
 from functools import cache
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 from numpy.typing import NDArray
@@ -1898,7 +1898,20 @@ def benchmark_rff_full_gramian_elemental_rfp() -> tuple[float, str]:
     return elapsed, f"rff::rff_full_gramian_elemental_rfp (N={n_mols}, D={D}, QM7b-like)"
 
 
-_FCHL18_KERNEL_ARGS = {
+class _Fchl18KernelArgs(TypedDict):
+    two_body_scaling: float
+    two_body_width: float
+    two_body_power: float
+    three_body_scaling: float
+    three_body_width: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
+
+_FCHL18_KERNEL_ARGS: _Fchl18KernelArgs = {
     "two_body_width": 0.1,
     "two_body_scaling": 2.0,
     "two_body_power": 6.0,
@@ -1912,7 +1925,7 @@ _FCHL18_KERNEL_ARGS = {
 }
 
 # Hessian / full / matvec defaults (match binding defaults)
-_FCHL18_HESSIAN_ARGS = {
+_FCHL18_HESSIAN_ARGS: _Fchl18KernelArgs = {
     "two_body_width": 0.1,
     "two_body_scaling": 2.0,
     "two_body_power": 6.0,
