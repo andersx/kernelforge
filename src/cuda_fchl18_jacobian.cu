@@ -14,9 +14,9 @@
 // with na3 = 3 * n1[a]; buffers are strided by 3 * max_size1 so a single
 // allocation covers every molecule.
 //
-// The query side is deliberately not Z-sorted (the CPU gradient path is not
-// either): the scalar product uses nested Zi == Zj loops rather than the sorted
-// merge, so both sides may be in arbitrary neighbour order.
+// Query-side neighbours stay in representation order (CPU gradient path). The
+// B-side pack buffers are Z-sorted so the fp32 hot kernel can scan equal-Z
+// runs instead of Zi != Zj continues.
 
 #include "cuda_fchl18_kernel.hpp"
 
@@ -1434,6 +1434,24 @@ __device__ inline void jac_accum_ang_tile8(
     }
 }
 
+// Warp-reduce then one shared atomic per warp (vs 32) — cuts smem atomic traffic.
+template <typename T>
+__device__ inline T jac_warp_sum(T v) {
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        v += __shfl_down_sync(0xffffffffu, v, offset);
+    }
+    return v;
+}
+
+template <typename T>
+__device__ inline void jac_warp_atomic_add(T *addr, T v) {
+    v = jac_warp_sum(v);
+    if ((static_cast<int>(threadIdx.x) & 31) == 0) {
+        atomicAdd(addr, v);
+    }
+}
+
 
 // JacStoreLayout: 0 = RowsAreCoords J[d_a_rows, nm2]; 1 = ColsAreCoords J[nm2, d_a_rows].
 template <typename T>
@@ -1608,25 +1626,12 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
     const T ang_scale = params.true_angular_scale;
 
     const int n_atom_pairs = (i_hi - i_lo) * nb;
-    for (int p = tid; p < n_atom_pairs; p += static_cast<int>(blockDim.x)) {
-        const int i = i_lo + p / nb;
-        const int j = p - (i - i_lo) * nb;
-
-        const int fi = a * max_size1 + i;
-        const int fj = b * max_size2 + j;
-        const T *x1_chan = atom_slice(x1, max_size1, a, i);
-        const int n_neigh_i = nn1[fi];
-        const int n_neigh_j = nn2[fj];
-        const T sii = ss1[fi];
-        const T sjj = ss2[fj];
-        const T *dsii = dss1 + static_cast<long long>(fi) * na3_max;
-        const T *ksi_i = ksi1 + static_cast<long long>(fi) * max_size1;
-        const T *dksi_i = dksi1 + static_cast<long long>(fi) * max_size1 * na3_max;
-        const T *dri_i = dri1 + static_cast<long long>(fi) * max_size1 * na3_max;
-        const T *cos_i = cosp1 + static_cast<long long>(fi) * fstride1;
-        const T *sin_i = sinp1 + static_cast<long long>(fi) * fstride1;
-        const T *dcos_i = dcosp1 + static_cast<long long>(fi) * fstride1 * na3_max;
-        const T *dsin_i = dsinp1 + static_cast<long long>(fi) * fstride1 * na3_max;
+    const int nthreads = static_cast<int>(blockDim.x);
+    // Stride in lockstep so every warp lane participates in the shuffle reduce
+    // (inactive lanes contribute zero).
+    for (int p0 = 0; p0 < n_atom_pairs; p0 += nthreads) {
+        const int p = p0 + tid;
+        const bool active = (p < n_atom_pairs);
 
         T ds0[kAmuTile], ds1[kAmuTile], ds2[kAmuTile], ds3[kAmuTile];
         T ds4[kAmuTile], ds5[kAmuTile], ds6[kAmuTile], ds7[kAmuTile];
@@ -1635,153 +1640,268 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
             ds0[t] = ds1[t] = ds2[t] = ds3[t] = Math<T>::zero();
             ds4[t] = ds5[t] = ds6[t] = ds7[t] = Math<T>::zero();
         }
+        T kij = Math<T>::zero();
+        T coeff = Math<T>::zero();
+        const T *dsii = nullptr;
 
-        T aadist = Math<T>::zero();
-        const int Z1 = static_cast<int>(x1_chan[max_size1]);
-        const int Z2 = static_cast<int>(pack_z2[jac_pack_bj(b, 0, j, max_size2)]);
-        if (Z1 == Z2) {
-            aadist = Math<T>::one();
-            for (int ii = 1; ii < n_neigh_i; ++ii) {
-                const int Zi = static_cast<int>(x1_chan[max_size1 + ii]);
-                const T ri = x1_chan[ii];
-                const long long i_na3 = static_cast<long long>(ii) * na3;
-                const T ksi1_i = ksi_i[ii];
-                const T *dri_row = dri_i + i_na3;
-                const T *dksi_row = dksi_i + i_na3;
+        if (active) {
+            const int i = i_lo + p / nb;
+            const int j = p - (i - i_lo) * nb;
 
-                for (int jj = 1; jj < n_neigh_j; ++jj) {
-                    const long long bj = jac_pack_bj(b, jj, j, max_size2);
-                    if (Zi != static_cast<int>(pack_z2[bj])) {
-                        continue;
+            const int fi = a * max_size1 + i;
+            const int fj = b * max_size2 + j;
+            const T *x1_chan = atom_slice(x1, max_size1, a, i);
+            const int n_neigh_i = nn1[fi];
+            const int n_neigh_j = nn2[fj];
+            const T sii = ss1[fi];
+            const T sjj = ss2[fj];
+            dsii = dss1 + static_cast<long long>(fi) * na3_max;
+            const T *ksi_i = ksi1 + static_cast<long long>(fi) * max_size1;
+            const T *dksi_i = dksi1 + static_cast<long long>(fi) * max_size1 * na3_max;
+            const T *dri_i = dri1 + static_cast<long long>(fi) * max_size1 * na3_max;
+            const T *cos_i = cosp1 + static_cast<long long>(fi) * fstride1;
+            const T *sin_i = sinp1 + static_cast<long long>(fi) * fstride1;
+            const T *dcos_i = dcosp1 + static_cast<long long>(fi) * fstride1 * na3_max;
+            const T *dsin_i = dsinp1 + static_cast<long long>(fi) * fstride1 * na3_max;
+
+            T aadist = Math<T>::zero();
+            const int Z1 = static_cast<int>(x1_chan[max_size1]);
+            const int Z2 = static_cast<int>(pack_z2[jac_pack_bj(b, 0, j, max_size2)]);
+            if (Z1 == Z2) {
+                aadist = Math<T>::one();
+                // B neighbours are Z-sorted in pack buffers — scan matching runs.
+                for (int ii = 1; ii < n_neigh_i; ++ii) {
+                    const int Zi = static_cast<int>(x1_chan[max_size1 + ii]);
+                    const T ri = x1_chan[ii];
+                    const long long i_na3 = static_cast<long long>(ii) * na3;
+                    const T ksi1_i = ksi_i[ii];
+                    const T *dri_row = dri_i + i_na3;
+                    const T *dksi_row = dksi_i + i_na3;
+
+                    int jj = 1;
+                    while (jj < n_neigh_j &&
+                           static_cast<int>(pack_z2[jac_pack_bj(b, jj, j, max_size2)]) < Zi) {
+                        ++jj;
                     }
-                    const T dr = ri - pack_dist2[bj];
-                    const T r2 = dr * dr;
-                    if (r2 >= maxgausdist2) {
-                        continue;
-                    }
-                    const T G = Math<T>::exp_(r2 * inv_width);
-                    const T dG_dri = G * T(2) * dr * inv_width;
-
-                    T angular = Math<T>::zero();
-                    if (order2) {
-                        for (int pp = 0; pp < pmax; ++pp) {
-                            const long long i1 = jac_fourier_idx(pp, 0, ii, order, max_size1);
-                            const long long i2 = jac_pack_fourier(
-                                b, pp, 0, jj, j, pmax, order, max_size2
-                            );
-                            angular +=
-                                (cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2]) * s0;
+                    for (; jj < n_neigh_j; ++jj) {
+                        const long long bj = jac_pack_bj(b, jj, j, max_size2);
+                        if (static_cast<int>(pack_z2[bj]) != Zi) {
+                            break;
                         }
-                    } else {
-                        for (int m = 0; m < order; m += 2) {
-                            const T spf = s_prefactor[m];
-                            T ang_m = Math<T>::zero();
+                        const T dr = ri - pack_dist2[bj];
+                        const T r2 = dr * dr;
+                        if (r2 >= maxgausdist2) {
+                            continue;
+                        }
+                        const T G = Math<T>::exp_(r2 * inv_width);
+                        const T dG_dri = G * T(2) * dr * inv_width;
+
+                        T angular = Math<T>::zero();
+                        if (order2) {
                             for (int pp = 0; pp < pmax; ++pp) {
                                 const long long i1 =
-                                    jac_fourier_idx(pp, m, ii, order, max_size1);
+                                    jac_fourier_idx(pp, 0, ii, order, max_size1);
                                 const long long i2 = jac_pack_fourier(
-                                    b, pp, m, jj, j, pmax, order, max_size2
+                                    b, pp, 0, jj, j, pmax, order, max_size2
                                 );
-                                ang_m += cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2];
+                                angular +=
+                                    (cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2]) * s0;
                             }
-                            angular += ang_m * spf;
+                        } else {
+                            for (int m = 0; m < order; m += 2) {
+                                const T spf = s_prefactor[m];
+                                T ang_m = Math<T>::zero();
+                                for (int pp = 0; pp < pmax; ++pp) {
+                                    const long long i1 =
+                                        jac_fourier_idx(pp, m, ii, order, max_size1);
+                                    const long long i2 = jac_pack_fourier(
+                                        b, pp, m, jj, j, pmax, order, max_size2
+                                    );
+                                    ang_m +=
+                                        cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2];
+                                }
+                                angular += ang_m * spf;
+                            }
                         }
-                    }
 
-                    const T ksi2_j = pack_ksi2[bj];
-                    const T W = ksi1_i * ksi2_j * dist_scale + angular * ang_scale;
-                    aadist += G * W;
-                    const T G_dist = G * dist_scale;
-                    const T G_ang = G * ang_scale;
+                        const T ksi2_j = pack_ksi2[bj];
+                        const T W = ksi1_i * ksi2_j * dist_scale + angular * ang_scale;
+                        aadist += G * W;
+                        const T G_dist = G * dist_scale;
+                        const T G_ang = G * ang_scale;
 
-                    jac_accum_tile8(ds0, 0, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds1, 8, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds2, 16, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds3, 24, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds4, 32, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds5, 40, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds6, 48, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds7, 56, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
+                        jac_accum_tile8(
+                            ds0, 0, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds1, 8, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds2, 16, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds3, 24, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds4, 32, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds5, 40, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds6, 48, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds7, 56, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
 
-                    if (order2) {
-                        for (int pp = 0; pp < pmax; ++pp) {
-                            const long long i1 = jac_fourier_idx(pp, 0, ii, order, max_size1);
-                            const long long i2 = jac_pack_fourier(
-                                b, pp, 0, jj, j, pmax, order, max_size2
-                            );
-                            const T c2 = pack_cos2[i2];
-                            const T s2 = pack_sin2[i2];
-                            const T *dcos_row = dcos_i + i1 * na3;
-                            const T *dsin_row = dsin_i + i1 * na3;
-                            const T scale = G_ang * s0;
-                            jac_accum_ang_tile8(ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2);
-                        }
-                    } else {
-                        for (int m = 0; m < order; m += 2) {
-                            const T spf = s_prefactor[m];
+                        if (order2) {
                             for (int pp = 0; pp < pmax; ++pp) {
                                 const long long i1 =
-                                    jac_fourier_idx(pp, m, ii, order, max_size1);
+                                    jac_fourier_idx(pp, 0, ii, order, max_size1);
                                 const long long i2 = jac_pack_fourier(
-                                    b, pp, m, jj, j, pmax, order, max_size2
+                                    b, pp, 0, jj, j, pmax, order, max_size2
                                 );
                                 const T c2 = pack_cos2[i2];
                                 const T s2 = pack_sin2[i2];
                                 const T *dcos_row = dcos_i + i1 * na3;
                                 const T *dsin_row = dsin_i + i1 * na3;
-                                const T scale = G_ang * spf;
-                                jac_accum_ang_tile8(ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2);
+                                const T scale = G_ang * s0;
+                                jac_accum_ang_tile8(
+                                    ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                            }
+                        } else {
+                            for (int m = 0; m < order; m += 2) {
+                                const T spf = s_prefactor[m];
+                                for (int pp = 0; pp < pmax; ++pp) {
+                                    const long long i1 =
+                                        jac_fourier_idx(pp, m, ii, order, max_size1);
+                                    const long long i2 = jac_pack_fourier(
+                                        b, pp, m, jj, j, pmax, order, max_size2
+                                    );
+                                    const T c2 = pack_cos2[i2];
+                                    const T s2 = pack_sin2[i2];
+                                    const T *dcos_row = dcos_i + i1 * na3;
+                                    const T *dsin_row = dsin_i + i1 * na3;
+                                    const T scale = G_ang * spf;
+                                    jac_accum_ang_tile8(
+                                        ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                }
                             }
                         }
                     }
-
                 }
             }
+
+            kij = Math<T>::exp_(-(sii + sjj - T(2) * aadist) * params.inv_sigma2);
+            coeff = kij * params.inv_sigma2;
         }
 
-        const T kij = Math<T>::exp_(-(sii + sjj - T(2) * aadist) * params.inv_sigma2);
-        const T coeff = kij * params.inv_sigma2;
-        atomicAdd(&smem_K, kij);
+        jac_warp_atomic_add(&smem_K, kij);
 
 #pragma unroll
         for (int t = 0; t < kAmuTile; ++t) {
+            T v0 = Math<T>::zero();
+            T v1 = Math<T>::zero();
+            T v2 = Math<T>::zero();
+            T v3 = Math<T>::zero();
+            T v4 = Math<T>::zero();
+            T v5 = Math<T>::zero();
+            T v6 = Math<T>::zero();
+            T v7 = Math<T>::zero();
+            if (active) {
+                if (t < na3) {
+                    v0 = coeff * (-dsii[t] + T(2) * ds0[t]);
+                }
+                if (8 + t < na3) {
+                    v1 = coeff * (-dsii[8 + t] + T(2) * ds1[t]);
+                }
+                if (16 + t < na3) {
+                    v2 = coeff * (-dsii[16 + t] + T(2) * ds2[t]);
+                }
+                if (24 + t < na3) {
+                    v3 = coeff * (-dsii[24 + t] + T(2) * ds3[t]);
+                }
+                if (32 + t < na3) {
+                    v4 = coeff * (-dsii[32 + t] + T(2) * ds4[t]);
+                }
+                if (40 + t < na3) {
+                    v5 = coeff * (-dsii[40 + t] + T(2) * ds5[t]);
+                }
+                if (48 + t < na3) {
+                    v6 = coeff * (-dsii[48 + t] + T(2) * ds6[t]);
+                }
+                if (56 + t < na3) {
+                    v7 = coeff * (-dsii[56 + t] + T(2) * ds7[t]);
+                }
+            }
             if (t < na3) {
-                atomicAdd(smem_grad + t, coeff * (-dsii[t] + T(2) * ds0[t]));
+                jac_warp_atomic_add(smem_grad + t, v0);
             }
             if (8 + t < na3) {
-                atomicAdd(smem_grad + 8 + t, coeff * (-dsii[8 + t] + T(2) * ds1[t]));
+                jac_warp_atomic_add(smem_grad + 8 + t, v1);
             }
             if (16 + t < na3) {
-                atomicAdd(smem_grad + 16 + t, coeff * (-dsii[16 + t] + T(2) * ds2[t]));
+                jac_warp_atomic_add(smem_grad + 16 + t, v2);
             }
             if (24 + t < na3) {
-                atomicAdd(smem_grad + 24 + t, coeff * (-dsii[24 + t] + T(2) * ds3[t]));
+                jac_warp_atomic_add(smem_grad + 24 + t, v3);
             }
             if (32 + t < na3) {
-                atomicAdd(smem_grad + 32 + t, coeff * (-dsii[32 + t] + T(2) * ds4[t]));
+                jac_warp_atomic_add(smem_grad + 32 + t, v4);
             }
             if (40 + t < na3) {
-                atomicAdd(smem_grad + 40 + t, coeff * (-dsii[40 + t] + T(2) * ds5[t]));
+                jac_warp_atomic_add(smem_grad + 40 + t, v5);
             }
             if (48 + t < na3) {
-                atomicAdd(smem_grad + 48 + t, coeff * (-dsii[48 + t] + T(2) * ds6[t]));
+                jac_warp_atomic_add(smem_grad + 48 + t, v6);
             }
             if (56 + t < na3) {
-                atomicAdd(smem_grad + 56 + t, coeff * (-dsii[56 + t] + T(2) * ds7[t]));
+                jac_warp_atomic_add(smem_grad + 56 + t, v7);
             }
         }
     }
@@ -1807,6 +1927,7 @@ template <typename T>
 __global__ void jac_pack_b_kernel(
     const T *x2,
     const int *n2,
+    const int *nn2,
     const T *ksi2,
     const T *cosp2,
     const T *sinp2,
@@ -1820,6 +1941,9 @@ __global__ void jac_pack_b_kernel(
     int pmax,
     int order
 ) {
+    // Neighbour Z-sort permutation (centre fixed at slot 0). Caps tiled-path sizes.
+    constexpr int kSortCap = kMaxNa3Local;  // >= max neighbours for fp32 hot path
+
     const int flat = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if (flat >= nm2 * max_size2) {
         return;
@@ -1835,21 +1959,39 @@ __global__ void jac_pack_b_kernel(
     const long long fstride = fourier_atom_stride(pmax, order, max_size2);
     const T *cosp = cosp2 + static_cast<long long>(flat) * fstride;
     const T *sinp = sinp2 + static_cast<long long>(flat) * fstride;
+    const int n_neigh = nn2[flat];
 
-    for (int jj = 0; jj < max_size2; ++jj) {
-        const long long dst = jac_pack_bj(b, jj, j, max_size2);
-        pack_dist[dst] = x2_chan[jj];
-        pack_z[dst] = x2_chan[max_size2 + jj];
-        pack_ksi[dst] = ksi[jj];
+    int ord[kSortCap];
+    const bool do_sort = (n_neigh <= kSortCap);
+    if (do_sort) {
+        for (int k = 1; k < n_neigh; ++k) {
+            ord[k] = k;
+        }
+        const T *z_chan = x2_chan + max_size2;
+        for (int k = 2; k < n_neigh; ++k) {
+            const int key = ord[k];
+            const T z = z_chan[key];
+            int insert_at = k;
+            while (insert_at > 1 && z_chan[ord[insert_at - 1]] > z) {
+                ord[insert_at] = ord[insert_at - 1];
+                --insert_at;
+            }
+            ord[insert_at] = key;
+        }
     }
-    for (int p = 0; p < pmax; ++p) {
-        for (int m = 0; m < order; ++m) {
-            for (int jj = 0; jj < max_size2; ++jj) {
-                const long long src = jac_fourier_idx(p, m, jj, order, max_size2);
-                const long long dst =
-                    jac_pack_fourier(b, p, m, jj, j, pmax, order, max_size2);
-                pack_cos[dst] = cosp[src];
-                pack_sin[dst] = sinp[src];
+
+    for (int t = 0; t < n_neigh; ++t) {
+        const int src = (t == 0 || !do_sort) ? t : ord[t];
+        const long long dst = jac_pack_bj(b, t, j, max_size2);
+        pack_dist[dst] = x2_chan[src];
+        pack_z[dst] = x2_chan[max_size2 + src];
+        pack_ksi[dst] = ksi[src];
+        for (int p = 0; p < pmax; ++p) {
+            for (int m = 0; m < order; ++m) {
+                const long long s = jac_fourier_idx(p, m, src, order, max_size2);
+                const long long d = jac_pack_fourier(b, p, m, t, j, pmax, order, max_size2);
+                pack_cos[d] = cosp[s];
+                pack_sin[d] = sinp[s];
             }
         }
     }
@@ -2370,6 +2512,7 @@ void kernel_gaussian_jacobian_cu_impl(
             jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
                 d_x2,
                 d_n2,
+                d_nn2,
                 ksi2,
                 cosp2,
                 sinp2,
@@ -2727,6 +2870,7 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             jac_pack_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
                 d_x_q,
                 d_n_q,
+                d_nn_q,
                 ws.ksi2,
                 ws.cosp2,
                 ws.sinp2,
@@ -2893,6 +3037,7 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             jac_pack_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
                 d_x_tr,
                 d_n_tr,
+                d_nn_tr,
                 tr_ksi2,
                 tr_cosp2,
                 tr_sinp2,
