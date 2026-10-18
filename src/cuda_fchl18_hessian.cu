@@ -645,7 +645,9 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
     int lower_triangle,
     int matvec_mode,
     HessParams<T> params,
-    const T *s_prefactor
+    const T *s_prefactor,
+    const int *pair_offset,
+    int n_hot_blocks
 ) {
     extern __shared__ unsigned char hess_smem[];
     const int strideA = 3 * max_size1;
@@ -660,14 +662,24 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
 
     const int n_mol_pairs =
         lower_triangle ? (nm1 * (nm1 + 1) / 2) : (nm1 * nm2);
-    const int n_ij_slots = max_size1 * max_size2;
     const int flat_block = static_cast<int>(blockIdx.x);
-    if (flat_block >= n_mol_pairs * n_ij_slots) {
+    if (flat_block >= n_hot_blocks) {
         return;
     }
 
-    const int mol_pair = flat_block / n_ij_slots;
-    const int ij = flat_block - mol_pair * n_ij_slots;
+    // Compact map: pair_offset = exclusive prefix of na[a]*nb[b] (no empty pads).
+    int lo = 0;
+    int hi = n_mol_pairs;
+    while (lo + 1 < hi) {
+        const int mid = (lo + hi) >> 1;
+        if (pair_offset[mid] <= flat_block) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    const int mol_pair = lo;
+    const int local = flat_block - pair_offset[mol_pair];
     int a;
     int b;
     if (lower_triangle) {
@@ -685,14 +697,11 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
         a = mol_pair / nm2;
         b = mol_pair - a * nm2;
     }
-    const int i = ij / max_size2;
-    const int j = ij - i * max_size2;
 
     const int na = n1[a];
     const int nb = n2[b];
-    if (i >= na || j >= nb) {
-        return;
-    }
+    const int i = local / nb;
+    const int j = local - i * nb;
 
     const int na3A = na * 3;
     const int na3B = nb * 3;
@@ -1434,6 +1443,9 @@ struct HessWorkspace {
     size_t rfp_dense_cap = 0;
     int *z_present = nullptr;
     int *z_to_idx = nullptr;
+    // Exclusive prefix of na[a]*nb[b] over mol pairs — compacted hot launch.
+    int *pair_offset = nullptr;
+    size_t pair_offset_cap = 0;
 };
 
 template <typename T>
@@ -1541,6 +1553,60 @@ void hess_upload_offsets(
     HessSideBuffers<T> &buf, const int *d_n, int nm, int expected_dim, const char *what
 ) {
     fill_coord_offsets_device(d_n, &buf.offset, &buf.offset_cap, nm, expected_dim, what);
+}
+
+// Exclusive prefix of na[a]*nb[b] over mol pairs → compacted hot-block count.
+// Drops empty padded (i,j) slots (≈50% on QM7b max_size=17, mean n≈12).
+inline int hess_build_pair_offsets(
+    int **d_pair_offset,
+    size_t *pair_offset_cap,
+    const int *d_n1,
+    const int *d_n2,
+    int nm1,
+    int nm2,
+    int lower_triangle
+) {
+    const int n_mol_pairs = lower_triangle ? (nm1 * (nm1 + 1) / 2) : (nm1 * nm2);
+    std::vector<int> h_n1(static_cast<size_t>(nm1));
+    std::vector<int> h_n2(static_cast<size_t>(nm2));
+    CUDA_CHECK(cudaMemcpy(
+        h_n1.data(), d_n1, sizeof(int) * static_cast<size_t>(nm1), cudaMemcpyDeviceToHost
+    ));
+    if (d_n2 == d_n1 && nm2 == nm1) {
+        h_n2 = h_n1;
+    } else {
+        CUDA_CHECK(cudaMemcpy(
+            h_n2.data(), d_n2, sizeof(int) * static_cast<size_t>(nm2), cudaMemcpyDeviceToHost
+        ));
+    }
+    std::vector<int> h_off(static_cast<size_t>(n_mol_pairs) + 1);
+    h_off[0] = 0;
+    if (lower_triangle) {
+        int mp = 0;
+        for (int a = 0; a < nm1; ++a) {
+            for (int b = 0; b <= a; ++b, ++mp) {
+                h_off[static_cast<size_t>(mp) + 1] = h_off[static_cast<size_t>(mp)] +
+                    h_n1[static_cast<size_t>(a)] * h_n2[static_cast<size_t>(b)];
+            }
+        }
+    } else {
+        int mp = 0;
+        for (int a = 0; a < nm1; ++a) {
+            for (int b = 0; b < nm2; ++b, ++mp) {
+                h_off[static_cast<size_t>(mp) + 1] = h_off[static_cast<size_t>(mp)] +
+                    h_n1[static_cast<size_t>(a)] * h_n2[static_cast<size_t>(b)];
+            }
+        }
+    }
+    const int n_hot = h_off[static_cast<size_t>(n_mol_pairs)];
+    ensure_capacity(d_pair_offset, pair_offset_cap, static_cast<size_t>(n_mol_pairs) + 1);
+    CUDA_CHECK(cudaMemcpy(
+        *d_pair_offset,
+        h_off.data(),
+        sizeof(int) * (static_cast<size_t>(n_mol_pairs) + 1),
+        cudaMemcpyHostToDevice
+    ));
+    return n_hot;
 }
 
 template <typename T>
@@ -1689,6 +1755,12 @@ void kernel_gaussian_hessian_cu_impl(
         cudaMemcpyHostToDevice
     ));
 
+    // Same physical tensors on both sides (self-kernel / kernelbench): reuse A
+    // precompute for B — halves prepare time and peak gradient buffers.
+    const bool same_side = (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 &&
+                            d_coords1 == d_coords2 && d_z1 == d_z2 && nm1 == nm2 &&
+                            max_size1 == max_size2 && d_a_rows == d_b_cols);
+
     hess_upload_offsets(ws.a, d_n1, nm1, d_a_rows, "hessian output rows must equal 3 * sum(n1)");
 
     hess_prepare_side(
@@ -1707,7 +1779,9 @@ void kernel_gaussian_hessian_cu_impl(
         ws.s_prefactor
     );
     HessSideBuffers<T> *b_side = &ws.b;
-    if (!lower_triangle) {
+    if (same_side) {
+        b_side = &ws.a;
+    } else if (!lower_triangle) {
         if (!train_hit) {
             hess_upload_offsets(
                 ws.b_train, d_n2, nm2, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
@@ -1738,10 +1812,6 @@ void kernel_gaussian_hessian_cu_impl(
             ws.b_train_pmax = pmax;
         }
         b_side = &ws.b_train;
-    } else if (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 && d_coords1 == d_coords2 &&
-               d_z1 == d_z2 && nm1 == nm2 && max_size1 == max_size2 && d_a_rows == d_b_cols) {
-        // Symmetric path with identical sides: reuse A-side precompute (halves VRAM + time).
-        b_side = &ws.a;
     } else {
         hess_upload_offsets(
             ws.b, d_n2, nm2, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
@@ -1763,10 +1833,17 @@ void kernel_gaussian_hessian_cu_impl(
         );
     }
 
-    const int n_ij_slots = max_size1 * max_size2;
     const int n_mol_pairs =
         lower_triangle ? (nm1 * (nm1 + 1) / 2) : (nm1 * nm2);
-    const int n_hot_blocks = n_mol_pairs * n_ij_slots;
+    const int n_hot_blocks = hess_build_pair_offsets(
+        &ws.pair_offset,
+        &ws.pair_offset_cap,
+        d_n1,
+        d_n2,
+        nm1,
+        nm2,
+        lower_triangle ? 1 : 0
+    );
     const int strideA = 3 * max_size1;
     const int strideB = 3 * max_size2;
     const int h_cap = hess_shared_h_cap<T>(strideA, strideB);
@@ -1809,7 +1886,9 @@ void kernel_gaussian_hessian_cu_impl(
         lower_triangle ? 1 : 0,
         matvec_mode ? 1 : 0,
         params,
-        ws.s_prefactor
+        ws.s_prefactor,
+        ws.pair_offset,
+        n_hot_blocks
     );
     CUDA_CHECK(cudaGetLastError());
 
@@ -1902,8 +1981,9 @@ void hess_full_matvec_fused_launch(
         ws.b_train_pmax = pmax;
     }
 
-    const int n_ij_slots = max_size_q * max_size_tr;
-    const int n_hot_blocks = nm_q * nm_tr * n_ij_slots;
+    const int n_hot_blocks = hess_build_pair_offsets(
+        &ws.pair_offset, &ws.pair_offset_cap, d_n_q, d_n_tr, nm_q, nm_tr, 0
+    );
     const int strideA = 3 * max_size_q;
     const int strideB = 3 * max_size_tr;
     const int h_cap = hess_shared_h_cap<T>(strideA, strideB);
@@ -1946,7 +2026,9 @@ void hess_full_matvec_fused_launch(
         0,
         1,
         params,
-        d_s_prefactor
+        d_s_prefactor,
+        ws.pair_offset,
+        n_hot_blocks
     );
     CUDA_CHECK(cudaGetLastError());
 }
