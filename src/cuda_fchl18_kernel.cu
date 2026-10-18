@@ -1209,53 +1209,30 @@ void kernel_gaussian_rect_cu_impl(
         CUDA_CHECK(cudaGetLastError());
     }
 
-    // Self-kernel (identical pointers): upper triangle + mirror is exact and
-    // halves hot-kernel work versus the full nm1*nm2 rectangular launch.
-    if (same_side) {
-        const long long n_upper = static_cast<long long>(nm1) * (nm1 + 1) / 2;
-        if (n_upper > static_cast<long long>(std::numeric_limits<int>::max())) {
-            throw std::invalid_argument("too many molecule pairs for cuda_fchl18_kernel");
-        }
-        kernel_gaussian_symm_precomputed_kernel<<<static_cast<int>(n_upper), kPairBlockSize>>>(
-            ws.x1_sorted,
-            d_n1,
-            d_nn1,
-            ws.ss1,
-            ws.ksi1,
-            ws.cosp1,
-            ws.sinp1,
-            d_kernel_out,
-            nm1,
-            max_size1,
-            hot_params,
-            ws.s_prefactor
-        );
-    } else {
-        const long long n_pairs = static_cast<long long>(nm1) * nm2;
-        kernel_gaussian_rect_precomputed_kernel<<<static_cast<int>(n_pairs), kPairBlockSize>>>(
-            ws.x1_sorted,
-            x2_sorted,
-            d_n1,
-            d_n2,
-            d_nn1,
-            d_nn2,
-            ws.ss1,
-            ss2,
-            ws.ksi1,
-            ksi2,
-            ws.cosp1,
-            ws.sinp1,
-            cosp2,
-            sinp2,
-            d_kernel_out,
-            nm1,
-            nm2,
-            max_size1,
-            max_size2,
-            hot_params,
-            ws.s_prefactor
-        );
-    }
+    const long long n_pairs = static_cast<long long>(nm1) * nm2;
+    kernel_gaussian_rect_precomputed_kernel<<<static_cast<int>(n_pairs), kPairBlockSize>>>(
+        ws.x1_sorted,
+        x2_sorted,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        ws.ss1,
+        ss2,
+        ws.ksi1,
+        ksi2,
+        ws.cosp1,
+        ws.sinp1,
+        cosp2,
+        sinp2,
+        d_kernel_out,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        hot_params,
+        ws.s_prefactor
+    );
     CUDA_CHECK(cudaGetLastError());
 }
 
