@@ -1889,7 +1889,7 @@ Applies to subsequent CUDA FCHL18 kernel / Jacobian / Hessian / full calls.
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"doc(
 Compute the rectangular FCHL18 Gaussian kernel matrix on GPU.
@@ -1927,7 +1927,7 @@ torch.Tensor, shape (nm1, nm2), same dtype as X1, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"doc(
 Compute the symmetric FCHL18 Gaussian kernel matrix on GPU.
@@ -1967,7 +1967,7 @@ torch.Tensor, shape (nm, nm), same dtype as X, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"doc(
 Compute the symmetric FCHL18 Gaussian kernel in RFP packed format on GPU.
@@ -2017,7 +2017,7 @@ torch.Tensor, shape (nm*(nm+1)//2,), same dtype as X, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"doc(
 Compute the FCHL18 Jacobian kernel dK/dR_A on GPU.
@@ -2074,7 +2074,7 @@ torch.Tensor, shape (3 * sum(N1), nm2), same dtype as X1, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"doc(
 Compute the FCHL18 Jacobian-T kernel on GPU.
@@ -2108,7 +2108,7 @@ rather than the CPU train/test list API.
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"doc(
 Compute the FCHL18 gradient kernel for a single query molecule on GPU.

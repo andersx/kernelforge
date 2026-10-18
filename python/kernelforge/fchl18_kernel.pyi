@@ -19,7 +19,7 @@ def kernel_gaussian(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> NDArray[np.float64]:
     """FCHL18 Gaussian kernel matrix (asymmetric).
@@ -45,7 +45,7 @@ def kernel_gaussian(
     three_body_power : float, default 3.0
     cut_start : float, default 0.5
     cut_distance : float, default 1e6
-    fourier_order : int, default 2
+    fourier_order : int, default 1
     use_atm : bool, default True
         If False, replace the Axilrod-Teller-Muto factor (1+3*cos_i*cos_j*cos_k)
         with 1.0 in the three-body weight.
@@ -71,7 +71,7 @@ def kernel_gaussian_gradient(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> NDArray[np.float64]:
     """Analytical gradient of the FCHL18 kernel w.r.t. coordinates of molecule A.
@@ -100,7 +100,7 @@ def kernel_gaussian_gradient(
     three_body_power : float, default 3.0
     cut_start : float, default 0.5
     cut_distance : float, default 1e6
-    fourier_order : int, default 2
+    fourier_order : int, default 1
     use_atm : bool, default True
 
     Returns
@@ -123,7 +123,7 @@ def kernel_gaussian_symm(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> NDArray[np.float64]:
     """FCHL18 Gaussian kernel matrix (symmetric, K[a,b] == K[b,a]).
@@ -255,7 +255,7 @@ def kernel_gaussian_symm_rfp(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> NDArray[np.float64]:
     """Symmetric FCHL18 scalar kernel in RFP format.
@@ -282,7 +282,7 @@ def kernel_gaussian_jacobian(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> NDArray[np.float64]:
     """FCHL18 Jacobian kernel dK/dR_A.
@@ -309,7 +309,7 @@ def kernel_gaussian_jacobian_t(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> NDArray[np.float64]:
     """FCHL18 Jacobian-transpose kernel for energy prediction from force coefficients.

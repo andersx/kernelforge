@@ -596,7 +596,7 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         kg_doc
     );
@@ -616,7 +616,7 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         "Compute the symmetric FCHL18 Gaussian kernel matrix K[a, b] = K[b, a]."
     );
@@ -638,7 +638,7 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         "Compute dK[A,b]/dR_A[alpha,mu]. Returns shape (n_atoms_A, 3, nm2)."
     );
@@ -700,7 +700,7 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"pbdoc(
 Compute the FCHL18 Jacobian-transpose kernel for energy prediction from force coefficients.
@@ -750,7 +750,7 @@ ndarray, shape (N_test, D_total), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"pbdoc(
 Compute the symmetric FCHL18 scalar kernel in RFP (Rectangular Full Packed) format.
@@ -790,7 +790,7 @@ ndarray, shape (N*(N+1)//2,), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
         R"pbdoc(
 Compute the FCHL18 Jacobian kernel dK/dR_A.

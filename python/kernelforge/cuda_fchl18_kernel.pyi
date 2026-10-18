@@ -38,7 +38,7 @@ def kernel_gaussian(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> torch.Tensor:
     """Compute the rectangular FCHL18 Gaussian kernel matrix on GPU.
@@ -74,7 +74,7 @@ def kernel_gaussian_symm(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Gaussian kernel matrix on GPU.
@@ -112,7 +112,7 @@ def kernel_gaussian_symm_rfp(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Gaussian kernel in RFP packed format on GPU.
@@ -158,7 +158,7 @@ def kernel_gaussian_jacobian(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> torch.Tensor:
     """Compute the FCHL18 Jacobian kernel dK/dR_A on GPU.
@@ -214,7 +214,7 @@ def kernel_gaussian_jacobian_t(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> torch.Tensor:
     """Compute the FCHL18 Jacobian-T kernel on GPU.
@@ -245,7 +245,7 @@ def kernel_gaussian_gradient(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
 ) -> torch.Tensor:
     """Compute the FCHL18 gradient kernel for a single query molecule on GPU.
