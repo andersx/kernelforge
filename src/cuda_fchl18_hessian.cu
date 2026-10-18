@@ -43,9 +43,12 @@ constexpr int kHessMaxNa3 = 384;  // up to 128 atoms per molecule
 constexpr int kHessSharedHMax = 8192;
 constexpr size_t kHessMaxShmemBytes = 48 * 1024;
 
-// How many Hij elements fit in dynamic shared memory after reserving dsA/dsB/dVA/dVB/sij.
-// Previously required strideA*strideB <= kHessSharedHMax, which disabled shared Hij whenever
-// max_size was padded large even if every real molecule had na3*nb3 << cap.
+// How many Hij elements to reserve in dynamic shared memory.
+// Cap by (1) 48 KiB budget after dsA/dsB/dVA/dVB/sij, (2) kHessSharedHMax, and
+// (3) strideA*strideB so we do not over-allocate shmem when max_size is modest
+// (over-allocating to 8192 killed occupancy ~2x on QM7b max_size≈20).
+// When strideA*strideB > kHessSharedHMax, remaining budget still allows shared Hij
+// for real molecules with na3A*na3B <= cap (padded large-max_size batches).
 template <typename T>
 __host__ __device__ inline int hess_shared_h_cap(int strideA, int strideB) {
     if (strideA <= 0 || strideB <= 0) {
@@ -59,6 +62,10 @@ __host__ __device__ inline int hess_shared_h_cap(int strideA, int strideB) {
     int cap = static_cast<int>((kHessMaxShmemBytes - base) / sizeof(T));
     if (cap > kHessSharedHMax) {
         cap = kHessSharedHMax;
+    }
+    const int n_full = strideA * strideB;
+    if (n_full < cap) {
+        cap = n_full;
     }
     return cap;
 }
@@ -1342,37 +1349,11 @@ __global__ void hess_self_scalar_kernel(
     const T *dsinp = dsinp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
     T *dss = dss_out + static_cast<long long>(flat_idx) * na3_max;
 
-    // Value-only self-scalar once (thread 0); grads in parallel — avoids na3× rescans.
-    if (threadIdx.x == 0) {
-        T *no_ds = nullptr;
-        ss_out[flat_idx] = hess_scalar_and_grad_amu(
-            x_chan,
-            max_size,
-            n_neigh,
-            ksi,
-            dksi,
-            dri,
-            cosp,
-            sinp,
-            dcosp,
-            dsinp,
-            x_chan,
-            max_size,
-            n_neigh,
-            ksi,
-            cosp,
-            sinp,
-            params,
-            s_prefactor,
-            na3,
-            -1,
-            no_ds
-        );
-    }
+    T ss = Math<T>::zero();
     for (int amu = static_cast<int>(threadIdx.x); amu < na3;
          amu += static_cast<int>(blockDim.x)) {
         T ds = Math<T>::zero();
-        (void)hess_scalar_and_grad_amu(
+        ss = hess_scalar_and_grad_amu(
             x_chan,
             max_size,
             n_neigh,
@@ -1396,6 +1377,10 @@ __global__ void hess_self_scalar_kernel(
             &ds
         );
         dss[amu] = T(2) * ds;
+    }
+    // na3 >= 3, so thread 0 always ran at least one iteration.
+    if (threadIdx.x == 0) {
+        ss_out[flat_idx] = ss;
     }
 }
 
@@ -1617,14 +1602,16 @@ void kernel_gaussian_hessian_cu_impl(
         CUDA_CHECK(cudaMalloc(&ws.z_to_idx, 256 * sizeof(int)));
     }
 
-    // Pointer + content fingerprint: allocator may reuse the whole tensor set.
+    // Pointer keys first; fingerprint only on candidate hit (avoids 3× D2H every call).
+    const bool train_ptr_hit = !lower_triangle && d_x2 == ws.b_train_x && d_n2 == ws.b_train_n &&
+                               d_nn2 == ws.b_train_nn && d_coords2 == ws.b_train_coords &&
+                               d_z2 == ws.b_train_z && nm2 == ws.b_train_nm &&
+                               max_size2 == ws.b_train_max;
     const size_t x2_n =
         static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
-    const unsigned long long x2_fp = buffer_fingerprint(d_x2, x2_n);
-    const bool train_hit = !lower_triangle && d_x2 == ws.b_train_x && d_n2 == ws.b_train_n &&
-                           d_nn2 == ws.b_train_nn && d_coords2 == ws.b_train_coords &&
-                           d_z2 == ws.b_train_z && nm2 == ws.b_train_nm &&
-                           max_size2 == ws.b_train_max && x2_fp == ws.b_train_fp;
+    const unsigned long long x2_fp =
+        train_ptr_hit ? buffer_fingerprint(d_x2, x2_n) : 0ULL;
+    const bool train_hit = train_ptr_hit && x2_fp == ws.b_train_fp;
     int pmax = 0;
     if (train_hit) {
         pmax = ws.b_train_pmax;
@@ -1745,7 +1732,7 @@ void kernel_gaussian_hessian_cu_impl(
             ws.b_train_nn = d_nn2;
             ws.b_train_coords = d_coords2;
             ws.b_train_z = d_z2;
-            ws.b_train_fp = x2_fp;
+            ws.b_train_fp = train_ptr_hit ? x2_fp : buffer_fingerprint(d_x2, x2_n);
             ws.b_train_nm = nm2;
             ws.b_train_max = max_size2;
             ws.b_train_pmax = pmax;
@@ -1876,14 +1863,15 @@ void hess_full_matvec_fused_launch(
 ) {
     HessWorkspace<T> &ws = hess_workspace<T>();
 
+    const bool train_ptr_hit = d_x_tr == ws.b_train_x && d_n_tr == ws.b_train_n &&
+                               d_nn_tr == ws.b_train_nn && d_coords_tr == ws.b_train_coords &&
+                               d_z_tr == ws.b_train_z && nm_tr == ws.b_train_nm &&
+                               max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax;
     const size_t x_tr_n = static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * 5 *
                           static_cast<size_t>(max_size_tr);
-    const unsigned long long x_tr_fp = buffer_fingerprint(d_x_tr, x_tr_n);
-    const bool train_hit = d_x_tr == ws.b_train_x && d_n_tr == ws.b_train_n &&
-                           d_nn_tr == ws.b_train_nn && d_coords_tr == ws.b_train_coords &&
-                           d_z_tr == ws.b_train_z && nm_tr == ws.b_train_nm &&
-                           max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax &&
-                           x_tr_fp == ws.b_train_fp;
+    const unsigned long long x_tr_fp =
+        train_ptr_hit ? buffer_fingerprint(d_x_tr, x_tr_n) : 0ULL;
+    const bool train_hit = train_ptr_hit && x_tr_fp == ws.b_train_fp;
     if (!train_hit) {
         hess_upload_offsets(
             ws.b_train, d_n_tr, nm_tr, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
@@ -1908,7 +1896,7 @@ void hess_full_matvec_fused_launch(
         ws.b_train_nn = d_nn_tr;
         ws.b_train_coords = d_coords_tr;
         ws.b_train_z = d_z_tr;
-        ws.b_train_fp = x_tr_fp;
+        ws.b_train_fp = train_ptr_hit ? x_tr_fp : buffer_fingerprint(d_x_tr, x_tr_n);
         ws.b_train_nm = nm_tr;
         ws.b_train_max = max_size_tr;
         ws.b_train_pmax = pmax;

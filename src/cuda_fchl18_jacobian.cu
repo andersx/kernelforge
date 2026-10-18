@@ -1336,37 +1336,11 @@ __global__ void jac_self_scalar_a_kernel(
     const T *dsinp = dsinp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
     T *dss = dss_out + static_cast<long long>(flat_idx) * na3_max;
 
-    // Value-only self-scalar once (thread 0); grads in parallel — avoids na3× rescans.
-    if (threadIdx.x == 0) {
-        T *no_ds = nullptr;
-        ss_out[flat_idx] = scalar_noalchemy_and_grad_amu(
-            x_chan,
-            max_size1,
-            n_neigh,
-            ksi,
-            dksi,
-            dri,
-            cosp,
-            sinp,
-            dcosp,
-            dsinp,
-            x_chan,
-            max_size1,
-            n_neigh,
-            ksi,
-            cosp,
-            sinp,
-            params,
-            s_prefactor,
-            na3,
-            -1,
-            no_ds
-        );
-    }
+    T ss = Math<T>::zero();
     for (int amu = static_cast<int>(threadIdx.x); amu < na3;
          amu += static_cast<int>(blockDim.x)) {
         T ds = Math<T>::zero();
-        (void)scalar_noalchemy_and_grad_amu(
+        ss = scalar_noalchemy_and_grad_amu(
             x_chan,
             max_size1,
             n_neigh,
@@ -1390,6 +1364,10 @@ __global__ void jac_self_scalar_a_kernel(
             &ds
         );
         dss[amu] = T(2) * ds;
+    }
+    // na3 >= 3, so thread 0 always ran at least one iteration.
+    if (threadIdx.x == 0) {
+        ss_out[flat_idx] = ss;
     }
 }
 
@@ -2047,14 +2025,15 @@ void kernel_gaussian_jacobian_cu_impl(
         static_cast<size_t>(nm1) * static_cast<size_t>(max_size1) * 5 * static_cast<size_t>(max_size1);
     const size_t x2_n =
         static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
-    const unsigned long long x1_fp = buffer_fingerprint(d_x1, x1_n);
-    const unsigned long long x2_fp = buffer_fingerprint(d_x2, x2_n);
-    const bool hit_A = cache_A && d_x1 == ws.tr_A_x && d_n1 == ws.tr_A_n &&
-                       d_nn1 == ws.tr_A_nn && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max &&
-                       x1_fp == ws.tr_A_fp;
-    const bool hit_B = cache_B && d_x2 == ws.tr_B_x && d_n2 == ws.tr_B_n &&
-                       d_nn2 == ws.tr_B_nn && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max &&
-                       x2_fp == ws.tr_B_fp;
+    // Fingerprint only when pointer keys already match (skip 3× D2H on cold path).
+    const bool ptr_A = cache_A && d_x1 == ws.tr_A_x && d_n1 == ws.tr_A_n &&
+                       d_nn1 == ws.tr_A_nn && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max;
+    const bool ptr_B = cache_B && d_x2 == ws.tr_B_x && d_n2 == ws.tr_B_n &&
+                       d_nn2 == ws.tr_B_nn && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max;
+    const unsigned long long x1_fp = ptr_A ? buffer_fingerprint(d_x1, x1_n) : 0ULL;
+    const unsigned long long x2_fp = ptr_B ? buffer_fingerprint(d_x2, x2_n) : 0ULL;
+    const bool hit_A = ptr_A && x1_fp == ws.tr_A_fp;
+    const bool hit_B = ptr_B && x2_fp == ws.tr_B_fp;
 
     const size_t n_atoms1 = static_cast<size_t>(nm1) * max_size1;
     const size_t n_atoms2 = static_cast<size_t>(nm2) * max_size2;
@@ -2349,7 +2328,7 @@ void kernel_gaussian_jacobian_cu_impl(
             ws.tr_A_x = d_x1;
             ws.tr_A_n = d_n1;
             ws.tr_A_nn = d_nn1;
-            ws.tr_A_fp = x1_fp;
+            ws.tr_A_fp = ptr_A ? x1_fp : buffer_fingerprint(d_x1, x1_n);
             ws.tr_A_nm = nm1;
             ws.tr_A_max = max_size1;
             ws.tr_A_pmax = pmax;
@@ -2411,7 +2390,7 @@ void kernel_gaussian_jacobian_cu_impl(
             ws.tr_B_x = d_x2;
             ws.tr_B_n = d_n2;
             ws.tr_B_nn = d_nn2;
-            ws.tr_B_fp = x2_fp;
+            ws.tr_B_fp = ptr_B ? x2_fp : buffer_fingerprint(d_x2, x2_n);
             ws.tr_B_nm = nm2;
             ws.tr_B_max = max_size2;
             ws.tr_B_pmax = pmax;
@@ -2627,15 +2606,16 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     const bool cache_tr_B = (nm_tr > nm_q);
     const size_t x_tr_n = static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * 5 *
                           static_cast<size_t>(max_size_tr);
-    const unsigned long long x_tr_fp = buffer_fingerprint(d_x_tr, x_tr_n);
-    const bool hit_tr_A = cache_tr_A && d_x_tr == ws.tr_A_x && d_n_tr == ws.tr_A_n &&
+    const bool ptr_tr_A = cache_tr_A && d_x_tr == ws.tr_A_x && d_n_tr == ws.tr_A_n &&
                           d_nn_tr == ws.tr_A_nn && nm_tr == ws.tr_A_nm &&
-                          max_size_tr == ws.tr_A_max && pmax == ws.tr_A_pmax &&
-                          x_tr_fp == ws.tr_A_fp;
-    const bool hit_tr_B = cache_tr_B && d_x_tr == ws.tr_B_x && d_n_tr == ws.tr_B_n &&
+                          max_size_tr == ws.tr_A_max && pmax == ws.tr_A_pmax;
+    const bool ptr_tr_B = cache_tr_B && d_x_tr == ws.tr_B_x && d_n_tr == ws.tr_B_n &&
                           d_nn_tr == ws.tr_B_nn && nm_tr == ws.tr_B_nm &&
-                          max_size_tr == ws.tr_B_max && pmax == ws.tr_B_pmax &&
-                          x_tr_fp == ws.tr_B_fp;
+                          max_size_tr == ws.tr_B_max && pmax == ws.tr_B_pmax;
+    const unsigned long long x_tr_fp =
+        (ptr_tr_A || ptr_tr_B) ? buffer_fingerprint(d_x_tr, x_tr_n) : 0ULL;
+    const bool hit_tr_A = ptr_tr_A && x_tr_fp == ws.tr_A_fp;
+    const bool hit_tr_B = ptr_tr_B && x_tr_fp == ws.tr_B_fp;
 
     if (cache_tr_A) {
         ensure_capacity(&ws.tr_ksi1, &ws.tr_ksi1_cap, ksi_tr_need);
@@ -2872,7 +2852,7 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.tr_A_x = d_x_tr;
             ws.tr_A_n = d_n_tr;
             ws.tr_A_nn = d_nn_tr;
-            ws.tr_A_fp = x_tr_fp;
+            ws.tr_A_fp = (ptr_tr_A || ptr_tr_B) ? x_tr_fp : buffer_fingerprint(d_x_tr, x_tr_n);
             ws.tr_A_nm = nm_tr;
             ws.tr_A_max = max_size_tr;
             ws.tr_A_pmax = pmax;
@@ -2932,7 +2912,7 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.tr_B_x = d_x_tr;
             ws.tr_B_n = d_n_tr;
             ws.tr_B_nn = d_nn_tr;
-            ws.tr_B_fp = x_tr_fp;
+            ws.tr_B_fp = (ptr_tr_A || ptr_tr_B) ? x_tr_fp : buffer_fingerprint(d_x_tr, x_tr_n);
             ws.tr_B_nm = nm_tr;
             ws.tr_B_max = max_size_tr;
             ws.tr_B_pmax = pmax;
