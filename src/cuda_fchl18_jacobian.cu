@@ -15,8 +15,8 @@
 // allocation covers every molecule.
 //
 // Query-side neighbours stay in representation order (CPU gradient path). The
-// B-side pack buffers are Z-sorted so the fp32 hot kernel can scan equal-Z
-// runs instead of Zi != Zj continues.
+// B-side pack buffers are Z-sorted so the tiled hot kernel can scan equal-Z
+// runs instead of Zi != Zj continues. Same path for float and double.
 
 #include "cuda_fchl18_kernel.hpp"
 
@@ -37,7 +37,7 @@ namespace {
 
 constexpr int kJacBlockSize = 128;
 constexpr int kPrecomputeBlockSize = 128;
-// Shared reduction + register-tile caps for the fp32 hot kernel.
+// Shared reduction + register-tile caps for the tiled hot kernel (float/double).
 constexpr int kHotBlockSize = 128;
 constexpr int kMaxNa3Local = 64;  // up to 21 atoms with register tiles (8*8)
 constexpr int kAmuTile = 8;
@@ -1388,11 +1388,12 @@ __device__ inline long long jac_pack_fourier(
 
 // Hot path: one block per (A,B) molecule pair.
 //
-// fp32: one neighbour pass fills compile-time register tiles ds0..ds7 (no local
-// memory). Threads own flat (i,j) atom pairs; contributions reduce into shared
-// memory via atomicAdd. B-side neighbour fields are read from atom-minor packed
-// buffers (see jac_pack_b_kernel) so consecutive j in a warp coalesce.
-// fp64 / na3>64: amu-strided fallback.
+// na3 <= kMaxNa3Local (float or double): one neighbour pass fills compile-time
+// register tiles ds0..ds7. Threads own flat (i,j) atom pairs; contributions
+// reduce into shared memory via warp-aggregated atomicAdd. B-side neighbour
+// fields are read from atom-minor packed buffers (see jac_pack_b_kernel) so
+// consecutive j in a warp coalesce.
+// na3 > kMaxNa3Local: amu-strided fallback.
 template <typename T>
 __device__ inline void jac_accum_tile8(
     T ds[kAmuTile],
@@ -1545,7 +1546,7 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
         fourier_atom_stride(params.pmax, params.fourier_order, max_size2);
     const long long row0 = row_offset[a];
 
-    const bool use_tiles = (sizeof(T) == 4) && (na3 <= kMaxNa3Local);
+    const bool use_tiles = (na3 <= kMaxNa3Local);
 
     if (!use_tiles) {
         for (int amu = tid; amu < na3; amu += static_cast<int>(blockDim.x)) {
@@ -1942,7 +1943,7 @@ __global__ void jac_pack_b_kernel(
     int order
 ) {
     // Neighbour Z-sort permutation (centre fixed at slot 0). Caps tiled-path sizes.
-    constexpr int kSortCap = kMaxNa3Local;  // >= max neighbours for fp32 hot path
+    constexpr int kSortCap = kMaxNa3Local;  // covers na3 <= kMaxNa3Local molecules
 
     const int flat = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if (flat >= nm2 * max_size2) {
@@ -2347,7 +2348,7 @@ void kernel_gaussian_jacobian_cu_impl(
         nbr1 = ws.nbr1;
     }
 
-    const bool pack_b = (sizeof(T) == 4);
+    // Always pack B for the tiled hot path (float and double share it).
     const size_t pack_bj_need =
         static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * static_cast<size_t>(max_size2);
     const size_t pack_f_need = pack_bj_need * static_cast<size_t>(pmax) * fourier_order;
@@ -2371,18 +2372,16 @@ void kernel_gaussian_jacobian_cu_impl(
             cosp2 = ws.tr_cosp2;
             sinp2 = ws.tr_sinp2;
             ss2 = ws.tr_ss2;
-            if (pack_b) {
-                ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_need);
-                ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_need);
-                ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_need);
-                ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_need);
-                ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_need);
-                pack_dist2 = ws.tr_pack_dist2;
-                pack_z2 = ws.tr_pack_z2;
-                pack_ksi2 = ws.tr_pack_ksi2;
-                pack_cos2 = ws.tr_pack_cos2;
-                pack_sin2 = ws.tr_pack_sin2;
-            }
+            ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_need);
+            ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_need);
+            ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_need);
+            ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_need);
+            ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_need);
+            pack_dist2 = ws.tr_pack_dist2;
+            pack_z2 = ws.tr_pack_z2;
+            pack_ksi2 = ws.tr_pack_ksi2;
+            pack_cos2 = ws.tr_pack_cos2;
+            pack_sin2 = ws.tr_pack_sin2;
         } else {
             ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
             ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp2_need);
@@ -2392,21 +2391,19 @@ void kernel_gaussian_jacobian_cu_impl(
             cosp2 = ws.cosp2;
             sinp2 = ws.sinp2;
             ss2 = ws.ss2;
-            if (pack_b) {
-                ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
-                ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
-                ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
-                ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
-                ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
-                pack_dist2 = ws.pack_dist2;
-                pack_z2 = ws.pack_z2;
-                pack_ksi2 = ws.pack_ksi2;
-                pack_cos2 = ws.pack_cos2;
-                pack_sin2 = ws.pack_sin2;
-            }
+            ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
+            ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
+            ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
+            ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
+            ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
+            pack_dist2 = ws.pack_dist2;
+            pack_z2 = ws.pack_z2;
+            pack_ksi2 = ws.pack_ksi2;
+            pack_cos2 = ws.pack_cos2;
+            pack_sin2 = ws.pack_sin2;
         }
-    } else if (pack_b) {
-        // Aliased A/B still needs a B-layout pack for the fp32 hot path.
+    } else {
+        // Aliased A/B still needs a B-layout pack for the tiled hot path.
         ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
         ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
         ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
@@ -2508,26 +2505,24 @@ void kernel_gaussian_jacobian_cu_impl(
             );
             CUDA_CHECK(cudaGetLastError());
         }
-        if (pack_b) {
-            jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-                d_x2,
-                d_n2,
-                d_nn2,
-                ksi2,
-                cosp2,
-                sinp2,
-                pack_dist2,
-                pack_z2,
-                pack_ksi2,
-                pack_cos2,
-                pack_sin2,
-                nm2,
-                max_size2,
-                pmax,
-                fourier_order
-            );
-            CUDA_CHECK(cudaGetLastError());
-        }
+        jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+            d_x2,
+            d_n2,
+            d_nn2,
+            ksi2,
+            cosp2,
+            sinp2,
+            pack_dist2,
+            pack_z2,
+            pack_ksi2,
+            pack_cos2,
+            pack_sin2,
+            nm2,
+            max_size2,
+            pmax,
+            fourier_order
+        );
+        CUDA_CHECK(cudaGetLastError());
         // Do not cache B when aliased to A — tr_ksi2 was never written.
         if (cache_B && !same_ab) {
             ws.tr_B_x = d_x2;
@@ -2563,11 +2558,11 @@ void kernel_gaussian_jacobian_cu_impl(
         cosp2,
         sinp2,
         ss2,
-        pack_b ? pack_dist2 : nullptr,
-        pack_b ? pack_z2 : nullptr,
-        pack_b ? pack_ksi2 : nullptr,
-        pack_b ? pack_cos2 : nullptr,
-        pack_b ? pack_sin2 : nullptr,
+        pack_dist2,
+        pack_z2,
+        pack_ksi2,
+        pack_cos2,
+        pack_sin2,
         d_jac_out,
         d_alpha,
         nm1,
@@ -2733,17 +2728,14 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp_tr_need);
     ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms_tr);
 
-    const bool pack_b = (sizeof(T) == 4);
     const size_t pack_bj_tr =
         static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * static_cast<size_t>(max_size_tr);
     const size_t pack_f_tr = pack_bj_tr * static_cast<size_t>(pmax) * fourier_order;
-    if (pack_b) {
-        ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_tr);
-        ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_tr);
-        ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_tr);
-        ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_tr);
-        ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_tr);
-    }
+    ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_tr);
+    ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_tr);
+    ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_tr);
+    ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_tr);
+    ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_tr);
 
     const bool cache_tr_A = (nm_tr > nm_q);
     const bool cache_tr_B = (nm_tr > nm_q);
@@ -2778,13 +2770,11 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp_tr_need);
         ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp_tr_need);
         ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms_tr);
-        if (pack_b) {
-            ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_tr);
-            ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_tr);
-            ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_tr);
-            ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_tr);
-            ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_tr);
-        }
+        ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_tr);
+        ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_tr);
+        ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_tr);
+        ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_tr);
+        ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_tr);
     }
 
     // Query side A (shared by J + H).
@@ -2866,26 +2856,24 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.s_prefactor
         );
         CUDA_CHECK(cudaGetLastError());
-        if (pack_b) {
-            jac_pack_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
-                d_x_q,
-                d_n_q,
-                d_nn_q,
-                ws.ksi2,
-                ws.cosp2,
-                ws.sinp2,
-                ws.pack_dist2,
-                ws.pack_z2,
-                ws.pack_ksi2,
-                ws.pack_cos2,
-                ws.pack_sin2,
-                nm_q,
-                max_size_q,
-                pmax,
-                fourier_order
-            );
-            CUDA_CHECK(cudaGetLastError());
-        }
+        jac_pack_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
+            d_x_q,
+            d_n_q,
+            d_nn_q,
+            ws.ksi2,
+            ws.cosp2,
+            ws.sinp2,
+            ws.pack_dist2,
+            ws.pack_z2,
+            ws.pack_ksi2,
+            ws.pack_cos2,
+            ws.pack_sin2,
+            nm_q,
+            max_size_q,
+            pmax,
+            fourier_order
+        );
+        CUDA_CHECK(cudaGetLastError());
     }
 
     T *tr_ksi1 = ws.ksi1;
@@ -2927,13 +2915,11 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         tr_cosp2 = ws.tr_cosp2;
         tr_sinp2 = ws.tr_sinp2;
         tr_ss2 = ws.tr_ss2;
-        if (pack_b) {
-            tr_pack_dist2 = ws.tr_pack_dist2;
-            tr_pack_z2 = ws.tr_pack_z2;
-            tr_pack_ksi2 = ws.tr_pack_ksi2;
-            tr_pack_cos2 = ws.tr_pack_cos2;
-            tr_pack_sin2 = ws.tr_pack_sin2;
-        }
+        tr_pack_dist2 = ws.tr_pack_dist2;
+        tr_pack_z2 = ws.tr_pack_z2;
+        tr_pack_ksi2 = ws.tr_pack_ksi2;
+        tr_pack_cos2 = ws.tr_pack_cos2;
+        tr_pack_sin2 = ws.tr_pack_sin2;
     }
 
     if (!hit_tr_A) {
@@ -3033,26 +3019,24 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.s_prefactor
         );
         CUDA_CHECK(cudaGetLastError());
-        if (pack_b) {
-            jac_pack_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
-                d_x_tr,
-                d_n_tr,
-                d_nn_tr,
-                tr_ksi2,
-                tr_cosp2,
-                tr_sinp2,
-                tr_pack_dist2,
-                tr_pack_z2,
-                tr_pack_ksi2,
-                tr_pack_cos2,
-                tr_pack_sin2,
-                nm_tr,
-                max_size_tr,
-                pmax,
-                fourier_order
-            );
-            CUDA_CHECK(cudaGetLastError());
-        }
+        jac_pack_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
+            d_x_tr,
+            d_n_tr,
+            d_nn_tr,
+            tr_ksi2,
+            tr_cosp2,
+            tr_sinp2,
+            tr_pack_dist2,
+            tr_pack_z2,
+            tr_pack_ksi2,
+            tr_pack_cos2,
+            tr_pack_sin2,
+            nm_tr,
+            max_size_tr,
+            pmax,
+            fourier_order
+        );
+        CUDA_CHECK(cudaGetLastError());
         if (cache_tr_B) {
             ws.tr_B_x = d_x_tr;
             ws.tr_B_n = d_n_tr;
@@ -3087,11 +3071,11 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.cosp2,
             ws.sinp2,
             ws.ss2,
-            pack_b ? ws.pack_dist2 : nullptr,
-            pack_b ? ws.pack_z2 : nullptr,
-            pack_b ? ws.pack_ksi2 : nullptr,
-            pack_b ? ws.pack_cos2 : nullptr,
-            pack_b ? ws.pack_sin2 : nullptr,
+            ws.pack_dist2,
+            ws.pack_z2,
+            ws.pack_ksi2,
+            ws.pack_cos2,
+            ws.pack_sin2,
             d_E,
             d_alpha_F,
             nm_tr,
@@ -3130,11 +3114,11 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         tr_cosp2,
         tr_sinp2,
         tr_ss2,
-        pack_b ? tr_pack_dist2 : nullptr,
-        pack_b ? tr_pack_z2 : nullptr,
-        pack_b ? tr_pack_ksi2 : nullptr,
-        pack_b ? tr_pack_cos2 : nullptr,
-        pack_b ? tr_pack_sin2 : nullptr,
+        tr_pack_dist2,
+        tr_pack_z2,
+        tr_pack_ksi2,
+        tr_pack_cos2,
+        tr_pack_sin2,
         d_F,
         d_alpha_E,
         nm_q,
