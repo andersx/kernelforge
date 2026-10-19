@@ -39,10 +39,10 @@ class FCHL18KRRModel(BaseModel):
       - ``energy_and_force`` — train on E + F jointly via the full combined kernel
 
     .. note::
-        The FCHL18 Hessian kernel (used in ``force_only`` and
-        ``energy_and_force`` modes) requires ``use_atm=False`` and
-        ``cut_start >= 1.0``. These constraints are enforced automatically
-        when those modes are detected.
+        The FCHL18 Hessian / full kernels (used in ``force_only`` and
+        ``energy_and_force`` modes) require ``cut_start >= 1.0``. This is
+        enforced automatically when those modes are detected. ``use_atm``
+        is honored from ``kernel_params`` (default ``True``).
 
     Parameters
     ----------
@@ -100,12 +100,11 @@ class FCHL18KRRModel(BaseModel):
     ) -> None:
         mode = self.training_mode_
 
-        # Resolve kernel params — Hessian/full kernels require use_atm=False
-        # and cut_start >= 1.0 (ATM Hessian not implemented yet)
+        # Force/EF kernels need cut_start >= 1.0 (soft-cutoff Hessian region).
+        # use_atm is supported for jac/hess; do not override the user's choice.
         kp = dict(self.kernel_params)
         if mode in ("force_only", "energy_and_force"):
-            kp["use_atm"] = False
-            kp["cut_start"] = max(kp.get("cut_start", 1.0), 1.0)
+            kp["cut_start"] = max(float(kp.get("cut_start", 1.0)), 1.0)
 
         cut_distance = float(kp.get("cut_distance", 5.0))
 

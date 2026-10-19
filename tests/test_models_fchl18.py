@@ -95,14 +95,14 @@ class TestFCHL18KRRModelForceOnly:
         assert model.training_mode_ == "force_only"
 
     def test_hessian_kernel_constraints_applied(self, dataset: tuple) -> None:
-        """Force-only mode must disable use_atm and enforce cut_start >= 1.0."""
+        """Force-only mode keeps use_atm and enforces cut_start >= 1.0."""
         coords_list, z_list, _, forces = dataset
-        # Pass kernel_params that would be invalid for Hessian if not overridden
+        # cut_start < 1 would be invalid for Hessian if not overridden
         kp = {"use_atm": True, "cut_start": 0.5, "cut_distance": 5.0, "fourier_order": 1}
         model = FCHL18KRRModel(sigma=5.0, l2=1e-3, max_size=MAX_SIZE, kernel_params=kp)
-        # This should not raise — constraints are applied internally
+        # This should not raise — cut_start is clamped internally
         model.fit(coords_list[:8], z_list[:8], forces=forces[:8])
-        assert model._kp_fit["use_atm"] is False
+        assert model._kp_fit["use_atm"] is True
         assert model._kp_fit["cut_start"] >= 1.0
 
     def test_save_load_roundtrip(self, dataset: tuple, tmp_path) -> None:

@@ -237,7 +237,7 @@ __device__ void hess_compute_ksi_and_grad(
 
 // Three-body Fourier terms and their gradients for one atom.
 // cosp/sinp/dcosp/dsinp must be zero-initialised by the caller.
-template <typename T>
+template <typename T, bool UseAtm>
 __device__ void hess_compute_threebody_fourier_and_grad(
     const T *atom_chan,
     int max_size,
@@ -247,7 +247,6 @@ __device__ void hess_compute_threebody_fourier_and_grad(
     T cut_distance,
     int order,
     const int *z_to_idx,
-    bool use_atm,
     int three_body_weight_mode,
     int centre_atom_idx,
     int na3,
@@ -321,7 +320,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
             T datm_dcos_k = zero;
             T cos_j = zero;
             T cos_k_val = zero;
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 cos_j = clamp11(ukj[0] * (-ui_j[0]) + ukj[1] * (-ui_j[1]) + ukj[2] * (-ui_j[2]));
                 cos_k_val =
                     clamp11(ujk[0] * (-ui_k[0]) + ujk[1] * (-ui_k[1]) + ujk[2] * (-ui_k[2]));
@@ -371,7 +370,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
 
             T dcos_j_dR[3][3] = {};
             T dcos_k_dR[3][3] = {};
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 for (int mu = 0; mu < 3; ++mu) {
                     dcos_j_dR[0][mu] = inv_dj * (ukj[mu] + cos_j * ui_j[mu]);
                     dcos_j_dR[1][mu] = inv_di * (ui_j[mu] + cos_j * ukj[mu]) -
@@ -403,7 +402,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
                 gksi3[2][mu] +=
                     cut_atm_w * (radial.dlog_dk * (ui_k[mu]) + radial.dlog_di * (ukj[mu]));
 
-                if (use_atm) {
+                if constexpr (UseAtm) {
                     const T scale = cut_prod * radial.w;
                     for (int la = 0; la < 3; ++la) {
                         gksi3[la][mu] += scale * (datm_dcos_i * dcos_i_dR[la][mu] +
@@ -1287,25 +1286,45 @@ __global__ void hess_precompute_kernel(
         dri
     );
 
-    hess_compute_threebody_fourier_and_grad(
-        atom_chan,
-        max_size,
-        n_neigh,
-        params.three_body_power,
-        params.cut_start,
-        params.cut_distance,
-        params.fourier_order,
-        z_to_idx,
-        params.use_atm != 0,
-        params.three_body_weight_mode,
-        i,
-        na3,
-        nbr,
-        cosp,
-        sinp,
-        dcosp,
-        dsinp
-    );
+    if (params.use_atm != 0) {
+        hess_compute_threebody_fourier_and_grad<T, true>(
+            atom_chan,
+            max_size,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            i,
+            na3,
+            nbr,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp
+        );
+    } else {
+        hess_compute_threebody_fourier_and_grad<T, false>(
+            atom_chan,
+            max_size,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            i,
+            na3,
+            nbr,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp
+        );
+    }
 }
 
 // One block per atom (a, i); threads split the na3 gradient components.
@@ -1437,6 +1456,9 @@ struct HessWorkspace {
     int b_train_nm = 0;
     int b_train_max = 0;
     int b_train_pmax = -1;
+    int b_train_fourier_order = -1;
+    int b_train_use_atm = -1;
+    int b_train_tb_weight_mode = -1;
     T *s_prefactor = nullptr;
     size_t s_prefactor_cap = 0;
     T *rfp_dense = nullptr;
@@ -1669,10 +1691,16 @@ void kernel_gaussian_hessian_cu_impl(
     }
 
     // Pointer keys first; fingerprint only on candidate hit (avoids 3× D2H every call).
+    // Fourier / ATM / weight-mode must match — stale train cache OOB'd when fo changed.
+    const int tb_mode = get_fchl18_three_body_weight_mode();
+    const int use_atm_i = use_atm ? 1 : 0;
     const bool train_ptr_hit = !lower_triangle && d_x2 == ws.b_train_x && d_n2 == ws.b_train_n &&
                                d_nn2 == ws.b_train_nn && d_coords2 == ws.b_train_coords &&
                                d_z2 == ws.b_train_z && nm2 == ws.b_train_nm &&
-                               max_size2 == ws.b_train_max;
+                               max_size2 == ws.b_train_max &&
+                               fourier_order == ws.b_train_fourier_order &&
+                               use_atm_i == ws.b_train_use_atm &&
+                               tb_mode == ws.b_train_tb_weight_mode;
     const size_t x2_n =
         static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
     const unsigned long long x2_fp =
@@ -1810,6 +1838,9 @@ void kernel_gaussian_hessian_cu_impl(
             ws.b_train_nm = nm2;
             ws.b_train_max = max_size2;
             ws.b_train_pmax = pmax;
+            ws.b_train_fourier_order = fourier_order;
+            ws.b_train_use_atm = use_atm_i;
+            ws.b_train_tb_weight_mode = tb_mode;
         }
         b_side = &ws.b_train;
     } else {
@@ -1945,7 +1976,10 @@ void hess_full_matvec_fused_launch(
     const bool train_ptr_hit = d_x_tr == ws.b_train_x && d_n_tr == ws.b_train_n &&
                                d_nn_tr == ws.b_train_nn && d_coords_tr == ws.b_train_coords &&
                                d_z_tr == ws.b_train_z && nm_tr == ws.b_train_nm &&
-                               max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax;
+                               max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax &&
+                               fourier_order == ws.b_train_fourier_order &&
+                               params.use_atm == ws.b_train_use_atm &&
+                               params.three_body_weight_mode == ws.b_train_tb_weight_mode;
     const size_t x_tr_n = static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * 5 *
                           static_cast<size_t>(max_size_tr);
     const unsigned long long x_tr_fp =
@@ -1979,6 +2013,9 @@ void hess_full_matvec_fused_launch(
         ws.b_train_nm = nm_tr;
         ws.b_train_max = max_size_tr;
         ws.b_train_pmax = pmax;
+        ws.b_train_fourier_order = fourier_order;
+        ws.b_train_use_atm = params.use_atm;
+        ws.b_train_tb_weight_mode = params.three_body_weight_mode;
     }
 
     const int n_hot_blocks = hess_build_pair_offsets(

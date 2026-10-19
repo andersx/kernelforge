@@ -22,13 +22,12 @@ The prediction kernel applied to alpha gives:
 
 Restrictions on the hessian / full kernel
 ------------------------------------------
-  - use_atm must be False  (ATM Hessian not yet implemented)
-  - cut_start must be >= 1.0  (cutoff Hessian not yet implemented)
+  - cut_start must be >= 1.0  (soft-cutoff Hessian support region)
 
 Hyperparameters
 ---------------
 Tuned via grid search (see FCHL18_TUNING.md):
-  sigma=2.5, fourier_order=1, use_atm=False
+  sigma=2.5, fourier_order=1, use_atm=True
   two_body_power=4.5, two_body_scaling=2.5, three_body_scaling=1.5
 
 Dataset: MD17 ethanol (~555k structures, 9 atoms, energies + forces in kcal/mol).

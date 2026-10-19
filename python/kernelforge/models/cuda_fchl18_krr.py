@@ -299,9 +299,9 @@ class CudaFCHL18KRRModel(BaseModel):
             msg = "dtype='float32' requires use_rfp=True (GPU rfp_potrf path)"
             raise ValueError(msg)
 
+        # Force/EF kernels need cut_start >= 1.0. use_atm is supported for jac/hess.
         kp = dict(self.kernel_params)
         if mode in ("force_only", "energy_and_force"):
-            kp["use_atm"] = False
             kp["cut_start"] = max(float(kp.get("cut_start", 1.0)), 1.0)
 
         cut_distance = float(kp.get("cut_distance", 5.0))

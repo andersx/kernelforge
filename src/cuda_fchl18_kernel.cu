@@ -224,7 +224,7 @@ __device__ void compute_ksi_device(
     }
 }
 
-template <typename T>
+template <typename T, bool UseAtm>
 __device__ void compute_threebody_fourier_device(
     const T *atom_chan,
     int max_size,
@@ -235,7 +235,6 @@ __device__ void compute_threebody_fourier_device(
     int order,
     int pmax,
     const int *z_to_idx,
-    bool use_atm,
     int three_body_weight_mode,
     T *cosp,
     T *sinp
@@ -299,7 +298,7 @@ __device__ void compute_threebody_fourier_device(
             const T cos_i = clamp11(uxj * uxk + uyj * uyk + uzj * uzk);
 
             T atm = Math<T>::one();
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 const T inv_di = Math<T>::one() / di;
                 const T ukj_x = -dxjk * inv_di;
                 const T ukj_y = -dyjk * inv_di;
@@ -651,21 +650,37 @@ __global__ void precompute_atom_data_kernel(
         params.cut_distance,
         ksi_out
     );
-    compute_threebody_fourier_device(
-        atom_chan,
-        max_size,
-        n_neigh,
-        params.three_body_power,
-        params.cut_start,
-        params.cut_distance,
-        params.fourier_order,
-        params.pmax,
-        params.z_to_idx,
-        params.use_atm != 0,
-        params.three_body_weight_mode,
-        cosp_out,
-        sinp_out
-    );
+    if (params.use_atm != 0) {
+        compute_threebody_fourier_device<T, true>(
+            atom_chan,
+            max_size,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            params.pmax,
+            params.z_to_idx,
+            params.three_body_weight_mode,
+            cosp_out,
+            sinp_out
+        );
+    } else {
+        compute_threebody_fourier_device<T, false>(
+            atom_chan,
+            max_size,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            params.pmax,
+            params.z_to_idx,
+            params.three_body_weight_mode,
+            cosp_out,
+            sinp_out
+        );
+    }
 }
 
 template <typename T>

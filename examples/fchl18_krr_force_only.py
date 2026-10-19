@@ -21,8 +21,7 @@ both predicted and reference energies are centred before reporting MAE.
 
 Restrictions on kernel_gaussian_hessian / hessian_symm_rfp
 -----------------------------------------------------------
-  - use_atm must be False  (ATM Hessian not yet implemented)
-  - cut_start must be >= 1.0  (cutoff Hessian not yet implemented)
+  - cut_start must be >= 1.0  (soft-cutoff Hessian support region)
 
 Dataset: MD17 ethanol, 9 atoms per frame, forces in kcal/(mol*Angstrom).
 """

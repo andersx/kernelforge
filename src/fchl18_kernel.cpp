@@ -2645,10 +2645,11 @@ void kernel_gaussian_jacobian_t(
 //
 // Computes H[α*3+μ, β*3+ν] = d²s(i,j) / dR_A[α,μ] dR_B[β,ν]
 //
-// Restriction: cut_function == 1 everywhere (cut_distance=1e6 or cut_start>=1)
-// and use_atm == false.  Under these conditions V(p,q) = ksi_A[p]*ksi_B[q]*d_scale
-// + angular_A[p]*angular_B[q]*a_scale, so d²V/dR_A dR_B = 0 and only three
-// terms survive (see plan):
+// Restriction: cut_function == 1 everywhere (cut_distance=1e6 or cut_start>=1).
+// ATM is supported via AtomDataGrad (first derivatives of atm in three-body
+// Fourier). Under the inactive-cutoff factorization,
+// V(p,q) = ksi_A[p]*ksi_B[q]*d_scale + angular_A[p]*angular_B[q]*a_scale, so
+// d²V/dR_A dR_B = 0 and only three terms survive:
 //
 //   Term 1: dG/dr_p * d(r_p)/dR_A * dV/dR_B
 //   Term 2: dG/dr_q * d(r_q)/dR_B * dV/dR_A

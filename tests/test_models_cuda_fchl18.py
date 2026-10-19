@@ -92,7 +92,7 @@ class TestCudaFCHL18KRRModelForceOnly:
         E_pred, F_pred = model.predict(te, zte)
         assert E_pred.shape == (4,)
         assert F_pred.shape == (4 * N_ATOMS * 3,)
-        assert model._kp_fit["use_atm"] is False
+        assert model._kp_fit["use_atm"] is True
 
 
 class TestCudaFCHL18KRRModelEnergyAndForce:
