@@ -360,7 +360,9 @@ if(KF_WITH_CUDA)
     src/curfp_ssfrk.cpp
     src/curfp_ssfr2.cpp
     src/curfp_spftrf.cpp
-    src/curfp_spftrs.cpp)
+    src/curfp_spftrs.cpp
+    src/curfp_dpftrf.cpp
+    src/curfp_dpftrs.cpp)
 
       # Torch include dirs must precede the standalone pybind11 headers so that
       # torch/extension.h's bundled pybind11 wins the header-guard race.
@@ -498,7 +500,9 @@ if(KF_WITH_CUDA)
         src/curfp_handle.cpp
         src/curfp_ssfrk.cpp
         src/curfp_spftrf.cpp
-        src/curfp_spftrs.cpp)
+        src/curfp_spftrs.cpp
+        src/curfp_dpftrf.cpp
+        src/curfp_dpftrs.cpp)
 
       target_include_directories(cuda_rff_features BEFORE PRIVATE
         ${TORCH_INCLUDE_DIRS}

@@ -8,8 +8,6 @@ from typing import Any, Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 
-from kernelforge import kernelmath
-
 from .base import BaseModel, TrainingMode
 
 # --------------------------------------------------------------------------
@@ -161,12 +159,13 @@ class CudaFCHL18KRRModel(BaseModel):
     Training and inference precision are independent:
 
     - ``dtype`` (default ``"float64"``) is used to assemble the kernel and
-      solve for ``alpha``.  FP64 uses CUDA kernels + CPU ``cho_solve_rfp``
-      (or dense ``np.linalg.solve`` when ``use_rfp=False``).  FP32 keeps the
-      full fit on GPU (``rfp_potrf`` / ``rfp_potrs``, UPLO=U).
-    - ``infer_dtype`` (default ``"float32"``) is used by ``predict`` / MD.
+      solve for ``alpha``.  With ``use_rfp=True`` the fit stays on GPU for
+      both float32 and float64 (``rfp_potrf`` / ``rfp_potrs``, UPLO=U).
+      Dense ``np.linalg.solve`` is used when ``use_rfp=False`` (float64 only).
+    - ``infer_dtype`` (default ``"float64"``) is used by ``predict`` / MD.
       Training tensors and ``alpha`` are cast once after fit and cached on
-      the GPU.  Outputs are still returned as float64 numpy arrays.
+      the GPU.  Set ``infer_dtype="float32"`` for faster MD.  Outputs are
+      still returned as float64 numpy arrays.
 
     Mirrors ``FCHL18KRRModel`` training modes:
       - ``energy_only``      — ``kernel_gaussian_symm`` / ``_symm_rfp``
@@ -189,7 +188,7 @@ class CudaFCHL18KRRModel(BaseModel):
         kernel_params: dict[str, Any] | None = None,
         use_rfp: bool = True,
         dtype: DtypeName = "float64",
-        infer_dtype: DtypeName = "float32",
+        infer_dtype: DtypeName = "float64",
     ) -> None:
         _require_torch()
         _require_cuda_kernel()
@@ -269,24 +268,33 @@ class CudaFCHL18KRRModel(BaseModel):
             coords = self._coords_tr_infer
         return (x, self._n_tr, self._nn_tr, coords, self._z_tr)
 
-    def _solve_rfp_fp32(self, K_rfp: Any, y: NDArray[np.float64], n: int) -> NDArray[np.float64]:  # noqa: ANN401
-        """GPU float32 RFP Cholesky solve (FCHL18 packing: TRANSR=N, UPLO=U)."""
+    def _solve_rfp_gpu(self, K_rfp: Any, y: NDArray[np.float64], n: int) -> NDArray[np.float64]:  # noqa: ANN401
+        """GPU RFP Cholesky solve (FCHL18 packing: TRANSR=N, UPLO=U).
+
+        Uses the dtype of ``K_rfp`` (float32 or float64).
+        """
         import torch
 
         from kernelforge import cuda_global_kernels as _gext
 
-        if K_rfp.dtype != torch.float32:
-            K_rfp = K_rfp.float()
+        if K_rfp.dtype == torch.float64:
+            np_dt: type[np.floating[Any]] = np.float64
+            torch_dt = torch.float64
+        else:
+            if K_rfp.dtype != torch.float32:
+                K_rfp = K_rfp.float()
+            np_dt = np.float32
+            torch_dt = torch.float32
         rhs = (
-            torch.from_numpy(np.ascontiguousarray(y, dtype=np.float32))
-            .cuda()
+            torch.from_numpy(np.ascontiguousarray(y, dtype=np_dt))
+            .to(device="cuda", dtype=torch_dt)
             .unsqueeze(-1)
             .contiguous()
         )
         info = _gext.rfp_potrf(K_rfp, n, float(self.l2), uplo="U")
         if info != 0:
             msg = (
-                f"rfp_potrf (CudaFCHL18KRRModel, dtype=float32): "
+                f"rfp_potrf (CudaFCHL18KRRModel, dtype={self.dtype}): "
                 f"Cholesky factorization failed (info={info})"
             )
             raise RuntimeError(msg)
@@ -324,7 +332,6 @@ class CudaFCHL18KRRModel(BaseModel):
         self._n_train = len(coords_list)
         self._kp_fit = kp
 
-        use_fp32_solve = self.dtype == "float32"
         kp_cuda = _cuda_kernel_kwargs(kp)
 
         if mode == "energy_only":
@@ -333,12 +340,7 @@ class CudaFCHL18KRRModel(BaseModel):
             self._y_train = np.asarray(energies, dtype=np.float64)
             if self.use_rfp:
                 K_rfp = _cuda_kernel.kernel_gaussian_symm_rfp(x, n, nn, sigma=self.sigma, **kp_cuda)
-                if use_fp32_solve:
-                    self._alpha = self._solve_rfp_fp32(K_rfp, self._y_train, self._n_train)
-                else:
-                    self._alpha = kernelmath.cho_solve_rfp(
-                        K_rfp.detach().cpu().numpy(), self._y_train, l2=self.l2
-                    )
+                self._alpha = self._solve_rfp_gpu(K_rfp, self._y_train, self._n_train)
             else:
                 K = _cuda_kernel.kernel_gaussian_symm(x, n, nn, sigma=self.sigma, **kp_cuda)
                 K_np = K.detach().cpu().numpy().astype(np.float64)
@@ -354,12 +356,7 @@ class CudaFCHL18KRRModel(BaseModel):
                 x, n, nn, coords, z, sigma=self.sigma, **kp_cuda
             )
             n_force = int(F_flat.shape[0])
-            if use_fp32_solve:
-                self._alpha = self._solve_rfp_fp32(K_rfp, F_flat, n_force)
-            else:
-                self._alpha = kernelmath.cho_solve_rfp(
-                    K_rfp.detach().cpu().numpy(), F_flat, l2=self.l2
-                )
+            self._alpha = self._solve_rfp_gpu(K_rfp, F_flat, n_force)
 
         else:  # energy_and_force
             if energies is None:
@@ -373,12 +370,7 @@ class CudaFCHL18KRRModel(BaseModel):
                 K_rfp = _cuda_kernel.kernel_gaussian_full_symm_rfp(
                     x, n, nn, coords, z, sigma=self.sigma, **kp_cuda
                 )
-                if use_fp32_solve:
-                    self._alpha = self._solve_rfp_fp32(K_rfp, y_tr, int(y_tr.shape[0]))
-                else:
-                    self._alpha = kernelmath.cho_solve_rfp(
-                        K_rfp.detach().cpu().numpy(), y_tr, l2=self.l2
-                    )
+                self._alpha = self._solve_rfp_gpu(K_rfp, y_tr, int(y_tr.shape[0]))
             else:
                 K = _cuda_kernel.kernel_gaussian_full_symm(
                     x, n, nn, coords, z, sigma=self.sigma, **kp_cuda
@@ -568,7 +560,7 @@ class CudaFCHL18KRRModel(BaseModel):
         self.use_rfp = bool(data["use_rfp"]) if "use_rfp" in data else True
         raw_dtype = str(data["dtype"]) if "dtype" in data else "float64"
         self.dtype = _check_dtype("dtype", raw_dtype)
-        raw_infer = str(data["infer_dtype"]) if "infer_dtype" in data else "float32"
+        raw_infer = str(data["infer_dtype"]) if "infer_dtype" in data else "float64"
         self.infer_dtype = _check_dtype("infer_dtype", raw_infer)
         self.kernel_params = json.loads(str(data["kernel_params"]))
         self._kp_fit = json.loads(str(data["kp_fit"]))

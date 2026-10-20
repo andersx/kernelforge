@@ -1,8 +1,9 @@
 """kernelcli — command-line interface for testing kernelforge ML potentials.
 
-Supports three datasets (rMD17, QM7b, small_mols_mini), three model classes
-(LocalKRRModel, LocalRFFModel, FCHL18KRRModel), two representations (FCHL19,
-FCHL18), and three training modes (energy_only, force_only, energy_and_force).
+Supports three datasets (rMD17, QM7b, small_mols_mini), KRR/RFF regressors,
+three representations (FCHL19, FCHL18, invdist), and three training modes
+(energy_only, force_only, energy_and_force).  ``--cuda`` selects GPU models
+when built (invdist / FCHL19 / FCHL18).
 
 Usage examples::
 
@@ -15,7 +16,10 @@ Usage examples::
     kernelcli --dataset small_mols_mini --regressor krr --representation fchl18 \\
               --mode energy_and_force --sigma 2.5 --l2 1e-4
 
-GPU-accelerated variant (requires CUDA build and --representation invdist)::
+    kernelcli --dataset small_mols_mini --representation fchl18 --cuda \\
+              --mode energy_and_force --sigma 2.5 --l2 1e-4
+
+GPU invdist (requires CUDA build)::
 
     kernelcli --dataset rmd17_ethanol --representation invdist \\
               --cuda --sigma 3.0 --l2 1e-5 --n-train 200 --n-test 200
@@ -26,7 +30,7 @@ Representation/kernel parameters can be overridden with ``--repr-param KEY=VALUE
 
     kernelcli --dataset rmd17_ethanol --repr-param rcut=6.0 --repr-param nRs2=32
     kernelcli --dataset rmd17_ethanol --representation fchl18 \\
-              --repr-param cut_distance=8.0 --repr-param two_body_width=0.15
+              --repr-param cut_distance=8.0 --repr-param use_alchemy=true
 
 Entry point registered as ``kernelcli`` in pyproject.toml.
 """
@@ -376,7 +380,7 @@ def _build_model(
     pca_center: bool = False,
     pca_whiten: bool = False,
     dtype: str = "float64",
-    infer_dtype: str = "float32",
+    infer_dtype: str = "float64",
 ) -> (
     LocalKRRModel
     | LocalRFFModel
@@ -499,6 +503,9 @@ def _print_header(args: argparse.Namespace) -> None:
     print(f"  mode           : {args.mode}")
     print(f"  sigma          : {args.sigma}")
     print(f"  l2             : {args.l2}")
+    if args.cuda and args.representation == "fchl18":
+        print(f"  dtype          : {args.dtype}")
+        print(f"  infer_dtype    : {args.infer_dtype}")
     if args.cuda and args.representation == "fchl19":
         print(f"  solver         : {args.solver}")
         print(f"  preprocessing  : {args.preprocessing}")
@@ -591,8 +598,24 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=[1, 2, 3, 4, 5],
         help="rMD17 pre-split index (1-5). Ignored for qm7b/small_mols_mini.",
     )
-    p.add_argument("--sigma", type=float, default=20.0, help="Kernel length-scale.")
-    p.add_argument("--l2", type=float, default=1e-8, help="L2 regularisation.")
+    p.add_argument(
+        "--sigma",
+        type=float,
+        default=20.0,
+        help=(
+            "Kernel length-scale.  Defaults suit FCHL19 (~20); for FCHL18 use "
+            "about 2.5 (see examples)."
+        ),
+    )
+    p.add_argument(
+        "--l2",
+        type=float,
+        default=1e-8,
+        help=(
+            "L2 regularisation.  FCHL18 force / energy+force often needs ~1e-4 "
+            "for Cholesky stability."
+        ),
+    )
     p.add_argument(
         "--solver",
         default=_DEFAULT_CUDA_LOCAL_SOLVER,
@@ -741,18 +764,18 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["float32", "float64"],
         help=(
             "Training floating-point precision for --cuda --representation fchl18 "
-            "(default: float64). float32 uses GPU rfp_potrf for the fit."
+            "(default: float64). Both float32 and float64 use GPU rfp_potrf / "
+            "rfp_potrs for the RFP fit."
         ),
     )
     p.add_argument(
         "--infer-dtype",
         type=str,
-        default="float32",
+        default="float64",
         choices=["float32", "float64"],
         help=(
             "Inference floating-point precision for --cuda --representation fchl18 "
-            "(default: float32). Independent of --dtype; train in float64 and "
-            "predict/MD in float32."
+            "(default: float64). Independent of --dtype; use float32 for faster MD."
         ),
     )
     p.add_argument(
@@ -767,8 +790,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "two_body_decay, three_body_decay, three_body_weight. "
             "For FCHL18: two_body_width, three_body_width, cut_distance, "
             "two_body_scaling, three_body_scaling, two_body_power, "
-            "three_body_power, cut_start, fourier_order, use_atm. "
-            "Example: --repr-param rcut=6.0 --repr-param nRs2=32"
+            "three_body_power, cut_start, fourier_order, use_atm, "
+            "use_alchemy, alchemy_period_width, alchemy_group_width; "
+            "with --cuda also three_body_weight_mode (0/1/2 or alias). "
+            "Example: --repr-param rcut=6.0 --repr-param use_alchemy=true"
         ),
     )
     return p
@@ -836,7 +861,7 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
                 "--dtype is only supported with --cuda --representation fchl18 "
                 f"(got --representation {args.representation})."
             )
-        if args.infer_dtype != "float32" and args.representation != "fchl18":
+        if args.infer_dtype != "float64" and args.representation != "fchl18":
             parser.error(
                 "--infer-dtype is only supported with --cuda --representation fchl18 "
                 f"(got --representation {args.representation})."
@@ -890,7 +915,7 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
     else:
         if args.dtype != "float64":
             parser.error("--dtype is only supported with --cuda --representation fchl18.")
-        if args.infer_dtype != "float32":
+        if args.infer_dtype != "float64":
             parser.error("--infer-dtype is only supported with --cuda --representation fchl18.")
         if args.solver != _DEFAULT_CUDA_LOCAL_SOLVER:
             parser.error("--solver is only supported with --cuda --representation fchl19.")
@@ -920,6 +945,23 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
             "RFF regressor is not supported with the FCHL18 representation. "
             "Use --regressor krr or --representation fchl19."
         )
+    if args.representation == "fchl18" and args.elements is not None:
+        parser.error(
+            "--elements is only used with --representation fchl19 "
+            "(FCHL18 uses nuclear charges from the structures)."
+        )
+    if args.representation != "fchl18" and args.max_size is not None:
+        parser.error("--max-size is only supported with --representation fchl18.")
+
+    # FCHL18 --repr-param: CUDA-only keys must not be passed on the CPU path
+    # (would become unexpected kwargs into the pybind kernels).
+    fchl18_rp = _parse_repr_params(args.repr_param) if args.representation == "fchl18" else {}
+    if "three_body_weight_mode" in fchl18_rp and not args.cuda:
+        parser.error(
+            "--repr-param three_body_weight_mode requires --cuda "
+            "(CPU FCHL18 uses product weights only)."
+        )
+
     if args.representation == "invdist" and args.dataset in ("qm7b", "small_mols_mini"):
         parser.error(
             f"--representation invdist requires all molecules to have the same atom count. "

@@ -131,7 +131,7 @@ def kernel_gaussian_symm_rfp(
     ...
 
 def rfp_potrf(
-    K_rfp: torch.Tensor,  # (N*(N+1)//2,) float32 CUDA, modified in-place
+    K_rfp: torch.Tensor,  # (N*(N+1)//2,) float32|float64 CUDA, modified in-place
     N: int,
     l2: float = 0.0,
     uplo: str = "L",
@@ -141,10 +141,11 @@ def rfp_potrf(
     Optionally adds l2 to the diagonal (Tikhonov regularisation) before
     factorising.  The input buffer is overwritten with the Cholesky factor.
     Convention: TRANSR=N; ``uplo`` selects UPLO=L (default) or UPLO=U.
+    Supports float32 and float64 CUDA tensors.
 
     Parameters
     ----------
-    K_rfp : torch.Tensor, shape (N*(N+1)//2,), float32 CUDA
+    K_rfp : torch.Tensor, shape (N*(N+1)//2,), float32 or float64 CUDA
         RFP-packed matrix.  Modified in-place.
     N : int
         Matrix dimension.
@@ -162,20 +163,21 @@ def rfp_potrf(
     ...
 
 def rfp_potrs(
-    L_rfp: torch.Tensor,  # (N*(N+1)//2,) float32 CUDA
-    B: torch.Tensor,  # (N, nrhs) float32 CUDA, modified in-place
+    L_rfp: torch.Tensor,  # (N*(N+1)//2,) float32|float64 CUDA
+    B: torch.Tensor,  # (N, nrhs) float32|float64 CUDA, modified in-place
     uplo: str = "L",
 ) -> None:
     """Triangular solve using a Cholesky factor from rfp_potrf.
 
     UPLO=L: solves (L * L^T) * X = B; UPLO=U: solves (U^T * U) * X = B.
     Overwrites B with the solution X. Convention: TRANSR=N.
+    ``L_rfp`` and ``B`` must share the same dtype (float32 or float64).
 
     Parameters
     ----------
-    L_rfp : torch.Tensor, shape (N*(N+1)//2,), float32 CUDA
+    L_rfp : torch.Tensor, shape (N*(N+1)//2,), float32 or float64 CUDA
         Cholesky factor in RFP format (output of rfp_potrf).
-    B : torch.Tensor, shape (N, nrhs), float32 CUDA
+    B : torch.Tensor, shape (N, nrhs), float32 or float64 CUDA
         Right-hand side.  Overwritten with the solution on exit.
     uplo : str, default "L"
         Must match the ``uplo`` used in ``rfp_potrf``.

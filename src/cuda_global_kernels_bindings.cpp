@@ -222,16 +222,28 @@ static bool parse_uplo_upper(const std::string &uplo)
     return false;
 }
 
+static void check_cuda_float(const torch::Tensor &t, const char *name)
+{
+    TORCH_CHECK(t.is_cuda(), name, " must be a CUDA tensor");
+    TORCH_CHECK(t.scalar_type() == torch::kFloat32 || t.scalar_type() == torch::kFloat64,
+                name, " must be float32 or float64");
+    TORCH_CHECK(t.is_contiguous(), name, " must be contiguous");
+}
+
 int rfp_potrf(torch::Tensor K_rfp, int N, double l2, const std::string &uplo)
 {
-    check_cuda_float32(K_rfp, "K_rfp");
+    check_cuda_float(K_rfp, "K_rfp");
     TORCH_CHECK(K_rfp.dim() == 1, "K_rfp must be 1-D");
     TORCH_CHECK(K_rfp.size(0) == (long long)N * (N + 1) / 2,
                 "K_rfp.size(0) must equal N*(N+1)/2");
 
     const bool uplo_upper = parse_uplo_upper(uplo);
     int info = 0;
-    kf::rfp_potrf_cu(K_rfp.data_ptr<float>(), N, (float)l2, &info, uplo_upper);
+    if (K_rfp.scalar_type() == torch::kFloat64) {
+        kf::rfp_potrf_cu(K_rfp.data_ptr<double>(), N, l2, &info, uplo_upper);
+    } else {
+        kf::rfp_potrf_cu(K_rfp.data_ptr<float>(), N, (float)l2, &info, uplo_upper);
+    }
     return info;
 }
 
@@ -242,8 +254,10 @@ int rfp_potrf(torch::Tensor K_rfp, int N, double l2, const std::string &uplo)
 
 void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B, const std::string &uplo)
 {
-    check_cuda_float32(L_rfp, "L_rfp");
-    check_cuda_float32(B,     "B");
+    check_cuda_float(L_rfp, "L_rfp");
+    check_cuda_float(B,     "B");
+    TORCH_CHECK(L_rfp.scalar_type() == B.scalar_type(),
+                "L_rfp and B must have the same dtype");
     TORCH_CHECK(L_rfp.dim() == 1, "L_rfp must be 1-D");
     TORCH_CHECK(B.dim() == 2,     "B must be 2-D (N, nrhs)");
 
@@ -253,8 +267,13 @@ void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B, const std::string &uplo)
                 "L_rfp.size(0) must equal N*(N+1)/2");
 
     const bool uplo_upper = parse_uplo_upper(uplo);
-    kf::rfp_potrs_cu(
-        L_rfp.data_ptr<float>(), B.data_ptr<float>(), N, nrhs, uplo_upper);
+    if (L_rfp.scalar_type() == torch::kFloat64) {
+        kf::rfp_potrs_cu(
+            L_rfp.data_ptr<double>(), B.data_ptr<double>(), N, nrhs, uplo_upper);
+    } else {
+        kf::rfp_potrs_cu(
+            L_rfp.data_ptr<float>(), B.data_ptr<float>(), N, nrhs, uplo_upper);
+    }
 }
 
 

@@ -118,8 +118,10 @@ void kernel_gaussian_symm_rfp_cu(
 // On exit d_K_rfp holds the Cholesky factor in the same RFP packing.
 // *info: 0 = success, >0 = matrix not positive definite (leading minor).
 // Convention: TRANSR=N; uplo_upper=false → UPLO=L, true → UPLO=U.
+// Overloads for float32 (curfpSpftrf) and float64 (curfpDpftrf).
 // ---------------------------------------------------------------------------
 void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info, bool uplo_upper = false);
+void rfp_potrf_cu(double *d_K_rfp, int N, double l2, int *info, bool uplo_upper = false);
 
 
 // ---------------------------------------------------------------------------
@@ -132,6 +134,9 @@ void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info, bool uplo_upper = 
 // ---------------------------------------------------------------------------
 void rfp_potrs_cu(
     const float *d_L_rfp, float *d_B, int N, int nrhs, bool uplo_upper = false
+);
+void rfp_potrs_cu(
+    const double *d_L_rfp, double *d_B, int N, int nrhs, bool uplo_upper = false
 );
 
 }  // namespace kf
