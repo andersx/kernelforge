@@ -15,5 +15,6 @@ py::array_t<double> kernel_gaussian_hessian_symm_py(
     const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm,
+    bool use_alchemy = false, double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 );

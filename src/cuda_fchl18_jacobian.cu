@@ -20,9 +20,11 @@
 
 #include "cuda_fchl18_kernel.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -63,6 +65,11 @@ struct JacParams {
     int pmax;
     int use_atm;
     int three_body_weight_mode;
+    // Periodic-table alchemy: Z-indexed pd table (emax x emax); nullptr when off.
+    // Side-2 Fourier buffers handed to the kernels are then element-mixed (see
+    // cuda_fchl18_common.cuh), so only the neighbour / central pd weights live here.
+    const T *pd;
+    int emax;
 };
 
 // ---------------------------------------------------------------------------
@@ -960,9 +967,20 @@ __device__ T scalar_noalchemy_and_grad_amu(
         *ds_out = Math<T>::zero();
     }
 
+    // Alchemy (params.pd != nullptr): all neighbour pairs weighted by pd(Zi,Zj), whole
+    // scalar scaled by pd(Zc1,Zc2). Otherwise only equal-Z pairs / centrals contribute.
+    const T *pd = params.pd;
+    const int emax = params.emax;
+    const bool alch = (pd != nullptr);
     const int Z1 = static_cast<int>(x1_chan[max_size1]);
     const int Z2 = static_cast<int>(x2_chan[max_size2]);
-    if (Z1 != Z2) {
+    T pd_central = Math<T>::one();
+    if (alch) {
+        pd_central = alch_pd(pd, emax, Z1, Z2);
+        if (pd_central == Math<T>::zero()) {
+            return Math<T>::zero();
+        }
+    } else if (Z1 != Z2) {
         return Math<T>::zero();
     }
 
@@ -985,7 +1003,13 @@ __device__ T scalar_noalchemy_and_grad_amu(
         const long long i_na3 = static_cast<long long>(i) * na3;
 
         for (int j = 1; j < n_neigh2; ++j) {
-            if (Zi != static_cast<int>(x2_chan[max_size2 + j])) {
+            T pd_ij = Math<T>::one();
+            if (alch) {
+                pd_ij = alch_pd(pd, emax, Zi, static_cast<int>(x2_chan[max_size2 + j]));
+                if (pd_ij == Math<T>::zero()) {
+                    continue;
+                }
+            } else if (Zi != static_cast<int>(x2_chan[max_size2 + j])) {
                 continue;
             }
 
@@ -995,7 +1019,8 @@ __device__ T scalar_noalchemy_and_grad_amu(
                 continue;
             }
 
-            const T G = Math<T>::exp_(r2 * inv_width);
+            const T G = alch ? Math<T>::exp_(r2 * inv_width) * pd_ij
+                             : Math<T>::exp_(r2 * inv_width);
             const T dG_dri = G * T(2) * dr * inv_width;
 
             T angular = Math<T>::zero();
@@ -1042,6 +1067,10 @@ __device__ T scalar_noalchemy_and_grad_amu(
         }
     }
 
+    if (alch) {
+        aadist *= pd_central;
+        ds *= pd_central;
+    }
     if (want_grad) {
         *ds_out = ds;
     }
@@ -1266,6 +1295,8 @@ __global__ void jac_self_scalar_b_kernel(
     const T *ksi_all,
     const T *cosp_all,
     const T *sinp_all,
+    const T *cosp_eff_all,
+    const T *sinp_eff_all,
     T *ss_out,
     int nm2,
     int max_size2,
@@ -1290,6 +1321,8 @@ __global__ void jac_self_scalar_b_kernel(
     const T *ksi = ksi_all + static_cast<long long>(flat_idx) * max_size2;
     const T *cosp = cosp_all + static_cast<long long>(flat_idx) * fstride;
     const T *sinp = sinp_all + static_cast<long long>(flat_idx) * fstride;
+    const T *cosp_e = cosp_eff_all + static_cast<long long>(flat_idx) * fstride;
+    const T *sinp_e = sinp_eff_all + static_cast<long long>(flat_idx) * fstride;
 
     T dummy = Math<T>::zero();
     const T *no_grad = nullptr;
@@ -1308,8 +1341,8 @@ __global__ void jac_self_scalar_b_kernel(
         max_size2,
         n_neigh,
         ksi,
-        cosp,
-        sinp,
+        cosp_e,
+        sinp_e,
         params,
         s_prefactor,
         0,
@@ -1332,6 +1365,8 @@ __global__ void jac_self_scalar_a_kernel(
     const T *sinp_all,
     const T *dcosp_all,
     const T *dsinp_all,
+    const T *cosp_eff_all,
+    const T *sinp_eff_all,
     T *ss_out,
     T *dss_out,
     int nm1,
@@ -1367,6 +1402,8 @@ __global__ void jac_self_scalar_a_kernel(
     const T *sinp = sinp_all + static_cast<long long>(flat_idx) * fstride;
     const T *dcosp = dcosp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
     const T *dsinp = dsinp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
+    const T *cosp_e = cosp_eff_all + static_cast<long long>(flat_idx) * fstride;
+    const T *sinp_e = sinp_eff_all + static_cast<long long>(flat_idx) * fstride;
     T *dss = dss_out + static_cast<long long>(flat_idx) * na3_max;
 
     T ss = Math<T>::zero();
@@ -1388,8 +1425,8 @@ __global__ void jac_self_scalar_a_kernel(
             max_size1,
             n_neigh,
             ksi,
-            cosp,
-            sinp,
+            cosp_e,
+            sinp_e,
             params,
             s_prefactor,
             na3,
@@ -1580,6 +1617,7 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
     const long long row0 = row_offset[a];
 
     const bool use_tiles = (na3 <= kMaxNa3Local);
+    const bool alch = (params.pd != nullptr);
 
     if (!use_tiles) {
         for (int amu = tid; amu < na3; amu += static_cast<int>(blockDim.x)) {
@@ -1701,9 +1739,18 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
             T aadist = Math<T>::zero();
             const int Z1 = static_cast<int>(x1_chan[max_size1]);
             const int Z2 = static_cast<int>(pack_z2[jac_pack_bj(b, 0, j, max_size2)]);
-            if (Z1 == Z2) {
-                aadist = Math<T>::one();
-                // B neighbours are Z-sorted in pack buffers — scan matching runs.
+            // Alchemy folds pd(Zc1,Zc2) into every G (and the self term) so the
+            // gradient accumulators need no extra scaling; no-alchemy keeps pd_central = 1.
+            T pd_central = Math<T>::one();
+            bool pair_ok = (Z1 == Z2);
+            if (alch) {
+                pd_central = alch_pd(params.pd, params.emax, Z1, Z2);
+                pair_ok = (pd_central != Math<T>::zero());
+            }
+            if (pair_ok) {
+                aadist = pd_central;
+                // No-alchemy: B neighbours are Z-sorted in pack buffers — scan matching runs.
+                // Alchemy: scan every B neighbour with weight pd(Zi, Zj).
                 for (int ii = 1; ii < n_neigh_i; ++ii) {
                     const int Zi = static_cast<int>(x1_chan[max_size1 + ii]);
                     const T ri = x1_chan[ii];
@@ -1713,13 +1760,23 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
                     const T *dksi_row = dksi_i + i_na3;
 
                     int jj = 1;
-                    while (jj < n_neigh_j &&
-                           static_cast<int>(pack_z2[jac_pack_bj(b, jj, j, max_size2)]) < Zi) {
-                        ++jj;
+                    if (!alch) {
+                        while (jj < n_neigh_j &&
+                               static_cast<int>(pack_z2[jac_pack_bj(b, jj, j, max_size2)]) < Zi) {
+                            ++jj;
+                        }
                     }
                     for (; jj < n_neigh_j; ++jj) {
                         const long long bj = jac_pack_bj(b, jj, j, max_size2);
-                        if (static_cast<int>(pack_z2[bj]) != Zi) {
+                        T pd_w = pd_central;
+                        if (alch) {
+                            pd_w *= alch_pd(
+                                params.pd, params.emax, Zi, static_cast<int>(pack_z2[bj])
+                            );
+                            if (pd_w == Math<T>::zero()) {
+                                continue;
+                            }
+                        } else if (static_cast<int>(pack_z2[bj]) != Zi) {
                             break;
                         }
                         const T dr = ri - pack_dist2[bj];
@@ -1727,7 +1784,8 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
                         if (r2 >= maxgausdist2) {
                             continue;
                         }
-                        const T G = Math<T>::exp_(r2 * inv_width);
+                        const T G = alch ? Math<T>::exp_(r2 * inv_width) * pd_w
+                                         : Math<T>::exp_(r2 * inv_width);
                         const T dG_dri = G * T(2) * dr * inv_width;
 
                         T angular = Math<T>::zero();
@@ -2057,6 +2115,11 @@ struct JacWorkspace {
     T *pack_cos2 = nullptr;
     T *pack_sin2 = nullptr;
     T *s_prefactor = nullptr;
+    // Alchemy scratch: element-channel-mixed Fourier buffers (CPU layout).
+    T *cos_eff = nullptr;
+    T *sin_eff = nullptr;
+    size_t cos_eff_cap = 0;
+    size_t sin_eff_cap = 0;
     int *nbr1 = nullptr;
     int *row_offset = nullptr;
     int *z_present = nullptr;
@@ -2113,9 +2176,14 @@ struct JacWorkspace {
     int tr_A_nm = 0;
     int tr_A_max = 0;
     int tr_A_pmax = -1;
+    int tr_A_map[256] = {};  // Z -> channel map the cached A buffers were built with
     int tr_A_fourier_order = -1;
     int tr_A_use_atm = -1;
     int tr_A_tb_weight_mode = -1;
+    // ss1 / dss1 depend on alchemy (+ widths); 0 widths when alchemy is off.
+    int tr_A_alch = 0;
+    double tr_A_alch_pw = 0.0;
+    double tr_A_alch_gw = 0.0;
 
     // Persistent train-as-B cache (jacobian / force path).
     T *tr_ksi2 = nullptr;
@@ -2143,9 +2211,14 @@ struct JacWorkspace {
     int tr_B_nm = 0;
     int tr_B_max = 0;
     int tr_B_pmax = -1;
+    int tr_B_map[256] = {};  // Z -> channel map the cached B buffers were built with
     int tr_B_fourier_order = -1;
     int tr_B_use_atm = -1;
     int tr_B_tb_weight_mode = -1;
+    // Cached B Fourier / pack buffers hold element-mixed data when alchemy is on.
+    int tr_B_alch = 0;
+    double tr_B_alch_pw = 0.0;
+    double tr_B_alch_gw = 0.0;
 };
 
 template <typename T>
@@ -2182,6 +2255,9 @@ void kernel_gaussian_jacobian_cu_impl(
     T cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool cols_are_coords,
     int matvec_mode,
     T *d_E_k = nullptr
@@ -2209,17 +2285,23 @@ void kernel_gaussian_jacobian_cu_impl(
         static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
     const int tb_mode = get_fchl18_three_body_weight_mode();
     const int use_atm_i = use_atm ? 1 : 0;
+    const int alch_i = use_alchemy ? 1 : 0;
+    const double alch_pw = use_alchemy ? alchemy_period_width : 0.0;
+    const double alch_gw = use_alchemy ? alchemy_group_width : 0.0;
     // Fingerprint only when pointer keys already match (skip 3× D2H on cold path).
-    // Fourier precompute depends on fourier_order / use_atm / three_body_weight_mode —
-    // stale cache after changing those params caused CUDA illegal-memory (fo=1→2).
+    // Fourier precompute depends on fourier_order / use_atm / three_body_weight_mode /
+    // alchemy (+ widths) — stale cache after changing those params caused CUDA
+    // illegal-memory (fo=1→2).
     const bool ptr_A = cache_A && d_x1 == ws.tr_A_x && d_n1 == ws.tr_A_n &&
                        d_nn1 == ws.tr_A_nn && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max &&
                        fourier_order == ws.tr_A_fourier_order && use_atm_i == ws.tr_A_use_atm &&
-                       tb_mode == ws.tr_A_tb_weight_mode;
+                       tb_mode == ws.tr_A_tb_weight_mode && alch_i == ws.tr_A_alch &&
+                       alch_pw == ws.tr_A_alch_pw && alch_gw == ws.tr_A_alch_gw;
     const bool ptr_B = cache_B && d_x2 == ws.tr_B_x && d_n2 == ws.tr_B_n &&
                        d_nn2 == ws.tr_B_nn && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max &&
                        fourier_order == ws.tr_B_fourier_order && use_atm_i == ws.tr_B_use_atm &&
-                       tb_mode == ws.tr_B_tb_weight_mode;
+                       tb_mode == ws.tr_B_tb_weight_mode && alch_i == ws.tr_B_alch &&
+                       alch_pw == ws.tr_B_alch_pw && alch_gw == ws.tr_B_alch_gw;
     const unsigned long long x1_fp = ptr_A ? buffer_fingerprint(d_x1, x1_n) : 0ULL;
     const unsigned long long x2_fp = ptr_B ? buffer_fingerprint(d_x2, x2_n) : 0ULL;
     const bool hit_A = ptr_A && x1_fp == ws.tr_A_fp;
@@ -2235,6 +2317,13 @@ void kernel_gaussian_jacobian_cu_impl(
     int pmax = 0;
     if (hit_A || hit_B) {
         pmax = hit_A ? ws.tr_A_pmax : ws.tr_B_pmax;
+        // The shared device map may have been overwritten by an intervening call.
+        CUDA_CHECK(cudaMemcpy(
+            ws.z_to_idx,
+            hit_A ? ws.tr_A_map : ws.tr_B_map,
+            256 * sizeof(int),
+            cudaMemcpyHostToDevice
+        ));
     } else {
         CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
         jac_mark_elements_kernel<<<grid1, kPrecomputeBlockSize>>>(
@@ -2283,6 +2372,18 @@ void kernel_gaussian_jacobian_cu_impl(
     params.fourier_order = fourier_order;
     params.pmax = pmax;
     params.use_atm = use_atm ? 1 : 0;
+    params.pd = nullptr;
+    params.emax = 0;
+    const T *d_pdc = nullptr;
+    if (use_alchemy) {
+        params.pd = alchemy_upload_pd<T>(alchemy_period_width, alchemy_group_width);
+        params.emax = kf::fchl18::kAlchemyEmaxDefault;
+        // The element map is only re-uploaded on a cold path; rebuild the host copy
+        // from the device map so the compact PD matrix always matches z_to_idx.
+        int h_map[256];
+        CUDA_CHECK(cudaMemcpy(h_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+        d_pdc = alchemy_upload_pdc<T>(h_map, pmax);
+    }
 
     T h_s_prefactor[kMaxFourierOrder] = {};
     const double ang_norm2 = get_angular_norm2(static_cast<double>(three_body_width));
@@ -2491,6 +2592,24 @@ void kernel_gaussian_jacobian_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        // Alchemy: element-mix A's Fourier into scratch for the self scalar (side 2).
+        const T *cosp1_e = cosp1;
+        const T *sinp1_e = sinp1;
+        if (use_alchemy) {
+            ensure_capacity(&ws.cos_eff, &ws.cos_eff_cap, std::max(cosp1_need, cosp2_need));
+            ensure_capacity(&ws.sin_eff, &ws.sin_eff_cap, std::max(cosp1_need, cosp2_need));
+            const long long chunk = static_cast<long long>(fourier_order) * max_size1;
+            alchemy_mix_fourier(
+                cosp1, ws.cos_eff, d_pdc, d_n1, nm1, max_size1, pmax, static_cast<long long>(fstride1),
+                1, 0, chunk, false, true, 0
+            );
+            alchemy_mix_fourier(
+                sinp1, ws.sin_eff, d_pdc, d_n1, nm1, max_size1, pmax, static_cast<long long>(fstride1),
+                1, 0, chunk, false, true, 0
+            );
+            cosp1_e = ws.cos_eff;
+            sinp1_e = ws.sin_eff;
+        }
         jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms1), kJacBlockSize>>>(
             d_x1,
             d_n1,
@@ -2502,6 +2621,8 @@ void kernel_gaussian_jacobian_cu_impl(
             sinp1,
             dcosp1,
             dsinp1,
+            cosp1_e,
+            sinp1_e,
             ss1,
             dss1,
             nm1,
@@ -2518,9 +2639,13 @@ void kernel_gaussian_jacobian_cu_impl(
             ws.tr_A_nm = nm1;
             ws.tr_A_max = max_size1;
             ws.tr_A_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_A_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
             ws.tr_A_fourier_order = fourier_order;
             ws.tr_A_use_atm = use_atm_i;
             ws.tr_A_tb_weight_mode = tb_mode;
+            ws.tr_A_alch = alch_i;
+            ws.tr_A_alch_pw = alch_pw;
+            ws.tr_A_alch_gw = alch_gw;
         }
     }
 
@@ -2533,6 +2658,12 @@ void kernel_gaussian_jacobian_cu_impl(
             cosp2 = cosp1;
             sinp2 = sinp1;
             ss2 = ss1;
+            if (use_alchemy) {
+                // A and B alias: ws.cos_eff/sin_eff already hold the element-mixed A
+                // Fourier (written for the A self scalar above); B reads those.
+                cosp2 = ws.cos_eff;
+                sinp2 = ws.sin_eff;
+            }
         } else {
             CUDA_CHECK(cudaMemset(cosp2, 0, cosp2_need * sizeof(T)));
             CUDA_CHECK(cudaMemset(sinp2, 0, cosp2_need * sizeof(T)));
@@ -2540,6 +2671,23 @@ void kernel_gaussian_jacobian_cu_impl(
                 d_x2, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params, ws.z_to_idx
             );
             CUDA_CHECK(cudaGetLastError());
+            const T *cosp2_e = cosp2;
+            const T *sinp2_e = sinp2;
+            if (use_alchemy) {
+                ensure_capacity(&ws.cos_eff, &ws.cos_eff_cap, std::max(cosp1_need, cosp2_need));
+                ensure_capacity(&ws.sin_eff, &ws.sin_eff_cap, std::max(cosp1_need, cosp2_need));
+                const long long chunk = static_cast<long long>(fourier_order) * max_size2;
+                alchemy_mix_fourier(
+                    cosp2, ws.cos_eff, d_pdc, d_n2, nm2, max_size2, pmax,
+                    static_cast<long long>(fstride2), 1, 0, chunk, false, true, 0
+                );
+                alchemy_mix_fourier(
+                    sinp2, ws.sin_eff, d_pdc, d_n2, nm2, max_size2, pmax,
+                    static_cast<long long>(fstride2), 1, 0, chunk, false, true, 0
+                );
+                cosp2_e = ws.cos_eff;
+                sinp2_e = ws.sin_eff;
+            }
             jac_self_scalar_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
                 d_x2,
                 d_n2,
@@ -2547,6 +2695,8 @@ void kernel_gaussian_jacobian_cu_impl(
                 ksi2,
                 cosp2,
                 sinp2,
+                cosp2_e,
+                sinp2_e,
                 ss2,
                 nm2,
                 max_size2,
@@ -2554,6 +2704,16 @@ void kernel_gaussian_jacobian_cu_impl(
                 ws.s_prefactor
             );
             CUDA_CHECK(cudaGetLastError());
+            if (use_alchemy) {
+                // Keep the element-mixed Fourier in the (cached) B buffers: the pack and
+                // the amu-strided fallback read side-2 data from here.
+                CUDA_CHECK(cudaMemcpy(
+                    cosp2, ws.cos_eff, cosp2_need * sizeof(T), cudaMemcpyDeviceToDevice
+                ));
+                CUDA_CHECK(cudaMemcpy(
+                    sinp2, ws.sin_eff, cosp2_need * sizeof(T), cudaMemcpyDeviceToDevice
+                ));
+            }
         }
         jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
             d_x2,
@@ -2582,9 +2742,13 @@ void kernel_gaussian_jacobian_cu_impl(
             ws.tr_B_nm = nm2;
             ws.tr_B_max = max_size2;
             ws.tr_B_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_B_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
             ws.tr_B_fourier_order = fourier_order;
             ws.tr_B_use_atm = use_atm_i;
             ws.tr_B_tb_weight_mode = tb_mode;
+            ws.tr_B_alch = alch_i;
+            ws.tr_B_alch_pw = alch_pw;
+            ws.tr_B_alch_gw = alch_gw;
         }
     }
 
@@ -2667,6 +2831,9 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     T cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool compute_energy
 ) {
     if (nm_q <= 0 || nm_tr <= 0 || d_a_rows <= 0 || d_b_cols <= 0) {
@@ -2725,6 +2892,17 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     params.fourier_order = fourier_order;
     params.pmax = pmax;
     params.use_atm = use_atm ? 1 : 0;
+    params.pd = nullptr;
+    params.emax = 0;
+    const T *d_pdc = nullptr;
+    const int alch_i = use_alchemy ? 1 : 0;
+    const double alch_pw = use_alchemy ? alchemy_period_width : 0.0;
+    const double alch_gw = use_alchemy ? alchemy_group_width : 0.0;
+    if (use_alchemy) {
+        params.pd = alchemy_upload_pd<T>(alchemy_period_width, alchemy_group_width);
+        params.emax = kf::fchl18::kAlchemyEmaxDefault;
+        d_pdc = alchemy_upload_pdc<T>(h_z_to_idx, pmax);
+    }
 
     T h_s_prefactor[kMaxFourierOrder] = {};
     const double ang_norm2 = get_angular_norm2(static_cast<double>(three_body_width));
@@ -2742,13 +2920,15 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         cudaMemcpyHostToDevice
     ));
 
-    {
-        int h_row_offset[2] = {0, d_a_rows};
-        ensure_capacity(&ws.row_offset, &ws.row_offset_cap, 2);
-        CUDA_CHECK(cudaMemcpy(
-            ws.row_offset, h_row_offset, 2 * sizeof(int), cudaMemcpyHostToDevice
-        ));
-    }
+    // Query molecule a owns force rows [offset[a], offset[a] + 3*n_q[a]).
+    fill_coord_offsets_device(
+        d_n_q,
+        &ws.row_offset,
+        &ws.row_offset_cap,
+        nm_q,
+        d_a_rows,
+        "full_matvec output rows must equal 3 * sum(n_query)"
+    );
 
     const size_t na3_max_q = static_cast<size_t>(max_size_q) * 3;
     const size_t fstride_q =
@@ -2776,19 +2956,27 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms_q);
     ensure_capacity(&ws.dss1, &ws.dss1_cap, dss_q_need);
     ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi_q_need);
-    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi_tr_need);
-    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp_tr_need);
-    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp_tr_need);
-    ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms_tr);
+    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, std::max(ksi_q_need, ksi_tr_need));
+    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, std::max(cosp_q_need, cosp_tr_need));
+    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, std::max(cosp_q_need, cosp_tr_need));
+    ensure_capacity(&ws.ss2, &ws.ss2_cap, std::max(n_atoms_q, n_atoms_tr));
 
     const size_t pack_bj_tr =
         static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * static_cast<size_t>(max_size_tr);
     const size_t pack_f_tr = pack_bj_tr * static_cast<size_t>(pmax) * fourier_order;
-    ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_tr);
-    ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_tr);
-    ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_tr);
-    ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_tr);
-    ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_tr);
+    const size_t pack_bj_q =
+        static_cast<size_t>(nm_q) * static_cast<size_t>(max_size_q) * static_cast<size_t>(max_size_q);
+    const size_t pack_f_q = pack_bj_q * static_cast<size_t>(pmax) * fourier_order;
+    ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, std::max(pack_bj_q, pack_bj_tr));
+    ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, std::max(pack_bj_q, pack_bj_tr));
+    ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, std::max(pack_bj_q, pack_bj_tr));
+    ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, std::max(pack_f_q, pack_f_tr));
+    ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, std::max(pack_f_q, pack_f_tr));
+    if (use_alchemy) {
+        // Scratch for the element-mixed Fourier (consumed immediately by self scalars / copied back).
+        ensure_capacity(&ws.cos_eff, &ws.cos_eff_cap, std::max(cosp_q_need, cosp_tr_need));
+        ensure_capacity(&ws.sin_eff, &ws.sin_eff_cap, std::max(cosp_q_need, cosp_tr_need));
+    }
 
     const bool cache_tr_A = (nm_tr > nm_q);
     const bool cache_tr_B = (nm_tr > nm_q);
@@ -2801,13 +2989,17 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
                           max_size_tr == ws.tr_A_max && pmax == ws.tr_A_pmax &&
                           fourier_order == ws.tr_A_fourier_order &&
                           use_atm_jt == ws.tr_A_use_atm &&
-                          tb_mode_jt == ws.tr_A_tb_weight_mode;
+                          tb_mode_jt == ws.tr_A_tb_weight_mode && alch_i == ws.tr_A_alch &&
+                          alch_pw == ws.tr_A_alch_pw && alch_gw == ws.tr_A_alch_gw &&
+                          std::memcmp(h_z_to_idx, ws.tr_A_map, sizeof(h_z_to_idx)) == 0;
     const bool ptr_tr_B = cache_tr_B && d_x_tr == ws.tr_B_x && d_n_tr == ws.tr_B_n &&
                           d_nn_tr == ws.tr_B_nn && nm_tr == ws.tr_B_nm &&
                           max_size_tr == ws.tr_B_max && pmax == ws.tr_B_pmax &&
                           fourier_order == ws.tr_B_fourier_order &&
                           use_atm_jt == ws.tr_B_use_atm &&
-                          tb_mode_jt == ws.tr_B_tb_weight_mode;
+                          tb_mode_jt == ws.tr_B_tb_weight_mode && alch_i == ws.tr_B_alch &&
+                          alch_pw == ws.tr_B_alch_pw && alch_gw == ws.tr_B_alch_gw &&
+                          std::memcmp(h_z_to_idx, ws.tr_B_map, sizeof(h_z_to_idx)) == 0;
     const unsigned long long x_tr_fp =
         (ptr_tr_A || ptr_tr_B) ? buffer_fingerprint(d_x_tr, x_tr_n) : 0ULL;
     const bool hit_tr_A = ptr_tr_A && x_tr_fp == ws.tr_A_fp;
@@ -2838,6 +3030,19 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_tr);
     }
 
+    // Element-mix a Fourier pair (cos, sin) of one side into ws.cos_eff / ws.sin_eff.
+    auto mix_side = [&](const T *cosp, const T *sinp, const int *d_n, int nm, int max_size) {
+        const long long fstride =
+            static_cast<long long>(pmax) * fourier_order * static_cast<long long>(max_size);
+        const long long chunk = static_cast<long long>(fourier_order) * max_size;
+        alchemy_mix_fourier(
+            cosp, ws.cos_eff, d_pdc, d_n, nm, max_size, pmax, fstride, 1, 0, chunk, false, true, 0
+        );
+        alchemy_mix_fourier(
+            sinp, ws.sin_eff, d_pdc, d_n, nm, max_size, pmax, fstride, 1, 0, chunk, false, true, 0
+        );
+    };
+
     // Query side A (shared by J + H).
     CUDA_CHECK(cudaMemset(ws.dksi1, 0, dksi_q_need * sizeof(T)));
     CUDA_CHECK(cudaMemset(ws.dri1, 0, dksi_q_need * sizeof(T)));
@@ -2866,6 +3071,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         ws.z_to_idx
     );
     CUDA_CHECK(cudaGetLastError());
+    const T *cosp1_e = ws.cosp1;
+    const T *sinp1_e = ws.sinp1;
+    if (use_alchemy) {
+        mix_side(ws.cosp1, ws.sinp1, d_n_q, nm_q, max_size_q);
+        cosp1_e = ws.cos_eff;
+        sinp1_e = ws.sin_eff;
+    }
     jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms_q), kJacBlockSize>>>(
         d_x_q,
         d_n_q,
@@ -2877,6 +3089,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         ws.sinp1,
         ws.dcosp1,
         ws.dsinp1,
+        cosp1_e,
+        sinp1_e,
         ws.ss1,
         ws.dss1,
         nm_q,
@@ -2903,6 +3117,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        const T *cosp2q_e = ws.cosp2;
+        const T *sinp2q_e = ws.sinp2;
+        if (use_alchemy) {
+            mix_side(ws.cosp2, ws.sinp2, d_n_q, nm_q, max_size_q);
+            cosp2q_e = ws.cos_eff;
+            sinp2q_e = ws.sin_eff;
+        }
         jac_self_scalar_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
             d_x_q,
             d_n_q,
@@ -2910,6 +3131,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.ksi2,
             ws.cosp2,
             ws.sinp2,
+            cosp2q_e,
+            sinp2q_e,
             ws.ss2,
             nm_q,
             max_size_q,
@@ -2917,6 +3140,15 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.s_prefactor
         );
         CUDA_CHECK(cudaGetLastError());
+        if (use_alchemy) {
+            // Pack (and the Jt hot kernel) read the element-mixed side-2 Fourier.
+            CUDA_CHECK(cudaMemcpy(
+                ws.cosp2, ws.cos_eff, cosp_q_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
+            CUDA_CHECK(cudaMemcpy(
+                ws.sinp2, ws.sin_eff, cosp_q_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
+        }
         jac_pack_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
             d_x_q,
             d_n_q,
@@ -3011,6 +3243,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        const T *tr_cosp1_e = tr_cosp1;
+        const T *tr_sinp1_e = tr_sinp1;
+        if (use_alchemy) {
+            mix_side(tr_cosp1, tr_sinp1, d_n_tr, nm_tr, max_size_tr);
+            tr_cosp1_e = ws.cos_eff;
+            tr_sinp1_e = ws.sin_eff;
+        }
         jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms_tr), kJacBlockSize>>>(
             d_x_tr,
             d_n_tr,
@@ -3022,6 +3261,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             tr_sinp1,
             tr_dcosp1,
             tr_dsinp1,
+            tr_cosp1_e,
+            tr_sinp1_e,
             tr_ss1,
             tr_dss1,
             nm_tr,
@@ -3047,9 +3288,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.tr_A_nm = nm_tr;
             ws.tr_A_max = max_size_tr;
             ws.tr_A_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_A_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
             ws.tr_A_fourier_order = fourier_order;
             ws.tr_A_use_atm = use_atm_jt;
             ws.tr_A_tb_weight_mode = tb_mode_jt;
+            ws.tr_A_alch = alch_i;
+            ws.tr_A_alch_pw = alch_pw;
+            ws.tr_A_alch_gw = alch_gw;
         }
     }
 
@@ -3069,6 +3314,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        const T *tr_cosp2_e = tr_cosp2;
+        const T *tr_sinp2_e = tr_sinp2;
+        if (use_alchemy) {
+            mix_side(tr_cosp2, tr_sinp2, d_n_tr, nm_tr, max_size_tr);
+            tr_cosp2_e = ws.cos_eff;
+            tr_sinp2_e = ws.sin_eff;
+        }
         jac_self_scalar_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
             d_x_tr,
             d_n_tr,
@@ -3076,6 +3328,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             tr_ksi2,
             tr_cosp2,
             tr_sinp2,
+            tr_cosp2_e,
+            tr_sinp2_e,
             tr_ss2,
             nm_tr,
             max_size_tr,
@@ -3083,6 +3337,15 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.s_prefactor
         );
         CUDA_CHECK(cudaGetLastError());
+        if (use_alchemy) {
+            // Cached B buffers (and the pack below) hold the element-mixed Fourier.
+            CUDA_CHECK(cudaMemcpy(
+                tr_cosp2, ws.cos_eff, cosp_tr_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
+            CUDA_CHECK(cudaMemcpy(
+                tr_sinp2, ws.sin_eff, cosp_tr_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
+        }
         jac_pack_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
             d_x_tr,
             d_n_tr,
@@ -3109,9 +3372,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.tr_B_nm = nm_tr;
             ws.tr_B_max = max_size_tr;
             ws.tr_B_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_B_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
             ws.tr_B_fourier_order = fourier_order;
             ws.tr_B_use_atm = use_atm_jt;
             ws.tr_B_tb_weight_mode = tb_mode_jt;
+            ws.tr_B_alch = alch_i;
+            ws.tr_B_alch_pw = alch_pw;
+            ws.tr_B_alch_gw = alch_gw;
         }
     }
 
@@ -3241,7 +3508,10 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         use_atm,
         pmax,
         ws.z_to_idx,
-        ws.s_prefactor
+        ws.s_prefactor,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 
@@ -3279,6 +3549,9 @@ void kernel_gaussian_full_matvec_fused_cu(
     float cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool compute_energy
 ) {
     kernel_gaussian_full_matvec_fused_cu_impl(
@@ -3313,6 +3586,9 @@ void kernel_gaussian_full_matvec_fused_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         compute_energy
     );
 }
@@ -3349,6 +3625,9 @@ void kernel_gaussian_full_matvec_fused_cu(
     double cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool compute_energy
 ) {
     kernel_gaussian_full_matvec_fused_cu_impl(
@@ -3383,6 +3662,9 @@ void kernel_gaussian_full_matvec_fused_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         compute_energy
     );
 }
@@ -3412,7 +3694,10 @@ void kernel_gaussian_jacobian_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3441,6 +3726,9 @@ void kernel_gaussian_jacobian_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/0
     );
@@ -3471,7 +3759,10 @@ void kernel_gaussian_jacobian_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3500,6 +3791,9 @@ void kernel_gaussian_jacobian_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/0
     );
@@ -3530,7 +3824,10 @@ void kernel_gaussian_jacobian_t_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3559,6 +3856,9 @@ void kernel_gaussian_jacobian_t_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/true,
         /*matvec_mode=*/0
     );
@@ -3589,7 +3889,10 @@ void kernel_gaussian_jacobian_t_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3618,6 +3921,9 @@ void kernel_gaussian_jacobian_t_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/true,
         /*matvec_mode=*/0
     );
@@ -3650,7 +3956,10 @@ void kernel_gaussian_jacobian_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3679,6 +3988,9 @@ void kernel_gaussian_jacobian_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/1,
         d_E_out
@@ -3712,7 +4024,10 @@ void kernel_gaussian_jacobian_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3741,6 +4056,9 @@ void kernel_gaussian_jacobian_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/1,
         d_E_out
@@ -3773,7 +4091,10 @@ void kernel_gaussian_jacobian_t_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3802,6 +4123,9 @@ void kernel_gaussian_jacobian_t_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/2
     );
@@ -3833,7 +4157,10 @@ void kernel_gaussian_jacobian_t_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3862,6 +4189,9 @@ void kernel_gaussian_jacobian_t_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/2
     );

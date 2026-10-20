@@ -172,6 +172,13 @@ class CudaFCHL18KRRModel(BaseModel):
       - ``energy_only``      — ``kernel_gaussian_symm`` / ``_symm_rfp``
       - ``force_only``       — ``kernel_gaussian_hessian_symm_rfp``
       - ``energy_and_force`` — ``kernel_gaussian_full_symm_rfp``
+
+    ``kernel_params`` may include ``use_alchemy`` (default ``False``),
+    ``alchemy_period_width`` and ``alchemy_group_width`` (both default ``1.6``)
+    to enable the periodic-table alchemical kernel (same semantics as the CPU
+    ``FCHL18KRRModel``). The fused matvec prediction path (used when there are
+    more training than query molecules) is alchemy-aware, so alchemy needs no
+    unfused fallback.
     """
 
     def __init__(

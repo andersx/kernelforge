@@ -40,6 +40,9 @@ def kernel_gaussian(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the rectangular FCHL18 Gaussian kernel matrix on GPU.
 
@@ -76,6 +79,9 @@ def kernel_gaussian_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Gaussian kernel matrix on GPU.
 
@@ -114,6 +120,9 @@ def kernel_gaussian_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Gaussian kernel in RFP packed format on GPU.
 
@@ -160,6 +169,9 @@ def kernel_gaussian_jacobian(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 Jacobian kernel dK/dR_A on GPU.
 
@@ -216,6 +228,9 @@ def kernel_gaussian_jacobian_t(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 Jacobian-T kernel on GPU.
 
@@ -247,6 +262,9 @@ def kernel_gaussian_gradient(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 gradient kernel for a single query molecule on GPU.
 
@@ -277,6 +295,9 @@ def kernel_gaussian_hessian(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 Hessian kernel d2K/dR_A dR_B on GPU.
 
@@ -334,6 +355,9 @@ def kernel_gaussian_hessian_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Hessian kernel on GPU.
 
@@ -359,6 +383,9 @@ def kernel_gaussian_hessian_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Hessian kernel in RFP format on GPU.
 
@@ -389,6 +416,9 @@ def kernel_gaussian_full(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the full FCHL18 energy+force kernel matrix on GPU.
 
@@ -421,6 +451,9 @@ def kernel_gaussian_full_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric full FCHL18 energy+force kernel on GPU.
 
@@ -448,6 +481,9 @@ def kernel_gaussian_full_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric full FCHL18 kernel in RFP packed format on GPU.
 
@@ -485,8 +521,18 @@ def kernel_gaussian_full_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
     compute_energy: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor]: ...
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Contracted ``K_full(X1, X2) @ [alpha_E, alpha_F]`` without forming ``K_full``.
+
+    Uses a fused one-shot path when ``N_B > N_A`` (train set larger than the query set) and
+    the unfused kernels otherwise. Both paths support ``use_alchemy`` (periodic-table
+    alchemy) and give the same result as the dense ``kernel_gaussian_full`` product.
+    """
+    ...
 def kernel_gaussian_hessian_matvec(
     X1: torch.Tensor,
     X2: torch.Tensor,
@@ -510,6 +556,9 @@ def kernel_gaussian_hessian_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor: ...
 def kernel_gaussian_jacobian_t_matvec(
     X_train: torch.Tensor,
@@ -532,4 +581,7 @@ def kernel_gaussian_jacobian_t_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor: ...

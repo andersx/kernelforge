@@ -198,6 +198,9 @@ struct FullParams {
     double cut_distance;
     int fourier_order;
     bool use_atm;
+    bool use_alchemy;
+    double alchemy_period_width;
+    double alchemy_group_width;
 };
 
 template <typename T>
@@ -248,21 +251,21 @@ void kernel_gaussian_full_cu_impl(
 
     kernel_gaussian_rect_cu(
         d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, sc.EE, sigma, nm1, nm2, max_size1, max_size2, tbs, tbw,
-        tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_jacobian_cu(
         d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, d_coords1, d_z1, sc.FE, sigma, nm1, nm2, max_size1,
-        max_size2, d_a_rows, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        max_size2, d_a_rows, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     // EF: differentiate B against fixed repr A → jac_t(query=B, fixed=A).
     kernel_gaussian_jacobian_t_cu(
         d_x2, d_x1, d_n2, d_n1, d_nn2, d_nn1, d_coords2, d_z2, sc.EF, sigma, nm2, nm1, max_size2,
-        max_size1, d_b_cols, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        max_size1, d_b_cols, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_hessian_cu(
         d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, d_coords1, d_z1, d_coords2, d_z2, sc.FF, sigma, nm1,
         nm2, max_size1, max_size2, d_a_rows, d_b_cols, tbs, tbw, tbp, ths, thw, thp, cs, cd,
-        P.fourier_order, P.use_atm
+        P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
 
     launch_scatter(sc.EE, d_K_out, nm1, nm2, full_cols, 0, 0);
@@ -309,15 +312,15 @@ void kernel_gaussian_full_symm_cu_impl(
 
     kernel_gaussian_symm_cu(
         d_x, d_n, d_nn, sc.EE, sigma, nm, max_size, tbs, tbw, tbp, ths, thw, thp, cs, cd,
-        P.fourier_order, P.use_atm
+        P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_jacobian_cu(
         d_x, d_x, d_n, d_n, d_nn, d_nn, d_coords, d_z, sc.FE, sigma, nm, nm, max_size, max_size, D,
-        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_hessian_symm_cu(
         d_x, d_n, d_nn, d_coords, d_z, sc.FF, sigma, nm, max_size, D, tbs, tbw, tbp, ths, thw, thp,
-        cs, cd, P.fourier_order, P.use_atm
+        cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
 
     launch_scatter(sc.EE, d_K_out, nm, nm, BIG, 0, 0);
@@ -370,15 +373,15 @@ void kernel_gaussian_full_symm_rfp_cu_impl(
 
     kernel_gaussian_symm_cu(
         d_x, d_n, d_nn, sc.EE, sigma, nm, max_size, tbs, tbw, tbp, ths, thw, thp, cs, cd,
-        P.fourier_order, P.use_atm
+        P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_jacobian_cu(
         d_x, d_x, d_n, d_n, d_nn, d_nn, d_coords, d_z, sc.FE, sigma, nm, nm, max_size, max_size, D,
-        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_hessian_symm_cu(
         d_x, d_n, d_nn, d_coords, d_z, sc.FF, sigma, nm, max_size, D, tbs, tbw, tbp, ths, thw, thp,
-        cs, cd, P.fourier_order, P.use_atm
+        cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
 
     {
@@ -412,7 +415,10 @@ FullParams make_params(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     return FullParams{
         sigma,
@@ -425,7 +431,10 @@ FullParams make_params(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     };
 }
 
@@ -459,7 +468,10 @@ void kernel_gaussian_full_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_cu_impl(
         d_x1,
@@ -490,7 +502,10 @@ void kernel_gaussian_full_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -523,7 +538,10 @@ void kernel_gaussian_full_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_cu_impl(
         d_x1,
@@ -554,7 +572,10 @@ void kernel_gaussian_full_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -579,7 +600,10 @@ void kernel_gaussian_full_symm_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_cu_impl(
         d_x,
@@ -602,7 +626,10 @@ void kernel_gaussian_full_symm_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -627,7 +654,10 @@ void kernel_gaussian_full_symm_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_cu_impl(
         d_x,
@@ -650,7 +680,10 @@ void kernel_gaussian_full_symm_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -675,7 +708,10 @@ void kernel_gaussian_full_symm_rfp_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_rfp_cu_impl(
         d_x,
@@ -698,7 +734,10 @@ void kernel_gaussian_full_symm_rfp_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -723,7 +762,10 @@ void kernel_gaussian_full_symm_rfp_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_rfp_cu_impl(
         d_x,
@@ -746,7 +788,10 @@ void kernel_gaussian_full_symm_rfp_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }

@@ -30,8 +30,12 @@ void kernel_gaussian(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order,
-    bool use_atm,       // if false: replace ATM factor with 1.0
-    double *kernel_out  // (nm1, nm2) row-major OUT
+    bool use_atm,  // if false: replace ATM factor with 1.0
+    double *kernel_out,  // (nm1, nm2) row-major OUT
+    // Periodic-table alchemy (qml default off in KernelForge for backward compat).
+    // When use_alchemy=true, neighbour/central Z pairs are weighted by pd(Zi,Zj).
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric variant: K[a, b] = K[b, a].
@@ -42,8 +46,10 @@ void kernel_gaussian_symm(
     int nm, int max_size, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
     double three_body_power, double cut_start, double cut_distance, int fourier_order,
-    bool use_atm,       // if false: replace ATM factor with 1.0
-    double *kernel_out  // (nm, nm) row-major OUT
+    bool use_atm,        // if false: replace ATM factor with 1.0
+    double *kernel_out,  // (nm, nm) row-major OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric kernel written directly in RFP-packed format (TRANSR='N', UPLO='U'),
@@ -52,7 +58,9 @@ void kernel_gaussian_symm_rfp_core(
     const double *x, const int *n, const int *nn, int nm, int max_size, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *rfp_out
+    double cut_distance, int fourier_order, bool use_atm, double *rfp_out,
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Gradient of the FCHL18 Gaussian kernel w.r.t. Cartesian coordinates of
@@ -79,7 +87,9 @@ void kernel_gaussian_gradient(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *grad_out  // (n_atoms_A, 3, nm2) row-major OUT
+    double *grad_out,  // (n_atoms_A, 3, nm2) row-major OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Batch Jacobian: J[row, b] = dK(A_i, B_b) / dR_{A_i}[flat], shape (D_A, nm2)
@@ -92,7 +102,9 @@ void kernel_gaussian_jacobian(
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm,
-    double *J_out  // (D_A, nm2) row-major OUT
+    double *J_out,  // (D_A, nm2) row-major OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Jacobian-transpose: K_jt[b, flat_A] = dK(A_i, B_b) / dR_{A_i}[flat]
@@ -105,7 +117,9 @@ void kernel_gaussian_jacobian_t(
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm,
-    double *K_jt_out  // (nm2, D_A) row-major OUT
+    double *K_jt_out,  // (nm2, D_A) row-major OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Mixed second derivative of the FCHL18 Gaussian kernel w.r.t. coordinates of
@@ -122,7 +136,9 @@ void kernel_gaussian_hessian(
     int n_atoms_A, int n_atoms_B, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
     double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    double *hess_out  // (n_atoms_A*3, n_atoms_B*3) row-major OUT
+    double *hess_out,  // (n_atoms_A*3, n_atoms_B*3) row-major OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Batch Hessian over many A × B pairs. Hoists per-molecule AtomDataGrad once.
@@ -136,7 +152,9 @@ void kernel_gaussian_hessian_rect(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *H_out  // (D_A, D_B) row-major OUT
+    double *H_out,  // (D_A, D_B) row-major OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric batch Hessian: fills (D, D), lower-triangle pairs + mirror,
@@ -147,7 +165,9 @@ void kernel_gaussian_hessian_symm_blocks(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *H_out  // (D, D) row-major OUT
+    double *H_out,  // (D, D) row-major OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Same as hessian_symm_blocks but writes upper-triangle RFP directly (no D×D temp).
@@ -157,7 +177,9 @@ void kernel_gaussian_hessian_symm_rfp_blocks(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *rfp_out  // D*(D+1)/2 OUT
+    double *rfp_out,  // D*(D+1)/2 OUT
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Phase timers for KF_HESS_PHASE=1 (stderr report). No-ops when unset.
@@ -173,7 +195,9 @@ void kernel_gaussian_hessian_matvec(
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm,
-    double *F_out  // (D_A,) row-major OUT (accumulated into)
+    double *F_out,  // (D_A,) row-major OUT (accumulated into)
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // F_out += J @ alpha_E where J is (D_A, N_B) Jacobian block.
@@ -184,7 +208,9 @@ void kernel_gaussian_jacobian_matvec(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *F_out  // (D_A,) OUT (accumulated into)
+    double *F_out,  // (D_A,) OUT (accumulated into)
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // E_out += J^T @ alpha_F where J^T is (N_A, D_B) block of the full kernel.
@@ -195,7 +221,9 @@ void kernel_gaussian_jacobian_t_matvec(
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm,
-    double *E_out  // (N_A,) OUT (accumulated into)
+    double *E_out,  // (N_A,) OUT (accumulated into)
+    bool use_alchemy = false, double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 }  // namespace fchl18

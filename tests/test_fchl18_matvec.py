@@ -164,3 +164,32 @@ def test_full_matvec_compute_energy_false():
         **KERNEL_ARGS,
     )
     np.testing.assert_allclose(F_mv, F_with_e, rtol=1e-12, atol=1e-12)
+
+
+def test_full_matvec_alchemy_matches_dense():
+    coords_A = [WATER_COORDS, HF_COORDS, AMMONIA_COORDS]
+    z_A = [WATER_Z, HF_Z, AMMONIA_Z]
+    coords_B = [AMMONIA_COORDS, WATER_COORDS, HF_COORDS]
+    z_B = [AMMONIA_Z, WATER_Z, HF_Z]
+    off_B = _offsets(z_B)
+    alch = {"use_alchemy": True, "alchemy_period_width": 0.9, "alchemy_group_width": 2.3}
+
+    K_full = kernel_mod.kernel_gaussian_full(
+        coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS, **alch
+    )
+    K_off = kernel_mod.kernel_gaussian_full(
+        coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS
+    )
+    alpha_E = np.random.default_rng(4).standard_normal(len(z_B))
+    alpha_F = np.random.default_rng(5).standard_normal(off_B[-1])
+    alpha = np.concatenate([alpha_E, alpha_F])
+    y_ref = K_full @ alpha
+
+    E_mv, F_mv = kernel_mod.kernel_gaussian_full_matvec(
+        coords_A, z_A, coords_B, z_B, alpha_E, alpha_F, sigma=SIGMA, **KERNEL_ARGS, **alch
+    )
+    n_a = len(z_A)
+    np.testing.assert_allclose(E_mv, y_ref[:n_a], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(F_mv, y_ref[n_a:], rtol=1e-12, atol=1e-12)
+    # alchemy must actually change the result
+    assert not np.allclose(K_full @ alpha, K_off @ alpha)

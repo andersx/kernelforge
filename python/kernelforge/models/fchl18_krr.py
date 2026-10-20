@@ -57,6 +57,9 @@ class FCHL18KRRModel(BaseModel):
         in any molecule).
     kernel_params : dict, optional
         FCHL18 kernel hyperparameters. Overrides the defaults listed above.
+        Periodic-table alchemy is enabled with ``use_alchemy=True`` (default
+        ``False``); ``alchemy_period_width`` and ``alchemy_group_width`` (both
+        default ``1.6``) set the Gaussian widths along periods and groups.
 
     Examples
     --------

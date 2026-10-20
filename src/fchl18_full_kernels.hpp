@@ -17,7 +17,8 @@ py::array_t<double> kernel_gaussian_full_py(
     const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
     const py::list &z_B_list, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    bool use_alchemy = false, double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 );
 
 // kernel_gaussian_full_symm: symmetric combined kernel (X==X training set).
@@ -26,7 +27,8 @@ py::array_t<double> kernel_gaussian_full_symm_py(
     const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm,
+    bool use_alchemy = false, double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 );
 
 // kernel_gaussian_full_symm_rfp: symmetric combined kernel in RFP format.
@@ -35,7 +37,8 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
     const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm,
+    bool use_alchemy = false, double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 );
 
 // Contracted EF inference: returns (E, F_block) without materialising K_full.
@@ -47,5 +50,6 @@ py::tuple kernel_gaussian_full_matvec_py(
     const py::array_t<double> &alpha_F, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm, bool compute_energy
+    int fourier_order, bool use_atm, bool compute_energy,
+    bool use_alchemy = false, double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 );

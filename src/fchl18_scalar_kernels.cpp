@@ -36,7 +36,8 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
     const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm, bool use_alchemy, double alchemy_period_width,
+    double alchemy_group_width
 ) {
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
@@ -109,7 +110,10 @@ py::array_t<double> kernel_gaussian_symm_rfp_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K_rfp.mutable_data()
+            K_rfp.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 

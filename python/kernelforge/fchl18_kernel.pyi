@@ -21,11 +21,18 @@ def kernel_gaussian(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """FCHL18 Gaussian kernel matrix (asymmetric).
 
-    K[a, b] = sum_{i in mol_a, j in mol_b: Z_i == Z_j}
+    K[a, b] = sum_{i in mol_a, j in mol_b}
                   exp( -(s_ii + s_jj - 2*s_ij) / sigma^2 )
+
+    With ``use_alchemy=False`` (default), only matching nuclear charges contribute
+    (qml ``alchemy='off'``). With ``use_alchemy=True``, pair contributions are
+    weighted by the periodic-table overlap matrix (qml ``alchemy='periodic-table'``).
 
     Parameters
     ----------
@@ -49,6 +56,12 @@ def kernel_gaussian(
     use_atm : bool, default True
         If False, replace the Axilrod-Teller-Muto factor (1+3*cos_i*cos_j*cos_k)
         with 1.0 in the three-body weight.
+    use_alchemy : bool, default False
+        Enable periodic-table alchemical smearing.
+    alchemy_period_width : float, default 1.6
+        Gaussian width along periods (qml ``alchemy_period_width`` / ``c_width``).
+    alchemy_group_width : float, default 1.6
+        Gaussian width along groups (qml ``alchemy_group_width`` / ``r_width``).
 
     Returns
     -------
@@ -73,6 +86,9 @@ def kernel_gaussian_gradient(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Analytical gradient of the FCHL18 kernel w.r.t. coordinates of molecule A.
 
@@ -125,6 +141,9 @@ def kernel_gaussian_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """FCHL18 Gaussian kernel matrix (symmetric, K[a,b] == K[b,a]).
 
@@ -138,6 +157,9 @@ def kernel_gaussian_symm(
     use_atm : bool, default True
         If False, replace the Axilrod-Teller-Muto factor (1+3*cos_i*cos_j*cos_k)
         with 1.0 in the three-body weight.
+    use_alchemy : bool, default False
+    alchemy_period_width : float, default 1.6
+    alchemy_group_width : float, default 1.6
 
     Returns
     -------
@@ -161,6 +183,9 @@ def kernel_gaussian_hessian(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Mixed second derivative of the FCHL18 kernel (Hessian kernel), contracted.
 
@@ -207,6 +232,9 @@ def kernel_gaussian_hessian_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Symmetric FCHL18 Hessian kernel (full matrix).
 
@@ -233,6 +261,9 @@ def kernel_gaussian_hessian_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Symmetric FCHL18 Hessian kernel in RFP format.
 
@@ -257,6 +288,9 @@ def kernel_gaussian_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Symmetric FCHL18 scalar kernel in RFP format.
 
@@ -284,6 +318,9 @@ def kernel_gaussian_jacobian(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """FCHL18 Jacobian kernel dK/dR_A.
 
@@ -311,6 +348,9 @@ def kernel_gaussian_jacobian_t(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """FCHL18 Jacobian-transpose kernel for energy prediction from force coefficients.
 
@@ -336,6 +376,9 @@ def kernel_gaussian_full(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Full combined energy+force FCHL18 kernel (asymmetric).
 
@@ -366,6 +409,9 @@ def kernel_gaussian_full_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Full combined energy+force FCHL18 kernel (symmetric training set).
 
@@ -389,6 +435,9 @@ def kernel_gaussian_full_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]:
     """Full combined energy+force FCHL18 kernel (symmetric, RFP format).
 
@@ -418,6 +467,9 @@ def kernel_gaussian_full_matvec(
     fourier_order: int = 1,
     use_atm: bool = False,
     compute_energy: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...
 def kernel_gaussian_hessian_matvec(
     coords_A_list: Sequence[NDArray[np.float64]],
@@ -436,6 +488,9 @@ def kernel_gaussian_hessian_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]: ...
 def kernel_gaussian_jacobian_t_matvec(
     coords_train_list: Sequence[NDArray[np.float64]],
@@ -455,4 +510,7 @@ def kernel_gaussian_jacobian_t_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> NDArray[np.float64]: ...
