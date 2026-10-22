@@ -213,7 +213,8 @@ class GlobalRFFModel(BaseModel):
                     E_pred = y_pred[:n_test]
                 F_pred = -y_pred[n_test:]
             elif compute_energy:
-                E_pred = rff_features(X_te, W, b) @ w
+                # Match energy block of ``-rff_full(...) @ w``.
+                E_pred = -(rff_features(X_te, W, b) @ w)
 
         return E_pred, F_pred
 

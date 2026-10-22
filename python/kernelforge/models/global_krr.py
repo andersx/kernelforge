@@ -266,8 +266,9 @@ class GlobalKRRModel(BaseModel):
             elif compute_energy:
                 alpha_E = alpha[:N_tr]
                 if self._alpha_desc is not None:
+                    # Match full_matvec: add jac_T(alpha_desc) when forces are skipped.
                     E_pred = global_kernels.kernel_gaussian(X_te, X_tr, self.sigma) @ alpha_E
-                    E_pred = E_pred - global_kernels.kernel_gaussian_jacobian_t_matvec(
+                    E_pred = E_pred + global_kernels.kernel_gaussian_jacobian_t_matvec(
                         X_te, X_tr, self._alpha_desc, self.sigma
                     )
                 else:

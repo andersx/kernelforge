@@ -279,7 +279,8 @@ class LocalKRRModel(BaseModel):
                     K_e = local_kernels.kernel_gaussian(
                         X_te, X_tr, Q_te, Q_tr, N_te, N_tr, self.sigma
                     )
-                    E_pred = K_e @ alpha_E - local_kernels.kernel_gaussian_local_jacobian_t_matvec(
+                    # Match full_matvec: add jac_T(alpha_desc) when forces are skipped.
+                    E_pred = K_e @ alpha_E + local_kernels.kernel_gaussian_local_jacobian_t_matvec(
                         X_te, X_tr, self._alpha_desc, Q_te, Q_tr, N_te, N_tr, self.sigma
                     )
                 else:

@@ -279,28 +279,25 @@ void fill_coord_offsets_device(
 // (e.g. small molecules padded to max_size).
 template <typename T>
 inline unsigned long long buffer_fingerprint(const T *d_ptr, size_t n_elem) {
+    // Full-buffer checksum (chunked D2H). Sparse edge samples miss whole molecules
+    // in padded multi-mol representations; callers only fingerprint on pointer hits.
     if (d_ptr == nullptr || n_elem == 0) {
         return 0;
     }
-    constexpr int kSamples = 32;
-    const int n_samp = n_elem < static_cast<size_t>(kSamples)
-                           ? static_cast<int>(n_elem)
-                           : kSamples;
-    T samples[kSamples];
-    for (int i = 0; i < n_samp; ++i) {
-        const size_t idx = (n_samp == 1)
-                               ? 0
-                               : (n_elem - 1) * static_cast<size_t>(i) / static_cast<size_t>(n_samp - 1);
-        CUDA_CHECK(cudaMemcpy(&samples[i], d_ptr + idx, sizeof(T), cudaMemcpyDeviceToHost));
+    static_assert(sizeof(T) <= sizeof(unsigned long long), "fingerprint word");
+    unsigned long long fp = static_cast<unsigned long long>(n_elem);
+    constexpr size_t kChunk = 4096;
+    std::vector<T> host(std::min(n_elem, kChunk));
+    for (size_t off = 0; off < n_elem; off += kChunk) {
+        const size_t n = std::min(kChunk, n_elem - off);
+        host.resize(n);
+        CUDA_CHECK(cudaMemcpy(host.data(), d_ptr + off, n * sizeof(T), cudaMemcpyDeviceToHost));
+        for (size_t i = 0; i < n; ++i) {
+            unsigned long long w = 0;
+            std::memcpy(&w, &host[i], sizeof(T));
+            fp ^= w + 0x9e3779b97f4a7c15ULL + (fp << 6) + (fp >> 2);
+        }
     }
-    unsigned long long fp = 0;
-    for (int i = 0; i < n_samp; ++i) {
-        unsigned long long w = 0;
-        static_assert(sizeof(T) <= sizeof(w), "fingerprint word");
-        std::memcpy(&w, &samples[i], sizeof(T));
-        fp ^= w + 0x9e3779b97f4a7c15ULL + (fp << 6) + (fp >> 2);
-    }
-    fp ^= static_cast<unsigned long long>(n_elem);
     return fp;
 }
 

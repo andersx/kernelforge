@@ -105,6 +105,18 @@ class TestFCHL18KRRModelForceOnly:
         assert model._kp_fit["use_atm"] is True
         assert model._kp_fit["cut_start"] >= 1.0
 
+    def test_partial_kernel_params_resolves_use_atm_default(self, dataset: tuple) -> None:
+        """Partial kernel_params must still resolve documented use_atm=True."""
+        coords_list, z_list, _, forces = dataset
+        model = FCHL18KRRModel(
+            sigma=5.0,
+            l2=1e-3,
+            max_size=MAX_SIZE,
+            kernel_params={"fourier_order": 1, "cut_distance": 5.0},
+        )
+        model.fit(coords_list[:8], z_list[:8], forces=forces[:8])
+        assert model._kp_fit["use_atm"] is True
+
     def test_save_load_roundtrip(self, dataset: tuple, tmp_path) -> None:
         coords_list, z_list, _, forces = dataset
         tr, te = coords_list[:12], coords_list[12:]

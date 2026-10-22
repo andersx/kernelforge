@@ -179,6 +179,21 @@ class TestLocalKRRModelEnergyAndForce:
         assert E_pred.shape == (2,)
         assert F_pred.shape == (2 * N_ATOMS * 3,)
 
+    def test_compute_forces_false_preserves_energy(self, dataset: tuple) -> None:
+        """Energy from E+F predict must match compute_forces=False (jacᵀ sign)."""
+        coords_list, z_list, energies, forces = dataset
+        tr, te = coords_list[:20], coords_list[20:]
+        ztr, zte = z_list[:20], z_list[20:]
+
+        model = LocalKRRModel(sigma=10.0, l2=1e-7, elements=ELEMENTS)
+        model.fit(tr, ztr, energies=energies[:20], forces=forces[:20])
+        E_full, F_full = model.predict(te, zte)
+        E_only, F_empty = model.predict(te, zte, compute_forces=False)
+        # Separate scalar+jacᵀ vs full_matvec can differ at ~1e-9 relative.
+        np.testing.assert_allclose(E_only, E_full, rtol=1e-7, atol=1e-9)
+        assert F_empty.size == 0
+        assert F_full.size == 10 * N_ATOMS * 3
+
 
 # ---------------------------------------------------------------------------
 # Tests: error handling

@@ -198,11 +198,16 @@ def test_jacobian_matches_cpu_f64_batch() -> None:
 
 
 def test_jacobian_inplace_geometry_cache_invalidation() -> None:
-    """In-place X edits that leave first/mid/last words unchanged must miss cache."""
+    """In-place X edits in a non-edge molecule must miss the train-side cache.
+
+    Sparse edge-word fingerprints miss molecule 2 of a large padded batch; a
+    full-buffer checksum must invalidate when that molecule's geometry changes.
+    """
     coords1 = [WATER_COORDS]
     z1 = [WATER_Z]
-    coords2 = [WATER_COORDS, WATER_COORDS, WATER_COORDS, WATER_COORDS]
-    z2 = [WATER_Z, WATER_Z, WATER_Z, WATER_Z]
+    n_train = 100
+    coords2 = [WATER_COORDS.copy() for _ in range(n_train)]
+    z2 = [WATER_Z] * n_train
     max_size = 4
     x1, n1, nn1 = repr_mod.generate(coords1, z1, max_size=max_size, cut_distance=1e6)
     x2, n2, nn2 = repr_mod.generate(coords2, z2, max_size=max_size, cut_distance=1e6)
@@ -226,11 +231,10 @@ def test_jacobian_inplace_geometry_cache_invalidation() -> None:
         .numpy()
     )
 
-    # Stretch an interior bond in molecule 1 of the train set (avoids first/mid/last
-    # flat-buffer words that are often padding for padded waters).
+    # Mutate molecule index 2 only — outside the old 32-sample edge lattice.
     coords2_mut = [c.copy() for c in coords2]
-    coords2_mut[1] = coords2_mut[1].copy()
-    coords2_mut[1][0, 0] += 0.15
+    coords2_mut[2] = coords2_mut[2].copy()
+    coords2_mut[2][0, 0] += 0.15
     x2_mut, _, _ = repr_mod.generate(coords2_mut, z2, max_size=max_size, cut_distance=1e6)
     x2_c.copy_(torch.from_numpy(np.ascontiguousarray(x2_mut)).cuda())
 

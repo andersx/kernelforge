@@ -104,8 +104,10 @@ class FCHL18KRRModel(BaseModel):
         mode = self.training_mode_
 
         # Force/EF kernels need cut_start >= 1.0 (soft-cutoff Hessian region).
-        # use_atm is supported for jac/hess; do not override the user's choice.
-        kp = dict(self.kernel_params)
+        # Resolve documented defaults into _kp_fit so partial kernel_params overrides
+        # (e.g. only use_alchemy) do not leave use_atm unset for hessian/full paths.
+        kp = dict(_DEFAULT_KERNEL_PARAMS)
+        kp.update(self.kernel_params)
         if mode in ("force_only", "energy_and_force"):
             kp["cut_start"] = max(float(kp.get("cut_start", 1.0)), 1.0)
 

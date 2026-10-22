@@ -971,6 +971,9 @@ class CudaLocalKRRModel(BaseModel):
 
         mode = self.training_mode_
         n_test = len(coords_list)
+        if not compute_energy and not compute_forces:
+            return np.zeros(n_test, dtype=np.float64), np.empty(0, dtype=np.float64)
+
         need_gradients = mode in ("force_only", "energy_and_force") and (
             compute_forces or compute_energy
         )
@@ -1050,7 +1053,12 @@ class CudaLocalKRRModel(BaseModel):
                 E_pred = E_cuda.cpu().numpy().astype(np.float64)
             else:
                 E_pred = np.zeros(n_test, dtype=np.float64)
-            F_pred = np.empty(0, dtype=np.float64)
+            # Energy-only never predicts physical forces; keep a zero placeholder for
+            # default callers, empty only when forces are explicitly disabled.
+            if compute_forces:
+                F_pred = np.zeros(int(np.sum(N_te) * 3), dtype=np.float64)
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
             return E_pred, F_pred
         else:
             graph_state = self._get_or_create_cached_graph(X_te_cuda, dX_te_cuda, Q_te_cuda, N_te)

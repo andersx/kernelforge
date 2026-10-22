@@ -846,6 +846,9 @@ class CudaLocalRFFModel(BaseModel):
             )
             t0 = _tp("rff_predict_force_elemental (GPU)", t0)
             F_pred = F_cuda.cpu().numpy().astype(np.float64)
+        elif compute_forces:
+            # Energy-only: zero placeholder for default callers (legacy shape contract).
+            F_pred = np.zeros(int(np.sum(N_np) * 3), dtype=np.float64)
         else:
             F_pred = np.empty(0, dtype=np.float64)
         t0 = _tp("D2H predictions", t0)
