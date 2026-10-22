@@ -2,32 +2,47 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import numpy as np
 import pytest
 
 from kernelforge import fchl18_kernel, fchl18_repr
 
-KP = dict(
-    sigma=2.5,
-    two_body_scaling=float(np.sqrt(8)),
-    three_body_scaling=1.6,
-    two_body_width=0.2,
-    three_body_width=float(np.pi),
-    two_body_power=4.0,
-    three_body_power=2.0,
-    cut_start=0.5,
-    cut_distance=5.0,
-    fourier_order=1,
-    use_atm=True,
-)
+
+class _KernelParams(TypedDict):
+    sigma: float
+    two_body_scaling: float
+    three_body_scaling: float
+    two_body_width: float
+    three_body_width: float
+    two_body_power: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
+
+KP: _KernelParams = {
+    "sigma": 2.5,
+    "two_body_scaling": float(np.sqrt(8)),
+    "three_body_scaling": 1.6,
+    "two_body_width": 0.2,
+    "three_body_width": float(np.pi),
+    "two_body_power": 4.0,
+    "three_body_power": 2.0,
+    "cut_start": 0.5,
+    "cut_distance": 5.0,
+    "fourier_order": 1,
+    "use_atm": True,
+}
 
 
 def _water_and_hf(max_size: int = 4) -> tuple:
     """H2O + HF — mixed species so alchemy can couple O/F and H."""
     coords = [
-        np.array(
-            [[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]], dtype=np.float64
-        ),
+        np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]], dtype=np.float64),
         np.array([[0.0, 0.0, 0.0], [0.92, 0.0, 0.0]], dtype=np.float64),
     ]
     z = [
@@ -81,14 +96,27 @@ def test_alchemy_changes_kernel_and_couples_species() -> None:
 
 def test_asymmetric_alchemy_matches_symm_block() -> None:
     X, N, NN, _, _ = _water_and_hf()
-    Kw = dict(
+    Ks = fchl18_kernel.kernel_gaussian_symm(
+        X,
+        N,
+        NN,
         **KP,
         use_alchemy=True,
         alchemy_period_width=1.6,
         alchemy_group_width=1.6,
     )
-    Ks = fchl18_kernel.kernel_gaussian_symm(X, N, NN, **Kw)
-    Ka = fchl18_kernel.kernel_gaussian(X, X, N, N, NN, NN, **Kw)
+    Ka = fchl18_kernel.kernel_gaussian(
+        X,
+        X,
+        N,
+        N,
+        NN,
+        NN,
+        **KP,
+        use_alchemy=True,
+        alchemy_period_width=1.6,
+        alchemy_group_width=1.6,
+    )
     assert np.allclose(Ks, Ka)
 
 
@@ -105,7 +133,10 @@ def test_qmllib_periodic_table_parity() -> None:
     _, _, _, coords, z = _water_and_hf(max_size=23)
     max_size = 23
     X_qml = np.array(
-        [generate_fchl18(zi, ci, max_size=max_size, cut_distance=5.0) for zi, ci in zip(z, coords)]
+        [
+            generate_fchl18(zi, ci, max_size=max_size, cut_distance=5.0)
+            for zi, ci in zip(z, coords, strict=True)
+        ]
     )
     K_qml = fsk.get_local_symmetric_kernels(
         X_qml,

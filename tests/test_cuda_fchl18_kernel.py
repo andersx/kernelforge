@@ -86,6 +86,12 @@ class _KernelArgs(TypedDict):
     use_atm: bool
 
 
+class _AlchemyParams(TypedDict):
+    use_alchemy: bool
+    alchemy_period_width: float
+    alchemy_group_width: float
+
+
 KERNEL_ARGS: _KernelArgs = {
     "two_body_scaling": 2.0,
     "two_body_width": 0.1,
@@ -192,19 +198,31 @@ def test_kernel_gaussian_matvec_matches_dense(dtype: str, use_alchemy: bool) -> 
     nn1_t, nn2_t = _to_cuda_i32(nn1), _to_cuda_i32(nn2)
     alpha = torch.randn(len(coords2), dtype=torch_dtype, device="cuda")
 
-    args = dict(KERNEL_ARGS)
-    args["use_alchemy"] = use_alchemy
-    if use_alchemy:
-        args["alchemy_period_width"] = 1.6
-        args["alchemy_group_width"] = 1.6
+    alch: _AlchemyParams | None = (
+        {
+            "use_alchemy": True,
+            "alchemy_period_width": 1.6,
+            "alchemy_group_width": 1.6,
+        }
+        if use_alchemy
+        else None
+    )
 
-    K = cuda_fchl18_kernel.kernel_gaussian(
-        x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, sigma=2.5, **args
-    )
+    if alch is None:
+        K = cuda_fchl18_kernel.kernel_gaussian(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, sigma=2.5, **KERNEL_ARGS
+        )
+        E_mv = cuda_fchl18_kernel.kernel_gaussian_matvec(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, alpha, sigma=2.5, **KERNEL_ARGS
+        )
+    else:
+        K = cuda_fchl18_kernel.kernel_gaussian(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, sigma=2.5, **KERNEL_ARGS, **alch
+        )
+        E_mv = cuda_fchl18_kernel.kernel_gaussian_matvec(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, alpha, sigma=2.5, **KERNEL_ARGS, **alch
+        )
     E_ref = K @ alpha
-    E_mv = cuda_fchl18_kernel.kernel_gaussian_matvec(
-        x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, alpha, sigma=2.5, **args
-    )
 
     assert E_mv.shape == (len(coords1),)
     rtol = 2e-4 if dtype == "float32" else 1e-10

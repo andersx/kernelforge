@@ -243,9 +243,7 @@ def test_jacobian_fourier_order_cache_invalidation() -> None:
             .cpu()
             .numpy()
         )
-        J_cpu = cpu_kernel.kernel_gaussian_jacobian(
-            coords1, z1, x2, n2, nn2, sigma=SIGMA, **args
-        )
+        J_cpu = cpu_kernel.kernel_gaussian_jacobian(coords1, z1, x2, n2, nn2, sigma=SIGMA, **args)
         np.testing.assert_allclose(J_gpu, J_cpu, rtol=1e-9, atol=1e-11)
 
 

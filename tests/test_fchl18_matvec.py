@@ -21,6 +21,12 @@ class _KernelArgs(TypedDict):
     use_atm: bool
 
 
+class _AlchemyParams(TypedDict):
+    use_alchemy: bool
+    alchemy_period_width: float
+    alchemy_group_width: float
+
+
 WATER_COORDS = np.array(
     [[0.000, 0.000, 0.119], [0.000, 0.757, -0.477], [0.000, -0.757, -0.477]],
     dtype=np.float64,
@@ -172,7 +178,11 @@ def test_full_matvec_alchemy_matches_dense():
     coords_B = [AMMONIA_COORDS, WATER_COORDS, HF_COORDS]
     z_B = [AMMONIA_Z, WATER_Z, HF_Z]
     off_B = _offsets(z_B)
-    alch = {"use_alchemy": True, "alchemy_period_width": 0.9, "alchemy_group_width": 2.3}
+    alch: _AlchemyParams = {
+        "use_alchemy": True,
+        "alchemy_period_width": 0.9,
+        "alchemy_group_width": 2.3,
+    }
 
     K_full = kernel_mod.kernel_gaussian_full(
         coords_A, z_A, coords_B, z_B, sigma=SIGMA, **KERNEL_ARGS, **alch

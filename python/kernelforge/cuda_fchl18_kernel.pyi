@@ -579,6 +579,7 @@ def kernel_gaussian_full_matvec(
     alchemy) and give the same result as the dense ``kernel_gaussian_full`` product.
     """
     ...
+
 def kernel_gaussian_hessian_matvec(
     X1: torch.Tensor,
     X2: torch.Tensor,

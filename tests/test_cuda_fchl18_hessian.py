@@ -135,8 +135,8 @@ def _pad_coords_z(coords_list, z_list, max_size):
     return coords, z
 
 
-def _gpu_hessian(coords1, z1, coords2, z2, dtype, kernel_args=None):
-    args = KERNEL_ARGS if kernel_args is None else kernel_args
+def _gpu_hessian(coords1, z1, coords2, z2, dtype, kernel_args: _KernelArgs | None = None):
+    args: _KernelArgs = KERNEL_ARGS if kernel_args is None else kernel_args
     max_size1 = max(len(z) for z in z1)
     max_size2 = max(len(z) for z in z2)
     x1, n1, nn1 = repr_mod.generate(
@@ -164,8 +164,8 @@ def _gpu_hessian(coords1, z1, coords2, z2, dtype, kernel_args=None):
     )
 
 
-def _cpu_hessian(coords1, z1, coords2, z2, kernel_args=None):
-    args = KERNEL_ARGS if kernel_args is None else kernel_args
+def _cpu_hessian(coords1, z1, coords2, z2, kernel_args: _KernelArgs | None = None):
+    args: _KernelArgs = KERNEL_ARGS if kernel_args is None else kernel_args
     return cpu_kernel.kernel_gaussian_hessian(coords1, z1, coords2, z2, sigma=SIGMA, **args)
 
 

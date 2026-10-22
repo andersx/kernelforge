@@ -2,11 +2,34 @@
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import numpy as np
 
 from kernelforge import fchl18_kernel, fchl18_repr
 
-KP = {
+
+class _KernelParams(TypedDict):
+    sigma: float
+    two_body_scaling: float
+    three_body_scaling: float
+    two_body_width: float
+    three_body_width: float
+    two_body_power: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
+
+class _AlchemyParams(TypedDict):
+    use_alchemy: bool
+    alchemy_period_width: float
+    alchemy_group_width: float
+
+
+KP: _KernelParams = {
     "sigma": 2.5,
     "two_body_scaling": float(np.sqrt(8)),
     "three_body_scaling": 1.6,
@@ -19,7 +42,11 @@ KP = {
     "fourier_order": 1,
     "use_atm": True,
 }
-ALCH = {"use_alchemy": True, "alchemy_period_width": 1.6, "alchemy_group_width": 1.6}
+ALCH: _AlchemyParams = {
+    "use_alchemy": True,
+    "alchemy_period_width": 1.6,
+    "alchemy_group_width": 1.6,
+}
 WATER = np.array([[0.0, 0.0, 0.119], [0.0, 0.757, -0.477], [0.0, -0.757, -0.477]], dtype=np.float64)
 WATER_Z = np.array([8, 1, 1], dtype=np.int32)
 # Asymmetric diatomic; O/F coupling makes alchemy visible.

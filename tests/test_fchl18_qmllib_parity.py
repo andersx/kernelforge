@@ -12,6 +12,7 @@ Tolerances:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 import pytest
@@ -21,7 +22,7 @@ qmllib = pytest.importorskip("qmllib", reason="qmllib not installed")
 from qmllib.representations.fchl import fchl_force_kernels as ffk  # noqa: E402
 from qmllib.representations.fchl import fchl_scalar_kernels as fsk  # noqa: E402
 from qmllib.representations.fchl import generate_fchl18  # noqa: E402
-from qmllib.representations.fchl.fchl_representations import (  # noqa: E402
+from qmllib.representations.fchl.fchl_nxt import (  # noqa: E402
     generate_fchl18_displaced,
 )
 
@@ -32,18 +33,33 @@ pytestmark = pytest.mark.integration
 
 SIGMA = 2.0
 CUT_DISTANCE = 5.0
-KARGS = dict(
-    two_body_scaling=np.sqrt(8.0),
-    two_body_width=0.2,
-    two_body_power=4.0,
-    three_body_scaling=1.6,
-    three_body_width=np.pi,
-    three_body_power=2.0,
-    cut_start=1.0,
-    cut_distance=CUT_DISTANCE,
-    fourier_order=1,
-    use_atm=True,
-)
+
+
+class _KernelArgs(TypedDict):
+    two_body_scaling: float
+    two_body_width: float
+    two_body_power: float
+    three_body_scaling: float
+    three_body_width: float
+    three_body_power: float
+    cut_start: float
+    cut_distance: float
+    fourier_order: int
+    use_atm: bool
+
+
+KARGS: _KernelArgs = {
+    "two_body_scaling": float(np.sqrt(8.0)),
+    "two_body_width": 0.2,
+    "two_body_power": 4.0,
+    "three_body_scaling": 1.6,
+    "three_body_width": float(np.pi),
+    "three_body_power": 2.0,
+    "cut_start": 1.0,
+    "cut_distance": CUT_DISTANCE,
+    "fourier_order": 1,
+    "use_atm": True,
+}
 
 KERN_RTOL = 1e-7
 KERN_ATOL = 1e-7
@@ -85,13 +101,12 @@ def test_qmllib_scalar_symm_atm() -> None:
     )
     x_kf, n_kf, nn_kf = _build_kf_repr(coords_list, charges_list)
 
-    K_qml = fsk.get_local_symmetric_kernels(
-        X_qml, alchemy="off", kernel_args={"sigma": [SIGMA]}
-    )[0]
+    K_qml = fsk.get_local_symmetric_kernels(X_qml, alchemy="off", kernel_args={"sigma": [SIGMA]})[0]
     K_kf = km.kernel_gaussian_symm(x_kf, n_kf, nn_kf, sigma=SIGMA, **KARGS)
     np.testing.assert_allclose(K_kf, K_qml, rtol=KERN_RTOL, atol=KERN_ATOL)
 
-    K_off = km.kernel_gaussian_symm(x_kf, n_kf, nn_kf, sigma=SIGMA, **{**KARGS, "use_atm": False})
+    kargs_off: _KernelArgs = {**KARGS, "use_atm": False}
+    K_off = km.kernel_gaussian_symm(x_kf, n_kf, nn_kf, sigma=SIGMA, **kargs_off)
     assert not np.allclose(K_kf, K_off, rtol=1e-8, atol=1e-10)
 
 
@@ -128,19 +143,19 @@ def test_qmllib_jacobian_atm_fd() -> None:
     for j in range(nB_set):
         dof_offsets.append(dof_offsets[-1] + 3 * n_atoms[nA_set + j])
 
-    qml_kargs_g = dict(
-        alchemy="off",
-        two_body_scaling=np.sqrt(8.0),
-        two_body_width=0.2,
-        two_body_power=4.0,
-        three_body_scaling=1.6,
-        three_body_width=np.pi,
-        three_body_power=2.0,
-        cut_start=1.0,
-        cut_distance=CUT_DISTANCE,
-        fourier_order=1,
-        kernel_args={"sigma": [SIGMA]},
-    )
+    qml_kargs_g = {
+        "alchemy": "off",
+        "two_body_scaling": float(np.sqrt(8.0)),
+        "two_body_width": 0.2,
+        "two_body_power": 4.0,
+        "three_body_scaling": 1.6,
+        "three_body_width": float(np.pi),
+        "three_body_power": 2.0,
+        "cut_start": 1.0,
+        "cut_distance": CUT_DISTANCE,
+        "fourier_order": 1,
+        "kernel_args": {"sigma": [SIGMA]},
+    }
     J_qml = ffk.get_local_gradient_kernels(X_qml_A, X_qml_B_disp, **qml_kargs_g)[0]
 
     for j in range(nB_set):

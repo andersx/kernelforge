@@ -196,9 +196,7 @@ def test_full_matches_cpu_f64_atm() -> None:
     K_gpu = cuda_fchl18_kernel.kernel_gaussian_full(
         x1, x2, n1, n2, nn1, nn2, c1, z1, c2, z2, sigma=SIGMA, **args
     )
-    K_cpu = cpu_kernel.kernel_gaussian_full(
-        coords_A, z_A, coords_B, z_B, sigma=SIGMA, **args
-    )
+    K_cpu = cpu_kernel.kernel_gaussian_full(coords_A, z_A, coords_B, z_B, sigma=SIGMA, **args)
 
     assert K_gpu.shape == (len(coords_A) + d_a, len(coords_B) + d_b)
     np.testing.assert_allclose(K_gpu.cpu().numpy(), K_cpu, rtol=1e-9, atol=1e-11)
