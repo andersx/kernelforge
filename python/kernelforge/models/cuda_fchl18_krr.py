@@ -401,6 +401,7 @@ class CudaFCHL18KRRModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
         kp = self._kp_fit
@@ -418,38 +419,30 @@ class CudaFCHL18KRRModel(BaseModel):
             alpha_t = self._alpha_infer
 
         if mode == "energy_only":
-            K_e = _cuda_kernel.kernel_gaussian(
-                x_te,
-                x_tr,
-                n_te,
-                n_tr,
-                nn_te,
-                nn_tr,
-                sigma=self.sigma,
-                **kp_cuda,
-            )
-            E_pred = (K_e @ alpha_t).detach().cpu().numpy().astype(np.float64)
-
-            F_parts: list[NDArray[np.float64]] = []
-            for i in range(n_test):
-                G = _cuda_kernel.kernel_gaussian_gradient(
-                    x_te[i : i + 1],
-                    x_tr,
-                    n_te[i : i + 1],
-                    n_tr,
-                    nn_te[i : i + 1],
-                    nn_tr,
-                    coords_te[i : i + 1],
-                    z_te[i : i + 1],
-                    sigma=self.sigma,
-                    **kp_cuda,
+            if compute_energy:
+                E_pred = (
+                    _cuda_kernel.kernel_gaussian_matvec(
+                        x_te,
+                        x_tr,
+                        n_te,
+                        n_tr,
+                        nn_te,
+                        nn_tr,
+                        alpha_t,
+                        sigma=self.sigma,
+                        **kp_cuda,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float64)
                 )
-                F_parts.append(-(G @ alpha_t).reshape(-1).detach().cpu().numpy().astype(np.float64))
-            F_pred = np.concatenate(F_parts)
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
 
-        elif mode == "force_only":
-            F_pred = (
-                _cuda_kernel.kernel_gaussian_hessian_matvec(
+            if compute_forces:
+                # Batched Jacobian (3*sum(N_te), n_train) — avoid per-mol gradient.
+                J = _cuda_kernel.kernel_gaussian_jacobian(
                     x_te,
                     x_tr,
                     n_te,
@@ -458,17 +451,38 @@ class CudaFCHL18KRRModel(BaseModel):
                     nn_tr,
                     coords_te,
                     z_te,
-                    coords_tr,
-                    z_tr,
-                    alpha_t,
                     sigma=self.sigma,
                     **kp_cuda,
                 )
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.float64)
-            )
+                F_pred = -(J @ alpha_t).detach().cpu().numpy().astype(np.float64).reshape(-1)
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
+
+        elif mode == "force_only":
+            if compute_forces:
+                F_pred = (
+                    _cuda_kernel.kernel_gaussian_hessian_matvec(
+                        x_te,
+                        x_tr,
+                        n_te,
+                        n_tr,
+                        nn_te,
+                        nn_tr,
+                        coords_te,
+                        z_te,
+                        coords_tr,
+                        z_tr,
+                        alpha_t,
+                        sigma=self.sigma,
+                        **kp_cuda,
+                    )
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float64)
+                )
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
             if compute_energy:
                 E_pred = (
                     _cuda_kernel.kernel_gaussian_jacobian_t_matvec(
@@ -495,25 +509,37 @@ class CudaFCHL18KRRModel(BaseModel):
         else:  # energy_and_force
             alpha_E = alpha_t[: self._n_train]
             alpha_F = alpha_t[self._n_train :]
-            E_t, F_block = _cuda_kernel.kernel_gaussian_full_matvec(
-                x_te,
-                x_tr,
-                n_te,
-                n_tr,
-                nn_te,
-                nn_tr,
-                coords_te,
-                z_te,
-                coords_tr,
-                z_tr,
-                alpha_E,
-                alpha_F,
-                sigma=self.sigma,
-                compute_energy=compute_energy,
-                **kp_cuda,
-            )
-            E_pred = E_t.detach().cpu().numpy().astype(np.float64)
-            F_pred = -F_block.detach().cpu().numpy().astype(np.float64)
+            if compute_forces or compute_energy:
+                E_t, F_block = _cuda_kernel.kernel_gaussian_full_matvec(
+                    x_te,
+                    x_tr,
+                    n_te,
+                    n_tr,
+                    nn_te,
+                    nn_tr,
+                    coords_te,
+                    z_te,
+                    coords_tr,
+                    z_tr,
+                    alpha_E,
+                    alpha_F,
+                    sigma=self.sigma,
+                    compute_energy=compute_energy,
+                    **kp_cuda,
+                )
+                E_pred = (
+                    E_t.detach().cpu().numpy().astype(np.float64)
+                    if compute_energy
+                    else np.zeros(n_test, dtype=np.float64)
+                )
+                F_pred = (
+                    -F_block.detach().cpu().numpy().astype(np.float64)
+                    if compute_forces
+                    else np.empty(0, dtype=np.float64)
+                )
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
+                F_pred = np.empty(0, dtype=np.float64)
 
         return E_pred, F_pred
 

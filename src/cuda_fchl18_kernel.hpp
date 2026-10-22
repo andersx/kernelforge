@@ -59,6 +59,65 @@ void kernel_gaussian_rect_cu(
     double alchemy_group_width = 1.6
 );
 
+// E[a] = sum_b K[a,b] * alpha[b] without forming the rectangular kernel matrix.
+void kernel_gaussian_rect_matvec_cu(
+    const float *d_x1,
+    const float *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const float *d_alpha,
+    float *d_E_out,
+    float sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
+);
+
+void kernel_gaussian_rect_matvec_cu(
+    const double *d_x1,
+    const double *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const double *d_alpha,
+    double *d_E_out,
+    double sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
+);
+
 void kernel_gaussian_symm_cu(
     const float *d_x,
     const int *d_n,

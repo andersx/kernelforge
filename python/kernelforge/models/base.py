@@ -138,6 +138,7 @@ class BaseModel(ABC):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Predict energies and forces for new structures.
 
@@ -149,8 +150,11 @@ class BaseModel(ABC):
             List of M (n_atoms_i,) nuclear charge arrays.
         compute_energy:
             If False, skip the energy prediction and return a zero array for
-            energies.  Forces are always computed.  Useful for MD integrators
-            (e.g. VelocityVerlet) that only need forces on most steps.
+            energies.  Useful for MD integrators (e.g. VelocityVerlet) that
+            only need forces on most steps.
+        compute_forces:
+            If False, skip force prediction and return an empty force array.
+            Useful for energy-only scoring / hyperparameter search.
 
         Returns
         -------
@@ -159,11 +163,17 @@ class BaseModel(ABC):
             Zeros if *compute_energy* is False.
         forces : ndarray, shape (M, n_atoms*3)
             Predicted physical forces F = -dE/dR.
+            Empty if *compute_forces* is False.
         """
         _check_fitted(self)
         coords_list, z_list = _validate_geometry(coords_list, z_list)
 
-        E_pred, F_pred = self._predict(coords_list, z_list, compute_energy=compute_energy)
+        E_pred, F_pred = self._predict(
+            coords_list,
+            z_list,
+            compute_energy=compute_energy,
+            compute_forces=compute_forces,
+        )
 
         # Restore the per-element energy baseline (only when energy is needed).
         if compute_energy and len(self.baseline_elements_) > 0:
@@ -289,6 +299,7 @@ class BaseModel(ABC):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """Internal predict. Returns (E_pred_baseline_subtracted, F_pred)."""
 

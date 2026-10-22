@@ -3,6 +3,7 @@
 Current scope:
 - fp32 and fp64
 - rectangular energy-only kernel_gaussian
+- fused energy-only kernel_gaussian_matvec (E = K @ alpha, no K buffer)
 - symmetric energy-only kernel_gaussian_symm
 - symmetric RFP kernel_gaussian_symm_rfp (TRANSR='N', UPLO='U')
 - Jacobian kernel_gaussian_jacobian (dK/dR of the query molecules)
@@ -61,6 +62,51 @@ def kernel_gaussian(
     -------
     torch.Tensor, shape (nm1, nm2), same dtype as X1, CUDA
         Rectangular energy-only kernel matrix.
+    """
+    ...
+
+def kernel_gaussian_matvec(
+    X1: torch.Tensor,
+    X2: torch.Tensor,
+    N1: torch.Tensor,
+    N2: torch.Tensor,
+    NN1: torch.Tensor,
+    NN2: torch.Tensor,
+    alpha: torch.Tensor,
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 0.5,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
+) -> torch.Tensor:
+    """Fused energy-only matvec: E = K(X1, X2) @ alpha without forming K.
+
+    Parameters
+    ----------
+    X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+        Query and train FCHL18 representations.
+    N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
+        Number of real atoms per molecule.
+    NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+        Number of neighbors per atom.
+    alpha : torch.Tensor, shape (nm2,), same dtype as X1, CUDA
+        Dual coefficients for the train set.
+    sigma : float
+        Gaussian kernel length-scale.
+
+    Returns
+    -------
+    torch.Tensor, shape (nm1,), same dtype as X1, CUDA
+        Predicted energies E[a] = sum_b K[a,b] * alpha[b].
     """
     ...
 

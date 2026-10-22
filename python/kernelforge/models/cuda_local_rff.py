@@ -772,6 +772,7 @@ class CudaLocalRFFModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         _require_cuda()
         import time as _time

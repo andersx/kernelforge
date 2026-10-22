@@ -194,7 +194,8 @@ class FCHL18KRRModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
-        compute_energy: bool = True,  # E+F computed together; param kept for API compat
+        compute_energy: bool = True,
+        compute_forces: bool = True,  # E+F computed together; param kept for API compat
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
         kp = self._kp_fit
@@ -207,24 +208,31 @@ class FCHL18KRRModel(BaseModel):
         alpha = self._alpha
 
         if mode == "energy_only":
-            # Build test representations for scalar kernel
-            x_te, n_te, nn_te = fchl18_repr.generate(
-                coords_te, z_te, max_size=self.max_size, cut_distance=cut_distance
-            )
-            K_e = fchl18_kernel.kernel_gaussian(
-                x_te, self._x_tr, n_te, self._n_tr, nn_te, self._nn_tr, sigma=self.sigma, **kp
-            )
-            E_pred = K_e @ alpha
+            if compute_energy:
+                x_te, n_te, nn_te = fchl18_repr.generate(
+                    coords_te, z_te, max_size=self.max_size, cut_distance=cut_distance
+                )
+                K_e = fchl18_kernel.kernel_gaussian(
+                    x_te, self._x_tr, n_te, self._n_tr, nn_te, self._nn_tr, sigma=self.sigma, **kp
+                )
+                E_pred = K_e @ alpha
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
 
-            # Forces via per-molecule gradient kernel: G[n_atoms_i, 3, n_train]
-            # Flat (sum(N_te)*3,) — works for variable-size molecules.
-            F_parts = []
-            for coords_A, z_A in zip(coords_te, z_te, strict=True):
-                G = fchl18_kernel.kernel_gaussian_gradient(
-                    coords_A, z_A, self._x_tr, self._n_tr, self._nn_tr, sigma=self.sigma, **kp
-                )  # (n_atoms_i, 3, n_train)
-                F_parts.append(-(G @ alpha).ravel())
-            F_pred = np.concatenate(F_parts)
+            if compute_forces:
+                # Batched Jacobian — avoid per-molecule gradient loop.
+                J = fchl18_kernel.kernel_gaussian_jacobian(
+                    coords_te,
+                    z_te,
+                    self._x_tr,
+                    self._n_tr,
+                    self._nn_tr,
+                    sigma=self.sigma,
+                    **kp,
+                )
+                F_pred = -(J @ alpha).ravel()
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
 
         elif mode == "force_only":
             F_block = fchl18_kernel.kernel_gaussian_hessian_matvec(

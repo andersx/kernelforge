@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -201,6 +202,45 @@ struct Workspace {
     size_t cosp2e_cap = 0;
     size_t sinp2e_cap = 0;
     size_t s_prefactor_cap = 0;
+
+    // Durable train-side precompute for repeated energy matvecs.
+    T *train_x_sorted = nullptr;
+    T *train_ss = nullptr;
+    T *train_ksi = nullptr;
+    T *train_cosp = nullptr;
+    T *train_sinp = nullptr;
+    T *train_cospe = nullptr;
+    T *train_sinpe = nullptr;
+    size_t train_x_sorted_cap = 0;
+    size_t train_ss_cap = 0;
+    size_t train_ksi_cap = 0;
+    size_t train_cosp_cap = 0;
+    size_t train_sinp_cap = 0;
+    size_t train_cospe_cap = 0;
+    size_t train_sinpe_cap = 0;
+    bool train_valid = false;
+    const T *train_x_ptr = nullptr;
+    const int *train_n_ptr = nullptr;
+    const int *train_nn_ptr = nullptr;
+    int train_nm = 0;
+    int train_max_size = 0;
+    T train_sigma{};
+    T train_two_body_scaling{};
+    T train_two_body_width{};
+    T train_two_body_power{};
+    T train_three_body_scaling{};
+    T train_three_body_width{};
+    T train_three_body_power{};
+    T train_cut_start{};
+    T train_cut_distance{};
+    int train_fourier_order = 0;
+    bool train_use_atm = false;
+    bool train_use_alchemy = false;
+    double train_alchemy_period_width = 0.0;
+    double train_alchemy_group_width = 0.0;
+    int train_tb_weight_mode = 0;
+    int train_pmax = 0;
+    int train_z_to_idx[256]{};
 };
 
 template <typename T>
@@ -994,6 +1034,99 @@ __global__ void __launch_bounds__(128, 8) kernel_gaussian_rect_precomputed_kerne
     }
 }
 
+// Energy-only matvec: one block per molecule pair (a,b) — same launch as dense
+// rect kernel — then atomicAdd(E[a], kab * alpha[b]). Avoids forming K.
+template <typename T, bool Alch>
+__global__ void __launch_bounds__(128, 8) kernel_gaussian_rect_matvec_precomputed_kernel(
+    const T *x1,
+    const T *x2,
+    const int *n1,
+    const int *n2,
+    const int *nn1,
+    const int *nn2,
+    const T *ss1,
+    const T *ss2,
+    const T *ksi1,
+    const T *ksi2,
+    const T *cosp1,
+    const T *sinp1,
+    const T *cosp2,
+    const T *sinp2,
+    const T *cosp2e,
+    const T *sinp2e,
+    const T *alpha,
+    T *E_out,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    HotParams<T> params,
+    const T *s_prefactor_full
+) {
+    const int pair = static_cast<int>(blockIdx.x);
+    const int n_pairs = nm1 * nm2;
+    if (pair >= n_pairs) {
+        return;
+    }
+
+    const int a = pair / nm2;
+    const int b = pair - a * nm2;
+    const int na = n1[a];
+    const int nb = n2[b];
+    if (na <= 0 || nb <= 0) {
+        return;
+    }
+
+    const long long fstride1 = fourier_atom_stride(params.pmax, params.fourier_order, max_size1);
+    const long long fstride2 = fourier_atom_stride(params.pmax, params.fourier_order, max_size2);
+    const int n_atom_pairs = na * nb;
+
+    T kab = Math<T>::zero();
+    for (int p = static_cast<int>(threadIdx.x); p < n_atom_pairs;
+         p += static_cast<int>(blockDim.x)) {
+        const int i = p / nb;
+        const int j = p - i * nb;
+
+        const int flat_i = a * max_size1 + i;
+        const int flat_j = b * max_size2 + j;
+        const T *x1_chan = atom_slice(x1, max_size1, a, i);
+        const T *x2_chan = atom_slice(x2, max_size2, b, j);
+        const int n_neigh_i = nn1[flat_i];
+        const int n_neigh_j = nn2[flat_j];
+        const T sii = ss1[flat_i];
+        const T sjj = ss2[flat_j];
+        const T *ksi_i = ksi1 + static_cast<long long>(flat_i) * max_size1;
+        const T *ksi_j = ksi2 + static_cast<long long>(flat_j) * max_size2;
+        const T *cos_i = cosp1 + static_cast<long long>(flat_i) * fstride1;
+        const T *sin_i = sinp1 + static_cast<long long>(flat_i) * fstride1;
+        const T *cos_j = (Alch ? cosp2e : cosp2) + static_cast<long long>(flat_j) * fstride2;
+        const T *sin_j = (Alch ? sinp2e : sinp2) + static_cast<long long>(flat_j) * fstride2;
+
+        const T s12 = scalar_dispatch_precomputed<T, Alch>(
+            x1_chan,
+            max_size1,
+            n_neigh_i,
+            ksi_i,
+            cos_i,
+            sin_i,
+            x2_chan,
+            max_size2,
+            n_neigh_j,
+            ksi_j,
+            cos_j,
+            sin_j,
+            params,
+            s_prefactor_full
+        );
+        kab += Math<T>::exp_((sii + sjj - T(2) * s12) * params.inv_sigma2);
+    }
+
+    kab = block_reduce_sum(kab);
+    if (threadIdx.x == 0) {
+        atomicAdd(E_out + a, kab * alpha[b]);
+    }
+}
+
 // Symmetric training kernel: one block per upper-triangle pair (a <= b), writes both
 // K[a,b] and K[b,a]. Same precomputed buffers on both sides.
 template <typename T, bool Alch>
@@ -1219,6 +1352,8 @@ void alchemy_mix_atom_major(
     );
 }
 
+enum class RectOutMode { Dense, Matvec };
+
 template <typename T>
 void kernel_gaussian_rect_cu_impl(
     const T *d_x1,
@@ -1227,7 +1362,9 @@ void kernel_gaussian_rect_cu_impl(
     const int *d_n2,
     const int *d_nn1,
     const int *d_nn2,
-    T *d_kernel_out,
+    T *d_out,
+    const T *d_alpha,
+    RectOutMode mode,
     T sigma,
     int nm1,
     int nm2,
@@ -1257,9 +1394,33 @@ void kernel_gaussian_rect_cu_impl(
     }
     CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
 
+    // Dense path mutates shared side-2 buffers — drop durable train cache.
+    if (mode == RectOutMode::Dense) {
+        ws.train_valid = false;
+    }
+
     // Identical query/train tensors (common in benches): share sorted + precomputed side.
     const bool same_side = (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 && nm1 == nm2 &&
                             max_size1 == max_size2);
+
+    const int tb_mode = get_fchl18_three_body_weight_mode();
+    const bool want_train_cache = (mode == RectOutMode::Matvec && !same_side);
+    bool train_hit =
+        want_train_cache && ws.train_valid && ws.train_x_ptr == d_x2 &&
+        ws.train_n_ptr == d_n2 && ws.train_nn_ptr == d_nn2 && ws.train_nm == nm2 &&
+        ws.train_max_size == max_size2 && ws.train_sigma == sigma &&
+        ws.train_two_body_scaling == two_body_scaling &&
+        ws.train_two_body_width == two_body_width &&
+        ws.train_two_body_power == two_body_power &&
+        ws.train_three_body_scaling == three_body_scaling &&
+        ws.train_three_body_width == three_body_width &&
+        ws.train_three_body_power == three_body_power &&
+        ws.train_cut_start == cut_start && ws.train_cut_distance == cut_distance &&
+        ws.train_fourier_order == fourier_order && ws.train_use_atm == use_atm &&
+        ws.train_use_alchemy == use_alchemy &&
+        ws.train_alchemy_period_width == alchemy_period_width &&
+        ws.train_alchemy_group_width == alchemy_group_width &&
+        ws.train_tb_weight_mode == tb_mode;
 
     const int block_ss = 256;
     const size_t ss1_need = static_cast<size_t>(nm1) * max_size1;
@@ -1282,12 +1443,23 @@ void kernel_gaussian_rect_cu_impl(
         x1_use = ws.x1_sorted;
         x2_use = ws.x1_sorted;
         if (!same_side) {
-            ensure_capacity(&ws.x2_sorted, &ws.x2_sorted_cap, x2_need);
-            sort_neighbors_by_z_kernel<<<grid_ss2, block_ss>>>(
-                d_x2, d_n2, d_nn2, ws.x2_sorted, nm2, max_size2
-            );
-            CUDA_CHECK(cudaGetLastError());
-            x2_use = ws.x2_sorted;
+            if (train_hit) {
+                x2_use = ws.train_x_sorted;
+            } else if (want_train_cache) {
+                ensure_capacity(&ws.train_x_sorted, &ws.train_x_sorted_cap, x2_need);
+                sort_neighbors_by_z_kernel<<<grid_ss2, block_ss>>>(
+                    d_x2, d_n2, d_nn2, ws.train_x_sorted, nm2, max_size2
+                );
+                CUDA_CHECK(cudaGetLastError());
+                x2_use = ws.train_x_sorted;
+            } else {
+                ensure_capacity(&ws.x2_sorted, &ws.x2_sorted_cap, x2_need);
+                sort_neighbors_by_z_kernel<<<grid_ss2, block_ss>>>(
+                    d_x2, d_n2, d_nn2, ws.x2_sorted, nm2, max_size2
+                );
+                CUDA_CHECK(cudaGetLastError());
+                x2_use = ws.x2_sorted;
+            }
         }
     } else if (same_side) {
         x2_use = x1_use;
@@ -1316,7 +1488,7 @@ void kernel_gaussian_rect_cu_impl(
     params.three_body_scaling = three_body_scaling;
     params.three_body_width = three_body_width;
     params.three_body_power = three_body_power;
-    params.three_body_weight_mode = get_fchl18_three_body_weight_mode();
+    params.three_body_weight_mode = tb_mode;
     params.cut_start = cut_start;
     params.cut_distance = cut_distance;
     params.true_distance_scale = two_body_scaling / static_cast<T>(16);
@@ -1325,8 +1497,19 @@ void kernel_gaussian_rect_cu_impl(
     params.use_atm = use_atm ? 1 : 0;
     params.pmax = build_element_map_from_flags(h_z_present, params.z_to_idx);
 
+    // Train Fourier channels depend on the combined element map — invalidate if it shifted.
+    if (train_hit &&
+        (ws.train_pmax != params.pmax ||
+         std::memcmp(ws.train_z_to_idx, params.z_to_idx, sizeof(ws.train_z_to_idx)) != 0)) {
+        train_hit = false;
+    }
+
     if (params.pmax == 0) {
-        CUDA_CHECK(cudaMemset(d_kernel_out, 0, static_cast<size_t>(nm1) * nm2 * sizeof(T)));
+        if (mode == RectOutMode::Dense) {
+            CUDA_CHECK(cudaMemset(d_out, 0, static_cast<size_t>(nm1) * nm2 * sizeof(T)));
+        } else {
+            CUDA_CHECK(cudaMemset(d_out, 0, static_cast<size_t>(nm1) * sizeof(T)));
+        }
         return;
     }
     if (params.pmax > kMaxElements) {
@@ -1358,21 +1541,32 @@ void kernel_gaussian_rect_cu_impl(
     T *cosp2 = ws.cosp1;
     T *sinp2 = ws.sinp1;
     if (!same_side) {
-        ensure_capacity(&ws.ss2, &ws.ss2_cap, ss2_need);
-        ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
-        ensure_capacity(&ws.cosp2, &ws.cosp2_cap, f2_need);
-        ensure_capacity(&ws.sinp2, &ws.sinp2_cap, f2_need);
-        ss2 = ws.ss2;
-        ksi2 = ws.ksi2;
-        cosp2 = ws.cosp2;
-        sinp2 = ws.sinp2;
+        if (want_train_cache) {
+            ensure_capacity(&ws.train_ss, &ws.train_ss_cap, ss2_need);
+            ensure_capacity(&ws.train_ksi, &ws.train_ksi_cap, ksi2_need);
+            ensure_capacity(&ws.train_cosp, &ws.train_cosp_cap, f2_need);
+            ensure_capacity(&ws.train_sinp, &ws.train_sinp_cap, f2_need);
+            ss2 = ws.train_ss;
+            ksi2 = ws.train_ksi;
+            cosp2 = ws.train_cosp;
+            sinp2 = ws.train_sinp;
+        } else {
+            ensure_capacity(&ws.ss2, &ws.ss2_cap, ss2_need);
+            ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
+            ensure_capacity(&ws.cosp2, &ws.cosp2_cap, f2_need);
+            ensure_capacity(&ws.sinp2, &ws.sinp2_cap, f2_need);
+            ss2 = ws.ss2;
+            ksi2 = ws.ksi2;
+            cosp2 = ws.cosp2;
+            sinp2 = ws.sinp2;
+        }
     }
 
     precompute_atom_data_kernel<<<grid_ss1, block_ss>>>(
         x1_use, d_n1, d_nn1, ws.ksi1, ws.cosp1, ws.sinp1, nm1, max_size1, params
     );
     CUDA_CHECK(cudaGetLastError());
-    if (!same_side) {
+    if (!same_side && !train_hit) {
         precompute_atom_data_kernel<<<grid_ss2, block_ss>>>(
             x2_use, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params
         );
@@ -1401,13 +1595,22 @@ void kernel_gaussian_rect_cu_impl(
         cosp2e = cosp1e;
         sinp2e = sinp1e;
         if (!same_side) {
-            ensure_capacity(&ws.cosp2e, &ws.cosp2e_cap, f2_need);
-            ensure_capacity(&ws.sinp2e, &ws.sinp2e_cap, f2_need);
-            alchemy_mix_atom_major(
-                cosp2, sinp2, ws.cosp2e, ws.sinp2e, pdc, d_n2, nm2, max_size2, params
-            );
-            cosp2e = ws.cosp2e;
-            sinp2e = ws.sinp2e;
+            if (want_train_cache) {
+                ensure_capacity(&ws.train_cospe, &ws.train_cospe_cap, f2_need);
+                ensure_capacity(&ws.train_sinpe, &ws.train_sinpe_cap, f2_need);
+                cosp2e = ws.train_cospe;
+                sinp2e = ws.train_sinpe;
+            } else {
+                ensure_capacity(&ws.cosp2e, &ws.cosp2e_cap, f2_need);
+                ensure_capacity(&ws.sinp2e, &ws.sinp2e_cap, f2_need);
+                cosp2e = ws.cosp2e;
+                sinp2e = ws.sinp2e;
+            }
+            if (!train_hit) {
+                alchemy_mix_atom_major(
+                    cosp2, sinp2, cosp2e, sinp2e, pdc, d_n2, nm2, max_size2, params
+                );
+            }
         }
     }
 
@@ -1420,6 +1623,9 @@ void kernel_gaussian_rect_cu_impl(
     ));
 
     const long long n_pairs = static_cast<long long>(nm1) * nm2;
+    if (mode == RectOutMode::Matvec) {
+        CUDA_CHECK(cudaMemset(d_out, 0, static_cast<size_t>(nm1) * sizeof(T)));
+    }
     auto run = [&](auto alch_tag) {
         constexpr bool Alch = decltype(alch_tag)::value;
         compute_self_scalars_precomputed_kernel<T, Alch><<<grid_ss1, block_ss>>>(
@@ -1438,7 +1644,7 @@ void kernel_gaussian_rect_cu_impl(
             ws.s_prefactor
         );
         CUDA_CHECK(cudaGetLastError());
-        if (!same_side) {
+        if (!same_side && !train_hit) {
             compute_self_scalars_precomputed_kernel<T, Alch><<<grid_ss2, block_ss>>>(
                 x2_use,
                 d_n2,
@@ -1457,38 +1663,94 @@ void kernel_gaussian_rect_cu_impl(
             CUDA_CHECK(cudaGetLastError());
         }
 
-        kernel_gaussian_rect_precomputed_kernel<T, Alch>
-            <<<static_cast<int>(n_pairs), kPairBlockSize>>>(
-                x1_use,
-                x2_use,
-                d_n1,
-                d_n2,
-                d_nn1,
-                d_nn2,
-                ws.ss1,
-                ss2,
-                ws.ksi1,
-                ksi2,
-                ws.cosp1,
-                ws.sinp1,
-                cosp2,
-                sinp2,
-                cosp2e,
-                sinp2e,
-                d_kernel_out,
-                nm1,
-                nm2,
-                max_size1,
-                max_size2,
-                hot_params,
-                ws.s_prefactor
-            );
+        if (mode == RectOutMode::Matvec) {
+            kernel_gaussian_rect_matvec_precomputed_kernel<T, Alch>
+                <<<static_cast<int>(n_pairs), kPairBlockSize>>>(
+                    x1_use,
+                    x2_use,
+                    d_n1,
+                    d_n2,
+                    d_nn1,
+                    d_nn2,
+                    ws.ss1,
+                    ss2,
+                    ws.ksi1,
+                    ksi2,
+                    ws.cosp1,
+                    ws.sinp1,
+                    cosp2,
+                    sinp2,
+                    cosp2e,
+                    sinp2e,
+                    d_alpha,
+                    d_out,
+                    nm1,
+                    nm2,
+                    max_size1,
+                    max_size2,
+                    hot_params,
+                    ws.s_prefactor
+                );
+        } else {
+            kernel_gaussian_rect_precomputed_kernel<T, Alch>
+                <<<static_cast<int>(n_pairs), kPairBlockSize>>>(
+                    x1_use,
+                    x2_use,
+                    d_n1,
+                    d_n2,
+                    d_nn1,
+                    d_nn2,
+                    ws.ss1,
+                    ss2,
+                    ws.ksi1,
+                    ksi2,
+                    ws.cosp1,
+                    ws.sinp1,
+                    cosp2,
+                    sinp2,
+                    cosp2e,
+                    sinp2e,
+                    d_out,
+                    nm1,
+                    nm2,
+                    max_size1,
+                    max_size2,
+                    hot_params,
+                    ws.s_prefactor
+                );
+        }
         CUDA_CHECK(cudaGetLastError());
     };
     if (use_alchemy) {
         run(std::true_type{});
     } else {
         run(std::false_type{});
+    }
+
+    if (want_train_cache && !train_hit) {
+        ws.train_valid = true;
+        ws.train_x_ptr = d_x2;
+        ws.train_n_ptr = d_n2;
+        ws.train_nn_ptr = d_nn2;
+        ws.train_nm = nm2;
+        ws.train_max_size = max_size2;
+        ws.train_sigma = sigma;
+        ws.train_two_body_scaling = two_body_scaling;
+        ws.train_two_body_width = two_body_width;
+        ws.train_two_body_power = two_body_power;
+        ws.train_three_body_scaling = three_body_scaling;
+        ws.train_three_body_width = three_body_width;
+        ws.train_three_body_power = three_body_power;
+        ws.train_cut_start = cut_start;
+        ws.train_cut_distance = cut_distance;
+        ws.train_fourier_order = fourier_order;
+        ws.train_use_atm = use_atm;
+        ws.train_use_alchemy = use_alchemy;
+        ws.train_alchemy_period_width = alchemy_period_width;
+        ws.train_alchemy_group_width = alchemy_group_width;
+        ws.train_tb_weight_mode = tb_mode;
+        ws.train_pmax = params.pmax;
+        std::memcpy(ws.train_z_to_idx, params.z_to_idx, sizeof(ws.train_z_to_idx));
     }
 }
 
@@ -1733,6 +1995,8 @@ void kernel_gaussian_rect_cu(
         d_nn1,
         d_nn2,
         d_kernel_out,
+        static_cast<const float *>(nullptr),
+        RectOutMode::Dense,
         sigma,
         nm1,
         nm2,
@@ -1789,6 +2053,126 @@ void kernel_gaussian_rect_cu(
         d_nn1,
         d_nn2,
         d_kernel_out,
+        static_cast<const double *>(nullptr),
+        RectOutMode::Dense,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
+    );
+}
+
+void kernel_gaussian_rect_matvec_cu(
+    const float *d_x1,
+    const float *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const float *d_alpha,
+    float *d_E_out,
+    float sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
+) {
+    kernel_gaussian_rect_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_E_out,
+        d_alpha,
+        RectOutMode::Matvec,
+        sigma,
+        nm1,
+        nm2,
+        max_size1,
+        max_size2,
+        two_body_scaling,
+        two_body_width,
+        two_body_power,
+        three_body_scaling,
+        three_body_width,
+        three_body_power,
+        cut_start,
+        cut_distance,
+        fourier_order,
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
+    );
+}
+
+void kernel_gaussian_rect_matvec_cu(
+    const double *d_x1,
+    const double *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const double *d_alpha,
+    double *d_E_out,
+    double sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
+) {
+    kernel_gaussian_rect_cu_impl(
+        d_x1,
+        d_x2,
+        d_n1,
+        d_n2,
+        d_nn1,
+        d_nn2,
+        d_E_out,
+        d_alpha,
+        RectOutMode::Matvec,
         sigma,
         nm1,
         nm2,

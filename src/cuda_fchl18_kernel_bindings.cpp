@@ -136,6 +136,127 @@ torch::Tensor kernel_gaussian(
     return K;
 }
 
+torch::Tensor kernel_gaussian_matvec(
+    torch::Tensor x1,
+    torch::Tensor x2,
+    torch::Tensor n1,
+    torch::Tensor n2,
+    torch::Tensor nn1,
+    torch::Tensor nn2,
+    torch::Tensor alpha,
+    double sigma,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
+) {
+    check_cuda_floating(x1, "X1");
+    check_cuda_floating(x2, "X2");
+    check_cuda_floating(alpha, "alpha");
+    check_cuda_int32(n1, "N1");
+    check_cuda_int32(n2, "N2");
+    check_cuda_int32(nn1, "NN1");
+    check_cuda_int32(nn2, "NN2");
+
+    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "X1 and X2 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == alpha.scalar_type(), "alpha dtype must match X1");
+    TORCH_CHECK(x1.dim() == 4, "X1 must be 4-D");
+    TORCH_CHECK(x2.dim() == 4, "X2 must be 4-D");
+    TORCH_CHECK(x1.size(2) == 5, "X1.size(2) must equal 5");
+    TORCH_CHECK(x2.size(2) == 5, "X2.size(2) must equal 5");
+    TORCH_CHECK(n1.dim() == 1, "N1 must be 1-D");
+    TORCH_CHECK(n2.dim() == 1, "N2 must be 1-D");
+    TORCH_CHECK(nn1.dim() == 2, "NN1 must be 2-D");
+    TORCH_CHECK(nn2.dim() == 2, "NN2 must be 2-D");
+    TORCH_CHECK(alpha.dim() == 1, "alpha must be 1-D");
+    TORCH_CHECK(sigma > 0.0, "sigma must be positive");
+    TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
+
+    const int nm1 = static_cast<int>(x1.size(0));
+    const int max_size1 = static_cast<int>(x1.size(1));
+    const int nm2 = static_cast<int>(x2.size(0));
+    const int max_size2 = static_cast<int>(x2.size(1));
+
+    TORCH_CHECK(x1.size(3) == max_size1, "X1 shape must be (nm1, max_size1, 5, max_size1)");
+    TORCH_CHECK(x2.size(3) == max_size2, "X2 shape must be (nm2, max_size2, 5, max_size2)");
+    TORCH_CHECK(n1.size(0) == nm1, "N1.size(0) must equal X1.size(0)");
+    TORCH_CHECK(n2.size(0) == nm2, "N2.size(0) must equal X2.size(0)");
+    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "NN1 shape mismatch");
+    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "NN2 shape mismatch");
+    TORCH_CHECK(alpha.size(0) == nm2, "alpha.size(0) must equal X2.size(0)");
+
+    auto E = torch::empty({nm1}, x1.options());
+    if (x1.scalar_type() == torch::kFloat32) {
+        kf::fchl18::kernel_gaussian_rect_matvec_cu(
+            x1.data_ptr<float>(),
+            x2.data_ptr<float>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            alpha.data_ptr<float>(),
+            E.data_ptr<float>(),
+            static_cast<float>(sigma),
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<float>(two_body_scaling),
+            static_cast<float>(two_body_width),
+            static_cast<float>(two_body_power),
+            static_cast<float>(three_body_scaling),
+            static_cast<float>(three_body_width),
+            static_cast<float>(three_body_power),
+            static_cast<float>(cut_start),
+            static_cast<float>(cut_distance),
+            fourier_order,
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
+        );
+    } else {
+        kf::fchl18::kernel_gaussian_rect_matvec_cu(
+            x1.data_ptr<double>(),
+            x2.data_ptr<double>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            alpha.data_ptr<double>(),
+            E.data_ptr<double>(),
+            sigma,
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
+        );
+    }
+    return E;
+}
+
 torch::Tensor kernel_gaussian_symm(
     torch::Tensor x,
     torch::Tensor n,
@@ -2063,6 +2184,51 @@ Returns
 -------
 torch.Tensor, shape (nm1, nm2), same dtype as X1, CUDA
     Rectangular energy-only kernel matrix.
+)doc"
+    );
+
+    m.def(
+        "kernel_gaussian_matvec",
+        &kernel_gaussian_matvec,
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
+        py::arg("alpha"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
+        R"doc(
+Fused energy-only matvec: E = K(X1, X2) @ alpha without forming K.
+
+Parameters
+----------
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+    Query and train FCHL18 representations.
+N1, N2, NN1, NN2 : int32 CUDA tensors
+    Atom / neighbor counts matching X1 / X2.
+alpha : torch.Tensor, shape (nm2,), same dtype as X1, CUDA
+    Dual coefficients for the train set.
+sigma : float
+    Gaussian kernel length-scale.
+
+Returns
+-------
+torch.Tensor, shape (nm1,), same dtype as X1, CUDA
+    Predicted energies E[a] = sum_b K[a,b] * alpha[b].
 )doc"
     );
 
