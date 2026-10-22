@@ -172,37 +172,48 @@ class GlobalRFFModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
-        compute_forces: bool = True,  # E+F computed together; param kept for API compat
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
-
-        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=True)
-        if dX_te is None:
-            msg = "dX_te is None in predict — internal error"
-            raise RuntimeError(msg)
-
         n_test = len(coords_list)
+        need_gradients = compute_forces or mode in ("force_only", "energy_and_force")
+        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=need_gradients)
+
         W = self._W
         b = self._b
         w = self._weights
+        E_pred: NDArray[np.float64] = np.zeros(n_test, dtype=np.float64)
+        F_pred: NDArray[np.float64] = np.empty(0, dtype=np.float64)
 
         if mode == "energy_only":
-            Z_te = rff_features(X_te, W, b)  # (n_test, d_rff)
-            E_pred: NDArray[np.float64] = Z_te @ w
-            G_te = rff_gradient(X_te, dX_te, W, b)  # (d_rff, n_test*D)
-            F_pred: NDArray[np.float64] = -G_te.T @ w  # flat (n_test*D,)
+            if compute_energy:
+                E_pred = rff_features(X_te, W, b) @ w
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in predict — internal error"
+                    raise RuntimeError(msg)
+                F_pred = -rff_gradient(X_te, dX_te, W, b).T @ w
 
         elif mode == "force_only":
-            G_te = rff_gradient(X_te, dX_te, W, b)  # (d_rff, n_test*D)
-            F_pred = G_te.T @ w  # flat (n_test*D,)
-            Z_te = rff_features(X_te, W, b)  # (n_test, d_rff)
-            E_pred = Z_te @ w
+            if dX_te is None:
+                msg = "dX_te is None in predict — internal error"
+                raise RuntimeError(msg)
+            if compute_forces:
+                F_pred = rff_gradient(X_te, dX_te, W, b).T @ w
+            if compute_energy:
+                E_pred = rff_features(X_te, W, b) @ w
 
         else:  # energy_and_force
-            Z_full_te = rff_full(X_te, dX_te, W, b)  # (n_test*(1+D), d_rff)
-            y_pred = -Z_full_te @ w
-            E_pred = y_pred[:n_test]
-            F_pred = -y_pred[n_test:]  # flat (n_test*D,)
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in predict — internal error"
+                    raise RuntimeError(msg)
+                y_pred = -rff_full(X_te, dX_te, W, b) @ w
+                if compute_energy:
+                    E_pred = y_pred[:n_test]
+                F_pred = -y_pred[n_test:]
+            elif compute_energy:
+                E_pred = rff_features(X_te, W, b) @ w
 
         return E_pred, F_pred
 

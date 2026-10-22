@@ -441,20 +441,25 @@ class CudaFCHL18KRRModel(BaseModel):
                 E_pred = np.zeros(n_test, dtype=np.float64)
 
             if compute_forces:
-                # Batched Jacobian (3*sum(N_te), n_train) — avoid per-mol gradient.
-                J = _cuda_kernel.kernel_gaussian_jacobian(
-                    x_te,
-                    x_tr,
-                    n_te,
-                    n_tr,
-                    nn_te,
-                    nn_tr,
-                    coords_te,
-                    z_te,
-                    sigma=self.sigma,
-                    **kp_cuda,
-                )
-                F_pred = -(J @ alpha_t).detach().cpu().numpy().astype(np.float64).reshape(-1)
+                # Per-molecule gradients keep peak GPU memory O(n_atoms * n_train).
+                F_parts: list[NDArray[np.float64]] = []
+                for i in range(n_test):
+                    G = _cuda_kernel.kernel_gaussian_gradient(
+                        x_te[i : i + 1],
+                        x_tr,
+                        n_te[i : i + 1],
+                        n_tr,
+                        nn_te[i : i + 1],
+                        nn_tr,
+                        coords_te[i : i + 1],
+                        z_te[i : i + 1],
+                        sigma=self.sigma,
+                        **kp_cuda,
+                    )
+                    F_parts.append(
+                        -(G @ alpha_t).reshape(-1).detach().cpu().numpy().astype(np.float64)
+                    )
+                F_pred = np.concatenate(F_parts)
             else:
                 F_pred = np.empty(0, dtype=np.float64)
 
@@ -509,7 +514,7 @@ class CudaFCHL18KRRModel(BaseModel):
         else:  # energy_and_force
             alpha_E = alpha_t[: self._n_train]
             alpha_F = alpha_t[self._n_train :]
-            if compute_forces or compute_energy:
+            if compute_forces:
                 E_t, F_block = _cuda_kernel.kernel_gaussian_full_matvec(
                     x_te,
                     x_tr,
@@ -532,11 +537,35 @@ class CudaFCHL18KRRModel(BaseModel):
                     if compute_energy
                     else np.zeros(n_test, dtype=np.float64)
                 )
-                F_pred = (
-                    -F_block.detach().cpu().numpy().astype(np.float64)
-                    if compute_forces
-                    else np.empty(0, dtype=np.float64)
+                F_pred = -F_block.detach().cpu().numpy().astype(np.float64)
+            elif compute_energy:
+                # Scalar + jacᵀ matvecs — skip Hessian work when forces are unused.
+                E_ee = _cuda_kernel.kernel_gaussian_matvec(
+                    x_te,
+                    x_tr,
+                    n_te,
+                    n_tr,
+                    nn_te,
+                    nn_tr,
+                    alpha_E,
+                    sigma=self.sigma,
+                    **kp_cuda,
                 )
+                E_ef = _cuda_kernel.kernel_gaussian_jacobian_t_matvec(
+                    x_tr,
+                    x_te,
+                    n_tr,
+                    n_te,
+                    nn_tr,
+                    nn_te,
+                    coords_tr,
+                    z_tr,
+                    alpha_F,
+                    sigma=self.sigma,
+                    **kp_cuda,
+                )
+                E_pred = (E_ee + E_ef).detach().cpu().numpy().astype(np.float64)
+                F_pred = np.empty(0, dtype=np.float64)
             else:
                 E_pred = np.zeros(n_test, dtype=np.float64)
                 F_pred = np.empty(0, dtype=np.float64)

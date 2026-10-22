@@ -260,6 +260,7 @@ void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B, const std::string &uplo)
                 "L_rfp and B must have the same dtype");
     TORCH_CHECK(L_rfp.dim() == 1, "L_rfp must be 1-D");
     TORCH_CHECK(B.dim() == 2,     "B must be 2-D (N, nrhs)");
+    TORCH_CHECK(B.is_contiguous(), "B must be contiguous");
 
     int N    = (int)B.size(0);
     int nrhs = (int)B.size(1);
@@ -267,13 +268,29 @@ void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B, const std::string &uplo)
                 "L_rfp.size(0) must equal N*(N+1)/2");
 
     const bool uplo_upper = parse_uplo_upper(uplo);
+    // curfp*pftrs expects column-major (N, nrhs) with LDA=N. A contiguous Torch
+    // (N, nrhs) tensor is row-major; for nrhs==1 the layouts coincide, but for
+    // nrhs>1 we must solve in a transposed contiguous workspace and copy back.
+    if (nrhs == 1) {
+        if (L_rfp.scalar_type() == torch::kFloat64) {
+            kf::rfp_potrs_cu(
+                L_rfp.data_ptr<double>(), B.data_ptr<double>(), N, nrhs, uplo_upper);
+        } else {
+            kf::rfp_potrs_cu(
+                L_rfp.data_ptr<float>(), B.data_ptr<float>(), N, nrhs, uplo_upper);
+        }
+        return;
+    }
+
+    auto B_cm = B.transpose(0, 1).contiguous();  // (nrhs, N) row-major ≡ (N, nrhs) col-major
     if (L_rfp.scalar_type() == torch::kFloat64) {
         kf::rfp_potrs_cu(
-            L_rfp.data_ptr<double>(), B.data_ptr<double>(), N, nrhs, uplo_upper);
+            L_rfp.data_ptr<double>(), B_cm.data_ptr<double>(), N, nrhs, uplo_upper);
     } else {
         kf::rfp_potrs_cu(
-            L_rfp.data_ptr<float>(), B.data_ptr<float>(), N, nrhs, uplo_upper);
+            L_rfp.data_ptr<float>(), B_cm.data_ptr<float>(), N, nrhs, uplo_upper);
     }
+    B.copy_(B_cm.transpose(0, 1));
 }
 
 

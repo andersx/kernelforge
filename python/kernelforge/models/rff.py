@@ -195,62 +195,62 @@ class LocalRFFModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
-        compute_forces: bool = True,  # E+F computed together; param kept for API compat
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
+        n_test = len(coords_list)
+        need_gradients = compute_forces or mode in ("force_only", "energy_and_force")
 
         X_te, dX_te, _Q_krr_te, Q_rff_te, _N_te = compute_fchl19(
             coords_list,
             z_list,
             self.elements,
-            with_gradients=True,
+            with_gradients=need_gradients,
             repr_params=self.repr_params,
         )
 
-        n_test = len(coords_list)
         n_atoms_te = X_te.shape[1]
         rep_size_te = X_te.shape[2]
         W = self._W
         b = self._b
         w = self._weights
+        E_pred = np.zeros(n_test, dtype=np.float64)
+        F_pred = np.empty(0, dtype=np.float64)
 
         if mode == "energy_only":
-            if dX_te is None:
-                msg = "dX_te is None in energy_only predict — internal error"
-                raise RuntimeError(msg)
-            dX_te_5d: NDArray[np.float64] = dX_te.reshape(
-                n_test, n_atoms_te, rep_size_te, n_atoms_te, 3
-            )
-            Z_te = rff_features_elemental(X_te, Q_rff_te, W, b)  # (n_test, d_rff)
-            E_pred = Z_te @ w
-            # Forces via gradient features: F = -dE/dR
-            G_te = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b)  # (d_rff, n_test*naq)
-            F_pred = G_te.T @ w  # flat (sum(N_te)*3,)
+            if compute_energy:
+                E_pred = rff_features_elemental(X_te, Q_rff_te, W, b) @ w
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in energy_only predict — internal error"
+                    raise RuntimeError(msg)
+                dX_te_5d: NDArray[np.float64] = dX_te.reshape(
+                    n_test, n_atoms_te, rep_size_te, n_atoms_te, 3
+                )
+                F_pred = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b).T @ w
 
         elif mode == "force_only":
             if dX_te is None:
                 msg = "dX_te is None in force_only predict — internal error"
                 raise RuntimeError(msg)
-            dX_te_5d: NDArray[np.float64] = dX_te.reshape(
-                n_test, n_atoms_te, rep_size_te, n_atoms_te, 3
-            )
-            G_te = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b)  # (d_rff, n_test*naq)
-            F_pred = G_te.T @ w  # flat (sum(N_te)*3,)
-
-            Z_te = rff_features_elemental(X_te, Q_rff_te, W, b)  # (n_test, d_rff)
-            E_pred = Z_te @ w
+            dX_te_5d = dX_te.reshape(n_test, n_atoms_te, rep_size_te, n_atoms_te, 3)
+            if compute_forces:
+                F_pred = rff_gradient_elemental(X_te, dX_te_5d, Q_rff_te, W, b).T @ w
+            if compute_energy:
+                E_pred = rff_features_elemental(X_te, Q_rff_te, W, b) @ w
 
         else:  # energy_and_force
-            if dX_te is None:
-                msg = "dX_te is None in energy_and_force predict — internal error"
-                raise RuntimeError(msg)
-            dX_te_5d = dX_te.reshape(n_test, n_atoms_te, rep_size_te, n_atoms_te, 3)
-            Z_full_te = rff_full_elemental(
-                X_te, dX_te_5d, Q_rff_te, W, b
-            )  # (n_test*(1+naq), d_rff)
-            y_pred = Z_full_te @ w
-            E_pred = y_pred[:n_test]
-            F_pred = y_pred[n_test:]  # flat (sum(N_te)*3,)
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in energy_and_force predict — internal error"
+                    raise RuntimeError(msg)
+                dX_te_5d = dX_te.reshape(n_test, n_atoms_te, rep_size_te, n_atoms_te, 3)
+                y_pred = rff_full_elemental(X_te, dX_te_5d, Q_rff_te, W, b) @ w
+                if compute_energy:
+                    E_pred = y_pred[:n_test]
+                F_pred = y_pred[n_test:]
+            elif compute_energy:
+                E_pred = rff_features_elemental(X_te, Q_rff_te, W, b) @ w
 
         return E_pred, F_pred
 

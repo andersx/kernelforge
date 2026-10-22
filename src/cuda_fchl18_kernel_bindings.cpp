@@ -1081,10 +1081,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
     double cut_distance,
     int fourier_order,
     bool use_atm,
+    bool compute_energy,
     bool use_alchemy,
     double alchemy_period_width,
-    double alchemy_group_width,
-    bool compute_energy
+    double alchemy_group_width
 ) {
     const int nm1 = static_cast<int>(x1.size(0));
     const int nm2 = static_cast<int>(x2.size(0));
@@ -2706,14 +2706,15 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full_symm_rfp.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("compute_energy") = true,
         py::arg("use_alchemy") = false,
         py::arg("alchemy_period_width") = 1.6,
         py::arg("alchemy_group_width") = 1.6,
-        py::arg("compute_energy") = true,
         R"doc(
 Contracted EF inference on GPU without materialising the full kernel matrix.
 
 Returns (E, F_block) with the same layout as CPU kernel_gaussian_full_matvec.
+``compute_energy`` precedes alchemy kwargs (CPU binding order) for positional compat.
 )doc"
     );
 

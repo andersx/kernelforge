@@ -186,72 +186,98 @@ class GlobalKRRModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
-        compute_forces: bool = True,  # E+F computed together; param kept for API compat
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
-
-        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=True)
+        n_test = len(coords_list)
+        need_gradients = compute_forces or mode in ("force_only", "energy_and_force")
+        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=need_gradients)
 
         X_tr = self._X_tr
         dX_tr = self._dX_tr
         alpha = self._alpha
-        n_test = len(coords_list)
         N_tr = self._n_train
+        E_pred: NDArray[np.float64] = np.zeros(n_test, dtype=np.float64)
+        F_pred: NDArray[np.float64] = np.empty(0, dtype=np.float64)
 
         if mode == "energy_only":
-            if dX_te is None:
-                msg = "dX_te is None in energy_only predict — internal error"
-                raise RuntimeError(msg)
-            K_e = global_kernels.kernel_gaussian(X_te, X_tr, self.sigma)
-            E_pred: NDArray[np.float64] = K_e @ alpha
-            # Forces via Jacobian kernel: dE/dR_test
-            K_jac = global_kernels.kernel_gaussian_jacobian(X_te, dX_te, X_tr, self.sigma)
-            F_pred: NDArray[np.float64] = (K_jac @ alpha).ravel()
+            if compute_energy:
+                E_pred = global_kernels.kernel_gaussian(X_te, X_tr, self.sigma) @ alpha
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in energy_only predict — internal error"
+                    raise RuntimeError(msg)
+                F_pred = (
+                    global_kernels.kernel_gaussian_jacobian(X_te, dX_te, X_tr, self.sigma) @ alpha
+                ).ravel()
 
         elif mode == "force_only":
             if dX_te is None:
                 msg = "dX_te is None in force_only predict — internal error"
                 raise RuntimeError(msg)
             if self._alpha_desc is not None:
-                # Fast path: J^T alpha trick
-                F_pred = global_kernels.kernel_gaussian_hessian_matvec(
-                    X_te, dX_te, X_tr, self._alpha_desc, self.sigma
-                ).ravel()
-                E_pred = -global_kernels.kernel_gaussian_jacobian_t_matvec(
-                    X_te, X_tr, self._alpha_desc, self.sigma
-                )
+                if compute_forces:
+                    F_pred = global_kernels.kernel_gaussian_hessian_matvec(
+                        X_te, dX_te, X_tr, self._alpha_desc, self.sigma
+                    ).ravel()
+                if compute_energy:
+                    E_pred = -global_kernels.kernel_gaussian_jacobian_t_matvec(
+                        X_te, X_tr, self._alpha_desc, self.sigma
+                    )
             else:
-                # Fallback for loaded models without alpha_desc
                 if dX_tr is None:
                     msg = "dX_tr is None in force_only fallback — internal error"
                     raise RuntimeError(msg)
-                K_hess = global_kernels.kernel_gaussian_hessian(
-                    X_te, dX_te, X_tr, dX_tr, self.sigma
-                )
-                F_pred = (K_hess @ alpha).ravel()
-                K_jt = global_kernels.kernel_gaussian_jacobian_t(X_te, X_tr, dX_tr, self.sigma)
-                E_pred = -(K_jt @ alpha)
+                if compute_forces:
+                    F_pred = (
+                        global_kernels.kernel_gaussian_hessian(X_te, dX_te, X_tr, dX_tr, self.sigma)
+                        @ alpha
+                    ).ravel()
+                if compute_energy:
+                    E_pred = -(
+                        global_kernels.kernel_gaussian_jacobian_t(X_te, X_tr, dX_tr, self.sigma)
+                        @ alpha
+                    )
 
         else:  # energy_and_force
             if dX_te is None:
                 msg = "dX_te is None in energy_and_force predict — internal error"
                 raise RuntimeError(msg)
-            if self._alpha_desc is not None:
-                # Fast path: J^T alpha trick
+            if compute_forces:
+                if self._alpha_desc is not None:
+                    alpha_E = alpha[:N_tr]
+                    E_block, F_2d = global_kernels.kernel_gaussian_full_matvec(
+                        X_te, dX_te, X_tr, alpha_E, self._alpha_desc, self.sigma
+                    )
+                    F_pred = -F_2d.ravel()
+                    if compute_energy:
+                        E_pred = E_block
+                else:
+                    if dX_tr is None:
+                        msg = "dX_tr is None in energy_and_force fallback — internal error"
+                        raise RuntimeError(msg)
+                    y_pred = (
+                        global_kernels.kernel_gaussian_full(X_te, dX_te, X_tr, dX_tr, self.sigma)
+                        @ alpha
+                    )
+                    if compute_energy:
+                        E_pred = y_pred[:n_test]
+                    F_pred = -y_pred[n_test:]
+            elif compute_energy:
                 alpha_E = alpha[:N_tr]
-                E_pred, F_2d = global_kernels.kernel_gaussian_full_matvec(
-                    X_te, dX_te, X_tr, alpha_E, self._alpha_desc, self.sigma
-                )
-                F_pred = -F_2d.ravel()  # undo sign convention (labels were -F)
-            else:
-                # Fallback for loaded models without alpha_desc
-                if dX_tr is None:
-                    msg = "dX_tr is None in energy_and_force fallback — internal error"
-                    raise RuntimeError(msg)
-                K_full = global_kernels.kernel_gaussian_full(X_te, dX_te, X_tr, dX_tr, self.sigma)
-                y_pred = K_full @ alpha
-                E_pred = y_pred[:n_test]
-                F_pred = -y_pred[n_test:]
+                if self._alpha_desc is not None:
+                    E_pred = global_kernels.kernel_gaussian(X_te, X_tr, self.sigma) @ alpha_E
+                    E_pred = E_pred - global_kernels.kernel_gaussian_jacobian_t_matvec(
+                        X_te, X_tr, self._alpha_desc, self.sigma
+                    )
+                else:
+                    if dX_tr is None:
+                        msg = "dX_tr is None in energy_and_force fallback — internal error"
+                        raise RuntimeError(msg)
+                    E_pred = (
+                        global_kernels.kernel_gaussian_full(X_te, dX_te, X_tr, dX_tr, self.sigma)
+                        @ alpha
+                    )[:n_test]
 
         return E_pred, F_pred
 

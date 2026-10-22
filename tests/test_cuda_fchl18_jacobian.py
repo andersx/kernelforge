@@ -197,6 +197,66 @@ def test_jacobian_matches_cpu_f64_batch() -> None:
     np.testing.assert_allclose(J_gpu, J_cpu, rtol=1e-9, atol=1e-11)
 
 
+def test_jacobian_inplace_geometry_cache_invalidation() -> None:
+    """In-place X edits that leave first/mid/last words unchanged must miss cache."""
+    coords1 = [WATER_COORDS]
+    z1 = [WATER_Z]
+    coords2 = [WATER_COORDS, WATER_COORDS, WATER_COORDS, WATER_COORDS]
+    z2 = [WATER_Z, WATER_Z, WATER_Z, WATER_Z]
+    max_size = 4
+    x1, n1, nn1 = repr_mod.generate(coords1, z1, max_size=max_size, cut_distance=1e6)
+    x2, n2, nn2 = repr_mod.generate(coords2, z2, max_size=max_size, cut_distance=1e6)
+    coords1_pad, z1_pad = _pad_coords_z(coords1, z1, max_size)
+
+    x2_c = _to_cuda(x2, torch.float64)
+    J0 = (
+        cuda_fchl18_kernel.kernel_gaussian_jacobian(
+            _to_cuda(x1, torch.float64),
+            x2_c,
+            _to_cuda_i32(n1),
+            _to_cuda_i32(n2),
+            _to_cuda_i32(nn1),
+            _to_cuda_i32(nn2),
+            _to_cuda(coords1_pad, torch.float64),
+            _to_cuda_i32(z1_pad),
+            sigma=SIGMA,
+            **KERNEL_ARGS,
+        )
+        .cpu()
+        .numpy()
+    )
+
+    # Stretch an interior bond in molecule 1 of the train set (avoids first/mid/last
+    # flat-buffer words that are often padding for padded waters).
+    coords2_mut = [c.copy() for c in coords2]
+    coords2_mut[1] = coords2_mut[1].copy()
+    coords2_mut[1][0, 0] += 0.15
+    x2_mut, _, _ = repr_mod.generate(coords2_mut, z2, max_size=max_size, cut_distance=1e6)
+    x2_c.copy_(torch.from_numpy(np.ascontiguousarray(x2_mut)).cuda())
+
+    J1 = (
+        cuda_fchl18_kernel.kernel_gaussian_jacobian(
+            _to_cuda(x1, torch.float64),
+            x2_c,
+            _to_cuda_i32(n1),
+            _to_cuda_i32(n2),
+            _to_cuda_i32(nn1),
+            _to_cuda_i32(nn2),
+            _to_cuda(coords1_pad, torch.float64),
+            _to_cuda_i32(z1_pad),
+            sigma=SIGMA,
+            **KERNEL_ARGS,
+        )
+        .cpu()
+        .numpy()
+    )
+    assert not np.allclose(J0, J1, rtol=1e-12, atol=1e-12)
+    J1_cpu = cpu_kernel.kernel_gaussian_jacobian(
+        coords1, z1, x2_mut, n2, nn2, sigma=SIGMA, **KERNEL_ARGS
+    )
+    np.testing.assert_allclose(J1, J1_cpu, rtol=1e-9, atol=1e-11)
+
+
 def test_jacobian_fourier_order_cache_invalidation() -> None:
     """Changing fourier_order must not reuse stale Fourier workspace caches.
 

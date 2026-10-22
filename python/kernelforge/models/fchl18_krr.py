@@ -195,7 +195,7 @@ class FCHL18KRRModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
-        compute_forces: bool = True,  # E+F computed together; param kept for API compat
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         mode = self.training_mode_
         kp = self._kp_fit
@@ -220,25 +220,24 @@ class FCHL18KRRModel(BaseModel):
                 E_pred = np.zeros(n_test, dtype=np.float64)
 
             if compute_forces:
-                # Batched Jacobian — avoid per-molecule gradient loop.
-                J = fchl18_kernel.kernel_gaussian_jacobian(
-                    coords_te,
-                    z_te,
-                    self._x_tr,
-                    self._n_tr,
-                    self._nn_tr,
-                    sigma=self.sigma,
-                    **kp,
-                )
-                F_pred = -(J @ alpha).ravel()
+                # Per-molecule gradients keep peak memory O(n_atoms * n_train).
+                F_parts = []
+                for coords_A, z_A in zip(coords_te, z_te, strict=True):
+                    G = fchl18_kernel.kernel_gaussian_gradient(
+                        coords_A, z_A, self._x_tr, self._n_tr, self._nn_tr, sigma=self.sigma, **kp
+                    )
+                    F_parts.append(-(G @ alpha).ravel())
+                F_pred = np.concatenate(F_parts)
             else:
                 F_pred = np.empty(0, dtype=np.float64)
 
         elif mode == "force_only":
-            F_block = fchl18_kernel.kernel_gaussian_hessian_matvec(
-                coords_te, z_te, self._R_tr, self._Z_tr, alpha, sigma=self.sigma, **kp
-            )
-            F_pred = F_block  # flat (sum(N_te)*3,)
+            if compute_forces:
+                F_pred = fchl18_kernel.kernel_gaussian_hessian_matvec(
+                    coords_te, z_te, self._R_tr, self._Z_tr, alpha, sigma=self.sigma, **kp
+                )
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
 
             if compute_energy:
                 x_te, n_te, nn_te = fchl18_repr.generate(
@@ -260,19 +259,54 @@ class FCHL18KRRModel(BaseModel):
         else:  # energy_and_force
             alpha_E = alpha[: self._n_train]
             alpha_F = alpha[self._n_train :]
-            E_pred, F_block = fchl18_kernel.kernel_gaussian_full_matvec(
-                coords_te,
-                z_te,
-                self._R_tr,
-                self._Z_tr,
-                alpha_E,
-                alpha_F,
-                sigma=self.sigma,
-                compute_energy=compute_energy,
-                **kp,
-            )
-            # Negate back: training used -F as labels. Flat (sum(N_te)*3,).
-            F_pred = -F_block
+            if compute_forces:
+                E_pred, F_block = fchl18_kernel.kernel_gaussian_full_matvec(
+                    coords_te,
+                    z_te,
+                    self._R_tr,
+                    self._Z_tr,
+                    alpha_E,
+                    alpha_F,
+                    sigma=self.sigma,
+                    compute_energy=compute_energy,
+                    **kp,
+                )
+                # Negate back: training used -F as labels. Flat (sum(N_te)*3,).
+                F_pred = -F_block
+                if not compute_energy:
+                    E_pred = np.zeros(n_test, dtype=np.float64)
+            elif compute_energy:
+                x_te, n_te, nn_te = fchl18_repr.generate(
+                    coords_te, z_te, max_size=self.max_size, cut_distance=cut_distance
+                )
+                E_ee = (
+                    fchl18_kernel.kernel_gaussian(
+                        x_te,
+                        self._x_tr,
+                        n_te,
+                        self._n_tr,
+                        nn_te,
+                        self._nn_tr,
+                        sigma=self.sigma,
+                        **kp,
+                    )
+                    @ alpha_E
+                )
+                E_ef = fchl18_kernel.kernel_gaussian_jacobian_t_matvec(
+                    self._R_tr,
+                    self._Z_tr,
+                    x_te,
+                    n_te,
+                    nn_te,
+                    alpha_F,
+                    sigma=self.sigma,
+                    **kp,
+                )
+                E_pred = E_ee + E_ef
+                F_pred = np.empty(0, dtype=np.float64)
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
+                F_pred = np.empty(0, dtype=np.float64)
 
         return E_pred, F_pred
 

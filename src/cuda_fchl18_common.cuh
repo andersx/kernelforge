@@ -273,22 +273,28 @@ void fill_coord_offsets_device(
     const int *d_n, int **d_offset, size_t *offset_cap, int nm, int expected_dim, const char *what
 );
 
-// Cheap device-side fingerprint of a float/double buffer (first + mid + last words).
-// Used to guard train-side workspace caches against CUDA allocator pointer reuse.
+// Device-buffer fingerprint for train-side workspace caches.
+// Samples many evenly spaced words so ordinary geometry / representation edits are
+// visible even when the first, middle, and last slots are padding zeros / sentinels
+// (e.g. small molecules padded to max_size).
 template <typename T>
 inline unsigned long long buffer_fingerprint(const T *d_ptr, size_t n_elem) {
     if (d_ptr == nullptr || n_elem == 0) {
         return 0;
     }
-    T samples[3];
-    const size_t i0 = 0;
-    const size_t i1 = n_elem / 2;
-    const size_t i2 = n_elem - 1;
-    CUDA_CHECK(cudaMemcpy(&samples[0], d_ptr + i0, sizeof(T), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(&samples[1], d_ptr + i1, sizeof(T), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaMemcpy(&samples[2], d_ptr + i2, sizeof(T), cudaMemcpyDeviceToHost));
+    constexpr int kSamples = 32;
+    const int n_samp = n_elem < static_cast<size_t>(kSamples)
+                           ? static_cast<int>(n_elem)
+                           : kSamples;
+    T samples[kSamples];
+    for (int i = 0; i < n_samp; ++i) {
+        const size_t idx = (n_samp == 1)
+                               ? 0
+                               : (n_elem - 1) * static_cast<size_t>(i) / static_cast<size_t>(n_samp - 1);
+        CUDA_CHECK(cudaMemcpy(&samples[i], d_ptr + idx, sizeof(T), cudaMemcpyDeviceToHost));
+    }
     unsigned long long fp = 0;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < n_samp; ++i) {
         unsigned long long w = 0;
         static_assert(sizeof(T) <= sizeof(w), "fingerprint word");
         std::memcpy(&w, &samples[i], sizeof(T));

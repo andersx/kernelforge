@@ -567,16 +567,19 @@ def kernel_gaussian_full_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    compute_energy: bool = True,
     use_alchemy: bool = False,
     alchemy_period_width: float = 1.6,
     alchemy_group_width: float = 1.6,
-    compute_energy: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Contracted ``K_full(X1, X2) @ [alpha_E, alpha_F]`` without forming ``K_full``.
 
     Uses a fused one-shot path when ``N_B > N_A`` (train set larger than the query set) and
     the unfused kernels otherwise. Both paths support ``use_alchemy`` (periodic-table
     alchemy) and give the same result as the dense ``kernel_gaussian_full`` product.
+
+    Parameter order matches the CPU binding: ``compute_energy`` precedes alchemy options
+    so older positional callers that pass a bool after ``use_atm`` keep skipping energy.
     """
     ...
 

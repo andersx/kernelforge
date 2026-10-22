@@ -955,7 +955,7 @@ class CudaLocalKRRModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
-        compute_forces: bool = True,  # E+F computed together in matvec; param kept for API compat
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         import time as _time
 
@@ -970,7 +970,10 @@ class CudaLocalKRRModel(BaseModel):
         t0 = _time.perf_counter()
 
         mode = self.training_mode_
-        need_gradients = mode in ("force_only", "energy_and_force")
+        n_test = len(coords_list)
+        need_gradients = mode in ("force_only", "energy_and_force") and (
+            compute_forces or compute_energy
+        )
 
         if mode == "force_only":
             from kernelforge import local_kernels as _cpu_lk
@@ -988,27 +991,33 @@ class CudaLocalKRRModel(BaseModel):
                 msg = "dX_te is None in force_only predict — internal error"
                 raise RuntimeError(msg)
             t0 = _tp("compute_fchl19 (CPU f64 + grad)", t0)
-            F_pred = _cpu_lk.kernel_gaussian_local_hessian_matvec(
-                X_te,
-                dX_te,
-                self._X_tr_f64,
-                self._alpha_desc_f64,
-                Q_te,
-                self._Q_train_np,
-                N_te,
-                self._N_train_np,
-                float(self.sigma),
-            )
-            E_pred = -_cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
-                X_te,
-                self._X_tr_f64,
-                self._alpha_desc_f64,
-                Q_te,
-                self._Q_train_np,
-                N_te,
-                self._N_train_np,
-                float(self.sigma),
-            )
+            if compute_forces:
+                F_pred = _cpu_lk.kernel_gaussian_local_hessian_matvec(
+                    X_te,
+                    dX_te,
+                    self._X_tr_f64,
+                    self._alpha_desc_f64,
+                    Q_te,
+                    self._Q_train_np,
+                    N_te,
+                    self._N_train_np,
+                    float(self.sigma),
+                )
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
+            if compute_energy:
+                E_pred = -_cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
+                    X_te,
+                    self._X_tr_f64,
+                    self._alpha_desc_f64,
+                    Q_te,
+                    self._Q_train_np,
+                    N_te,
+                    self._N_train_np,
+                    float(self.sigma),
+                )
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
             t0 = _tp("hessian / jacobian_t matvec (CPU)", t0)
             return E_pred, F_pred
 
@@ -1026,21 +1035,22 @@ class CudaLocalKRRModel(BaseModel):
 
         if mode == "energy_only":
             # Fast energy-only predict: K_EE_test @ alpha (no dX, no matvec)
-            K_EE_test = _ext.kernel_gaussian_rect(  # type: ignore[union-attr]
-                X_te_cuda,
-                Q_te_cuda,
-                N_te_cuda,
-                self._X_train_cuda,
-                self._Q_train_cuda,
-                self._N_train_cuda,
-                float(self.sigma),
-            )
-            E_cuda = K_EE_test @ self._alpha_E_cuda
-            t0 = _tp("kernel_gaussian_rect + E = K@alpha (GPU)", t0)
-
-            E_pred = E_cuda.cpu().numpy().astype(np.float64)
-            # No forces predicted in energy_only fast path
-            F_pred = np.zeros(int(np.sum(N_te) * 3), dtype=np.float64)
+            if compute_energy:
+                K_EE_test = _ext.kernel_gaussian_rect(  # type: ignore[union-attr]
+                    X_te_cuda,
+                    Q_te_cuda,
+                    N_te_cuda,
+                    self._X_train_cuda,
+                    self._Q_train_cuda,
+                    self._N_train_cuda,
+                    float(self.sigma),
+                )
+                E_cuda = K_EE_test @ self._alpha_E_cuda
+                t0 = _tp("kernel_gaussian_rect + E = K@alpha (GPU)", t0)
+                E_pred = E_cuda.cpu().numpy().astype(np.float64)
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
+            F_pred = np.empty(0, dtype=np.float64)
             return E_pred, F_pred
         else:
             graph_state = self._get_or_create_cached_graph(X_te_cuda, dX_te_cuda, Q_te_cuda, N_te)
@@ -1070,9 +1080,15 @@ class CudaLocalKRRModel(BaseModel):
                 )
             t0 = _tp("kernel_gaussian_full_matvec_cached (GPU)", t0)
 
-            E_pred = E_cuda.cpu().numpy().astype(np.float64)
-            F_flat: NDArray[np.float64] = F_cuda.cpu().numpy().astype(np.float64)
-            F_pred = -F_flat
+            if compute_energy:
+                E_pred = E_cuda.cpu().numpy().astype(np.float64)
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
+            if compute_forces:
+                F_flat: NDArray[np.float64] = F_cuda.cpu().numpy().astype(np.float64)
+                F_pred = -F_flat
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
             return E_pred, F_pred
 
     # ------------------------------------------------------------------

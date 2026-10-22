@@ -406,13 +406,20 @@ class CudaGlobalKRRModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
-        compute_forces: bool = True,  # E+F computed together; param kept for API compat
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        n_test = len(coords_list)
         if self.training_mode_ == "energy_only":
-            return self._predict_energy_only(coords_list, z_list)
-        if self.training_mode_ == "force_only":
-            return self._predict_force_only(coords_list, z_list)
-        return self._predict_energy_and_force(coords_list, z_list)
+            E_pred, F_pred = self._predict_energy_only(coords_list, z_list)
+        elif self.training_mode_ == "force_only":
+            E_pred, F_pred = self._predict_force_only(coords_list, z_list)
+        else:
+            E_pred, F_pred = self._predict_energy_and_force(coords_list, z_list)
+        if not compute_energy:
+            E_pred = np.zeros(n_test, dtype=np.float64)
+        if not compute_forces:
+            F_pred = np.empty(0, dtype=np.float64)
+        return E_pred, F_pred
 
     def _predict_force_only(
         self,
