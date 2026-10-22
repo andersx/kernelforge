@@ -108,6 +108,20 @@ class TestCudaFCHL18KRRModelEnergyAndForce:
         assert F_pred.shape == (4 * N_ATOMS * 3,)
         assert model.training_mode_ == "energy_and_force"
 
+    def test_compute_forces_false_preserves_energy(self, dataset: tuple) -> None:
+        """EF energy with compute_forces=False must match the full predict energy."""
+        coords_list, z_list, energies, forces = dataset
+        tr, te = coords_list[:8], coords_list[8:]
+        ztr, zte = z_list[:8], z_list[8:]
+
+        model = CudaFCHL18KRRModel(sigma=5.0, l2=1e-6, max_size=MAX_SIZE)
+        model.fit(tr, ztr, energies=energies[:8], forces=forces[:8])
+        E_full, F_full = model.predict(te, zte)
+        E_only, F_empty = model.predict(te, zte, compute_forces=False)
+        np.testing.assert_allclose(E_only, E_full, rtol=1e-5, atol=1e-7)
+        assert F_empty.size == 0
+        assert F_full.size == 4 * N_ATOMS * 3
+
     def test_ase_calculator_smoke(self, dataset: tuple) -> None:
         pytest.importorskip("ase")
         from ase import Atoms

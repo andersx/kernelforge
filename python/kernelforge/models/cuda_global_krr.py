@@ -409,82 +409,105 @@ class CudaGlobalKRRModel(BaseModel):
         compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         n_test = len(coords_list)
+        if not compute_energy and not compute_forces:
+            return np.zeros(n_test, dtype=np.float64), np.empty(0, dtype=np.float64)
         if self.training_mode_ == "energy_only":
-            E_pred, F_pred = self._predict_energy_only(coords_list, z_list)
-        elif self.training_mode_ == "force_only":
-            E_pred, F_pred = self._predict_force_only(coords_list, z_list)
-        else:
-            E_pred, F_pred = self._predict_energy_and_force(coords_list, z_list)
-        if not compute_energy:
-            E_pred = np.zeros(n_test, dtype=np.float64)
-        if not compute_forces:
-            F_pred = np.empty(0, dtype=np.float64)
-        return E_pred, F_pred
+            return self._predict_energy_only(
+                coords_list, z_list, compute_energy=compute_energy, compute_forces=compute_forces
+            )
+        if self.training_mode_ == "force_only":
+            return self._predict_force_only(
+                coords_list, z_list, compute_energy=compute_energy, compute_forces=compute_forces
+            )
+        return self._predict_energy_and_force(
+            coords_list, z_list, compute_energy=compute_energy, compute_forces=compute_forces
+        )
 
     def _predict_force_only(
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """CPU inference matching GlobalKRRModel force_only (Hessian / J^T matvecs)."""
         from kernelforge import global_kernels
 
-        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=True)
-        if dX_te is None:
-            msg = "dX_te is None in force_only predict — internal error"
-            raise RuntimeError(msg)
+        n_test = len(coords_list)
+        need_dX = compute_forces
+        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=need_dX)
+        E_pred = np.zeros(n_test, dtype=np.float64)
+        F_pred = np.empty(0, dtype=np.float64)
         if self._alpha_desc is not None:
-            F_pred = global_kernels.kernel_gaussian_hessian_matvec(
-                X_te, dX_te, self._X_tr, self._alpha_desc, self.sigma
-            ).ravel()
-            E_pred = -global_kernels.kernel_gaussian_jacobian_t_matvec(
-                X_te, self._X_tr, self._alpha_desc, self.sigma
-            )
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in force_only predict — internal error"
+                    raise RuntimeError(msg)
+                F_pred = global_kernels.kernel_gaussian_hessian_matvec(
+                    X_te, dX_te, self._X_tr, self._alpha_desc, self.sigma
+                ).ravel()
+            if compute_energy:
+                E_pred = -global_kernels.kernel_gaussian_jacobian_t_matvec(
+                    X_te, self._X_tr, self._alpha_desc, self.sigma
+                )
         else:
             if self._dX_tr is None:
                 msg = "dX_tr is None in force_only fallback — internal error"
                 raise RuntimeError(msg)
-            K_hess = global_kernels.kernel_gaussian_hessian(
-                X_te, dX_te, self._X_tr, self._dX_tr, self.sigma
-            )
-            F_pred = (K_hess @ self._alpha).ravel()
-            K_jt = global_kernels.kernel_gaussian_jacobian_t(
-                X_te, self._X_tr, self._dX_tr, self.sigma
-            )
-            E_pred = -(K_jt @ self._alpha)
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in force_only predict — internal error"
+                    raise RuntimeError(msg)
+                K_hess = global_kernels.kernel_gaussian_hessian(
+                    X_te, dX_te, self._X_tr, self._dX_tr, self.sigma
+                )
+                F_pred = (K_hess @ self._alpha).ravel()
+            if compute_energy:
+                K_jt = global_kernels.kernel_gaussian_jacobian_t(
+                    X_te, self._X_tr, self._dX_tr, self.sigma
+                )
+                E_pred = -(K_jt @ self._alpha)
         return E_pred, F_pred
 
     def _predict_energy_only(
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """CPU inference via kernel_gaussian + Jacobian kernel."""
         from kernelforge import global_kernels
 
-        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=True)
-
-        K_e = global_kernels.kernel_gaussian(X_te, self._X_tr, float(self.sigma))
-        E_pred: NDArray[np.float64] = K_e @ self._alpha
-
-        if dX_te is not None:
+        n_test = len(coords_list)
+        X_te, dX_te = _build_repr(coords_list, self.eps, with_gradients=compute_forces)
+        E_pred = np.zeros(n_test, dtype=np.float64)
+        F_pred = np.empty(0, dtype=np.float64)
+        if compute_energy:
+            K_e = global_kernels.kernel_gaussian(X_te, self._X_tr, float(self.sigma))
+            E_pred = K_e @ self._alpha
+        if compute_forces:
+            if dX_te is None:
+                msg = "dX_te is None in energy_only predict — internal error"
+                raise RuntimeError(msg)
             K_jac = global_kernels.kernel_gaussian_jacobian(
                 X_te, dX_te, self._X_tr, float(self.sigma)
             )
-            F_pred: NDArray[np.float64] = (K_jac @ self._alpha).ravel()
-        else:
-            F_pred = np.zeros(0, dtype=np.float64)
-
+            F_pred = (K_jac @ self._alpha).ravel()
         return E_pred, F_pred
 
     def _predict_energy_and_force(
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
+        compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         import time as _time
 
         import torch
+
+        from kernelforge import global_kernels
 
         def _tp(label: str, t0: float) -> float:
             torch.cuda.synchronize()
@@ -492,28 +515,49 @@ class CudaGlobalKRRModel(BaseModel):
             print(f"  [predict] {label:<45s} {dt * 1000:8.2f} ms")
             return _time.perf_counter()
 
+        n_test = len(coords_list)
         t0 = _time.perf_counter()
 
-        X_te_cuda, dX_te_cuda = _compute_invdist_cuda(coords_list, self.eps, with_gradients=True)
-        if dX_te_cuda is None:
-            msg = "dX_te_cuda is None — internal error"
-            raise RuntimeError(msg)
-        t0 = _tp("build invdist repr (GPU)", t0)
+        if compute_forces:
+            X_te_cuda, dX_te_cuda = _compute_invdist_cuda(
+                coords_list, self.eps, with_gradients=True
+            )
+            if dX_te_cuda is None:
+                msg = "dX_te_cuda is None — internal error"
+                raise RuntimeError(msg)
+            t0 = _tp("build invdist repr (GPU)", t0)
 
-        E_cuda, F_cuda = _ext.kernel_gaussian_full_matvec(  # type: ignore[union-attr]
-            X_te_cuda,
-            dX_te_cuda,
-            self._X_train_cuda,
-            self._alpha_E_cuda,
-            self._alpha_desc_F_cuda,
-            float(self.sigma),
+            E_cuda, F_cuda = _ext.kernel_gaussian_full_matvec(  # type: ignore[union-attr]
+                X_te_cuda,
+                dX_te_cuda,
+                self._X_train_cuda,
+                self._alpha_E_cuda,
+                self._alpha_desc_F_cuda,
+                float(self.sigma),
+            )
+            t0 = _tp("kernel_gaussian_full_matvec (GPU)", t0)
+
+            E_pred = (
+                E_cuda.cpu().numpy().astype(np.float64)
+                if compute_energy
+                else np.zeros(n_test, dtype=np.float64)
+            )
+            F_pred = F_cuda.cpu().numpy().astype(np.float64)
+            return E_pred, F_pred
+
+        # Energy without forces: scalar + jac_T (match full_matvec energy block).
+        if not compute_energy:
+            return np.zeros(n_test, dtype=np.float64), np.empty(0, dtype=np.float64)
+        X_te, _ = _build_repr(coords_list, self.eps, with_gradients=False)
+        X_tr = self._X_train_cuda.detach().cpu().numpy().astype(np.float64)
+        alpha_E = self._alpha_E_cuda.detach().cpu().numpy().astype(np.float64)
+        alpha_desc = self._alpha_desc_F_cuda.detach().cpu().numpy().astype(np.float64)
+        E_pred = global_kernels.kernel_gaussian(X_te, X_tr, float(self.sigma)) @ alpha_E
+        E_pred = E_pred + global_kernels.kernel_gaussian_jacobian_t_matvec(
+            X_te, X_tr, alpha_desc, float(self.sigma)
         )
-        t0 = _tp("kernel_gaussian_full_matvec (GPU)", t0)
-
-        E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
-        F_pred: NDArray[np.float64] = F_cuda.cpu().numpy().astype(np.float64)
-
-        return E_pred, F_pred
+        t0 = _tp("EF energy-only (CPU scalar + jac_T)", t0)
+        return E_pred, np.empty(0, dtype=np.float64)
 
     # ------------------------------------------------------------------
     # predict_torch — direct PyTorch tensor interface (energy_and_force only)

@@ -174,6 +174,20 @@ class TestFCHL18KRRModelEnergyAndForce:
         np.testing.assert_allclose(E_load, E_orig, rtol=1e-10)
         np.testing.assert_allclose(F_load, F_orig, rtol=1e-10)
 
+    def test_compute_forces_false_preserves_energy(self, dataset: tuple) -> None:
+        """EF energy with compute_forces=False must match the full predict energy."""
+        coords_list, z_list, energies, forces = dataset
+        tr, te = coords_list[:12], coords_list[12:]
+        ztr, zte = z_list[:12], z_list[12:]
+
+        model = FCHL18KRRModel(sigma=5.0, l2=1e-6, max_size=MAX_SIZE)
+        model.fit(tr, ztr, energies=energies[:12], forces=forces[:12])
+        E_full, F_full = model.predict(te, zte)
+        E_only, F_empty = model.predict(te, zte, compute_forces=False)
+        np.testing.assert_allclose(E_only, E_full, rtol=1e-7, atol=1e-9)
+        assert F_empty.size == 0
+        assert F_full.size == 8 * N_ATOMS * 3
+
 
 # ---------------------------------------------------------------------------
 # Tests: error handling

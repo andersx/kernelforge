@@ -6,6 +6,7 @@
 // cuda_fchl18_jacobian.cu (dK/dR_A). Only small inline/template helpers live
 // here; __global__ entry points stay in their translation unit.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -274,29 +275,72 @@ void fill_coord_offsets_device(
 );
 
 // Device-buffer fingerprint for train-side workspace caches.
-// Samples many evenly spaced words so ordinary geometry / representation edits are
-// visible even when the first, middle, and last slots are padding zeros / sentinels
-// (e.g. small molecules padded to max_size).
+// Full-buffer XOR mix on GPU (transfer only the hash). Detects in-place edits of
+// any molecule, including those missed by sparse host sampling.
+namespace {
+
+template <typename T>
+__global__ void buffer_fingerprint_partial_kernel(
+    const T *ptr, size_t n_elem, unsigned long long *partials
+) {
+    unsigned long long local = 0;
+    const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+    for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < n_elem;
+         i += stride) {
+        const T v = ptr[i];
+        unsigned long long w = 0;
+#pragma unroll
+        for (int b = 0; b < static_cast<int>(sizeof(T)); ++b) {
+            w |= static_cast<unsigned long long>(reinterpret_cast<const unsigned char *>(&v)[b])
+                 << (8 * b);
+        }
+        local ^= w + 0x9e3779b97f4a7c15ULL + (i << 6) + (i >> 2);
+    }
+    __shared__ unsigned long long sh[256];
+    const int tid = static_cast<int>(threadIdx.x);
+    sh[tid] = local;
+    __syncthreads();
+    for (int s = static_cast<int>(blockDim.x) / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sh[tid] ^= sh[tid + s];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        partials[blockIdx.x] = sh[0];
+    }
+}
+
+}  // namespace
+
 template <typename T>
 inline unsigned long long buffer_fingerprint(const T *d_ptr, size_t n_elem) {
-    // Full-buffer checksum (chunked D2H). Sparse edge samples miss whole molecules
-    // in padded multi-mol representations; callers only fingerprint on pointer hits.
     if (d_ptr == nullptr || n_elem == 0) {
         return 0;
     }
     static_assert(sizeof(T) <= sizeof(unsigned long long), "fingerprint word");
+    constexpr int kThreads = 256;
+    constexpr int kMaxBlocks = 128;
+    const int blocks = static_cast<int>(std::min(
+        static_cast<size_t>(kMaxBlocks), (n_elem + static_cast<size_t>(kThreads) - 1) /
+                                             static_cast<size_t>(kThreads)
+    ));
+    // Durable scratch for partials (one ull per block); sized for kMaxBlocks.
+    static unsigned long long *d_partials = nullptr;
+    if (d_partials == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_partials, static_cast<size_t>(kMaxBlocks) * sizeof(unsigned long long)));
+    }
+    buffer_fingerprint_partial_kernel<T>
+        <<<blocks, kThreads>>>(d_ptr, n_elem, d_partials);
+    CUDA_CHECK(cudaGetLastError());
+    unsigned long long host[kMaxBlocks];
+    CUDA_CHECK(cudaMemcpy(
+        host, d_partials, static_cast<size_t>(blocks) * sizeof(unsigned long long),
+        cudaMemcpyDeviceToHost
+    ));
     unsigned long long fp = static_cast<unsigned long long>(n_elem);
-    constexpr size_t kChunk = 4096;
-    std::vector<T> host(std::min(n_elem, kChunk));
-    for (size_t off = 0; off < n_elem; off += kChunk) {
-        const size_t n = std::min(kChunk, n_elem - off);
-        host.resize(n);
-        CUDA_CHECK(cudaMemcpy(host.data(), d_ptr + off, n * sizeof(T), cudaMemcpyDeviceToHost));
-        for (size_t i = 0; i < n; ++i) {
-            unsigned long long w = 0;
-            std::memcpy(&w, &host[i], sizeof(T));
-            fp ^= w + 0x9e3779b97f4a7c15ULL + (fp << 6) + (fp >> 2);
-        }
+    for (int b = 0; b < blocks; ++b) {
+        fp ^= host[b];
     }
     return fp;
 }

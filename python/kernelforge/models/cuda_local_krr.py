@@ -974,9 +974,9 @@ class CudaLocalKRRModel(BaseModel):
         if not compute_energy and not compute_forces:
             return np.zeros(n_test, dtype=np.float64), np.empty(0, dtype=np.float64)
 
-        need_gradients = mode in ("force_only", "energy_and_force") and (
-            compute_forces or compute_energy
-        )
+        # Gradients are only required when producing forces (EF energy-only uses
+        # scalar + jac_T without query dX).
+        need_gradients = compute_forces and mode in ("force_only", "energy_and_force")
 
         if mode == "force_only":
             from kernelforge import local_kernels as _cpu_lk
@@ -987,14 +987,18 @@ class CudaLocalKRRModel(BaseModel):
                 coords_list,
                 z_list,
                 self.elements,
-                with_gradients=True,
+                with_gradients=compute_forces,
                 repr_params=self.repr_params,
             )
-            if dX_te is None:
-                msg = "dX_te is None in force_only predict — internal error"
-                raise RuntimeError(msg)
-            t0 = _tp("compute_fchl19 (CPU f64 + grad)", t0)
+            t0 = _tp(
+                f"compute_fchl19 (CPU f64{', + grad' if compute_forces else ''})",
+                t0,
+            )
+            F_pred = np.empty(0, dtype=np.float64)
             if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in force_only predict — internal error"
+                    raise RuntimeError(msg)
                 F_pred = _cpu_lk.kernel_gaussian_local_hessian_matvec(
                     X_te,
                     dX_te,
@@ -1006,8 +1010,6 @@ class CudaLocalKRRModel(BaseModel):
                     self._N_train_np,
                     float(self.sigma),
                 )
-            else:
-                F_pred = np.empty(0, dtype=np.float64)
             if compute_energy:
                 E_pred = -_cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
                     X_te,
@@ -1023,6 +1025,40 @@ class CudaLocalKRRModel(BaseModel):
                 E_pred = np.zeros(n_test, dtype=np.float64)
             t0 = _tp("hessian / jacobian_t matvec (CPU)", t0)
             return E_pred, F_pred
+
+        if mode == "energy_and_force" and compute_energy and not compute_forces:
+            # Skip Hessian/full matvec: scalar + jac_T match the full_matvec energy.
+            from kernelforge import local_kernels as _cpu_lk
+
+            from .representations import compute_fchl19
+
+            X_te, _, Q_te, _, N_te = compute_fchl19(
+                coords_list,
+                z_list,
+                self.elements,
+                with_gradients=False,
+                repr_params=self.repr_params,
+            )
+            X_tr = self._X_train_np.astype(np.float64, copy=False)
+            Q_tr = self._Q_train_np
+            N_tr = self._N_train_np
+            alpha_E = self._alpha_E_np.astype(np.float64, copy=False)
+            alpha_desc = self._alpha_desc_F_np.astype(np.float64, copy=False)
+            E_pred = _cpu_lk.kernel_gaussian_local_matvec(
+                X_te, X_tr, alpha_E, Q_te, Q_tr, N_te, N_tr, float(self.sigma)
+            )
+            E_pred = E_pred + _cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
+                X_te,
+                X_tr,
+                alpha_desc,
+                Q_te,
+                Q_tr,
+                N_te,
+                N_tr,
+                float(self.sigma),
+            )
+            t0 = _tp("EF energy-only (CPU scalar + jac_T)", t0)
+            return E_pred, np.empty(0, dtype=np.float64)
 
         X_te_cuda, dX_te_cuda, Q_te_cuda, _Q_te, N_te = _compute_fchl19_cuda(
             coords_list,
@@ -1060,7 +1096,8 @@ class CudaLocalKRRModel(BaseModel):
             else:
                 F_pred = np.empty(0, dtype=np.float64)
             return E_pred, F_pred
-        else:
+
+        if mode == "energy_and_force":
             graph_state = self._get_or_create_cached_graph(X_te_cuda, dX_te_cuda, Q_te_cuda, N_te)
             if graph_state is not None:
                 graph_state["X_buf"].copy_(X_te_cuda)
@@ -1098,6 +1135,9 @@ class CudaLocalKRRModel(BaseModel):
             else:
                 F_pred = np.empty(0, dtype=np.float64)
             return E_pred, F_pred
+
+        msg = f"Unsupported training mode for predict: {mode!r}"
+        raise RuntimeError(msg)
 
     # ------------------------------------------------------------------
     # Training score

@@ -20,6 +20,7 @@
 //          F_pred : (N_q, D) float32 CUDA)
 
 #include <torch/extension.h>
+#include <c10/cuda/CUDAStream.h>
 #include <string>
 
 #include "cuda_global_kernels.hpp"
@@ -283,6 +284,9 @@ void rfp_potrs(torch::Tensor L_rfp, torch::Tensor B, const std::string &uplo)
     }
 
     auto B_cm = B.transpose(0, 1).contiguous();  // (nrhs, N) row-major ≡ (N, nrhs) col-major
+    // contiguous() packs on the current Torch stream; cuRFP uses its handle stream
+    // (default). Synchronize so the solve cannot read B_cm before packing finishes.
+    c10::cuda::getCurrentCUDAStream().synchronize();
     if (L_rfp.scalar_type() == torch::kFloat64) {
         kf::rfp_potrs_cu(
             L_rfp.data_ptr<double>(), B_cm.data_ptr<double>(), N, nrhs, uplo_upper);

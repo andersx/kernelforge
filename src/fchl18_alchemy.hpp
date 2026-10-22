@@ -16,7 +16,9 @@
 namespace kf {
 namespace fchl18 {
 
-inline constexpr int kAlchemyEmaxDefault = 100;
+// Cover the full PTP table (Z=1..118). Callers that used 100 silently zeroed
+// pd for Z>100 even though period_group() defines those elements.
+inline constexpr int kAlchemyEmaxDefault = 118;
 
 // Period / group for Z = 1 .. 118. Unlisted Z → {0,0} (pd → 0 vs anything with P,G>0).
 inline void period_group(int z, int &period, int &group) {

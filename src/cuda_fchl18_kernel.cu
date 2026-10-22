@@ -220,6 +220,7 @@ struct Workspace {
     size_t train_sinpe_cap = 0;
     bool train_valid = false;
     const T *train_x_ptr = nullptr;
+    unsigned long long train_x_fp = 0;
     const int *train_n_ptr = nullptr;
     const int *train_nn_ptr = nullptr;
     int train_nm = 0;
@@ -1405,7 +1406,15 @@ void kernel_gaussian_rect_cu_impl(
 
     const int tb_mode = get_fchl18_three_body_weight_mode();
     const bool want_train_cache = (mode == RectOutMode::Matvec && !same_side);
-    bool train_hit =
+
+    const int block_ss = 256;
+    const size_t ss1_need = static_cast<size_t>(nm1) * max_size1;
+    const size_t ss2_need = static_cast<size_t>(nm2) * max_size2;
+    const size_t x1_need = ss1_need * 5 * static_cast<size_t>(max_size1);
+    const size_t x2_need = ss2_need * 5 * static_cast<size_t>(max_size2);
+
+    // Pointer + hyperparam keys first; fingerprint only on candidate hit (jac/hess style).
+    const bool train_ptr_hit =
         want_train_cache && ws.train_valid && ws.train_x_ptr == d_x2 &&
         ws.train_n_ptr == d_n2 && ws.train_nn_ptr == d_nn2 && ws.train_nm == nm2 &&
         ws.train_max_size == max_size2 && ws.train_sigma == sigma &&
@@ -1421,12 +1430,9 @@ void kernel_gaussian_rect_cu_impl(
         ws.train_alchemy_period_width == alchemy_period_width &&
         ws.train_alchemy_group_width == alchemy_group_width &&
         ws.train_tb_weight_mode == tb_mode;
-
-    const int block_ss = 256;
-    const size_t ss1_need = static_cast<size_t>(nm1) * max_size1;
-    const size_t ss2_need = static_cast<size_t>(nm2) * max_size2;
-    const size_t x1_need = ss1_need * 5 * static_cast<size_t>(max_size1);
-    const size_t x2_need = ss2_need * 5 * static_cast<size_t>(max_size2);
+    const unsigned long long x2_fp =
+        train_ptr_hit ? buffer_fingerprint(d_x2, x2_need) : 0ULL;
+    bool train_hit = train_ptr_hit && x2_fp == ws.train_x_fp;
     const int grid_ss1 = static_cast<int>((ss1_need + block_ss - 1) / block_ss);
     const int grid_ss2 = static_cast<int>((ss2_need + block_ss - 1) / block_ss);
 
@@ -1730,6 +1736,7 @@ void kernel_gaussian_rect_cu_impl(
     if (want_train_cache && !train_hit) {
         ws.train_valid = true;
         ws.train_x_ptr = d_x2;
+        ws.train_x_fp = buffer_fingerprint(d_x2, x2_need);
         ws.train_n_ptr = d_n2;
         ws.train_nn_ptr = d_nn2;
         ws.train_nm = nm2;

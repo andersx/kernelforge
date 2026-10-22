@@ -213,17 +213,26 @@ def test_jacobian_inplace_geometry_cache_invalidation() -> None:
     x2, n2, nn2 = repr_mod.generate(coords2, z2, max_size=max_size, cut_distance=1e6)
     coords1_pad, z1_pad = _pad_coords_z(coords1, z1, max_size)
 
+    x1_c = _to_cuda(x1, torch.float64)
+    n1_c = _to_cuda_i32(n1)
+    n2_c = _to_cuda_i32(n2)
+    nn1_c = _to_cuda_i32(nn1)
+    nn2_c = _to_cuda_i32(nn2)
+    coords1_c = _to_cuda(coords1_pad, torch.float64)
+    z1_c = _to_cuda_i32(z1_pad)
+    # Retain N/NN CUDA tensors across calls so a broken fingerprint cannot hide
+    # behind a fresh allocation address (those pointers are part of the cache key).
     x2_c = _to_cuda(x2, torch.float64)
     J0 = (
         cuda_fchl18_kernel.kernel_gaussian_jacobian(
-            _to_cuda(x1, torch.float64),
+            x1_c,
             x2_c,
-            _to_cuda_i32(n1),
-            _to_cuda_i32(n2),
-            _to_cuda_i32(nn1),
-            _to_cuda_i32(nn2),
-            _to_cuda(coords1_pad, torch.float64),
-            _to_cuda_i32(z1_pad),
+            n1_c,
+            n2_c,
+            nn1_c,
+            nn2_c,
+            coords1_c,
+            z1_c,
             sigma=SIGMA,
             **KERNEL_ARGS,
         )
@@ -240,14 +249,14 @@ def test_jacobian_inplace_geometry_cache_invalidation() -> None:
 
     J1 = (
         cuda_fchl18_kernel.kernel_gaussian_jacobian(
-            _to_cuda(x1, torch.float64),
+            x1_c,
             x2_c,
-            _to_cuda_i32(n1),
-            _to_cuda_i32(n2),
-            _to_cuda_i32(nn1),
-            _to_cuda_i32(nn2),
-            _to_cuda(coords1_pad, torch.float64),
-            _to_cuda_i32(z1_pad),
+            n1_c,
+            n2_c,
+            nn1_c,
+            nn2_c,
+            coords1_c,
+            z1_c,
             sigma=SIGMA,
             **KERNEL_ARGS,
         )
