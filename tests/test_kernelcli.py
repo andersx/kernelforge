@@ -85,6 +85,57 @@ class TestValidation:
         )
         _validate(args, parser)  # Should not raise
 
+    def test_fchl18_elements_rejected(self) -> None:
+        """--elements is FCHL19-only."""
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl18",
+                "--elements",
+                "1",
+                "6",
+                "8",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+
+    def test_fchl18_three_body_weight_mode_requires_cuda(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """three_body_weight_mode is CUDA-only."""
+        import importlib.util
+
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
+        parser = _build_parser()
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl18",
+                "--repr-param",
+                "three_body_weight_mode=1",
+            ]
+        )
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "small_mols_mini",
+                "--representation",
+                "fchl18",
+                "--cuda",
+                "--repr-param",
+                "three_body_weight_mode=1",
+            ]
+        )
+        _validate(args, parser)
+
     def test_valid_fchl19_rff_passes(self):
         """FCHL19 + RFF is valid."""
         parser = _build_parser()
@@ -239,14 +290,18 @@ class TestValidation:
         )
         _validate(args, parser)
 
-    def test_infer_dtype_float64_requires_cuda_fchl18(
+    def test_infer_dtype_float32_requires_cuda_fchl18(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """--infer-dtype float64 is only valid with --cuda --representation fchl18."""
+        """Non-default --infer-dtype float32 is only valid with --cuda fchl18.
+
+        Default ``float64`` is a no-op on the CPU path (ignored).
+        """
         import importlib.util
 
         monkeypatch.setattr(importlib.util, "find_spec", lambda _name: object())
         parser = _build_parser()
+        # without cuda: non-default infer_dtype rejected
         args = parser.parse_args(
             [
                 "--dataset",
@@ -256,11 +311,12 @@ class TestValidation:
                 "--mode",
                 "energy_only",
                 "--infer-dtype",
-                "float64",
+                "float32",
             ]
         )
         with pytest.raises(SystemExit):
             _validate(args, parser)
+        # cuda fchl18: both dtypes OK
         args = parser.parse_args(
             [
                 "--dataset",
@@ -274,6 +330,18 @@ class TestValidation:
                 "float64",
                 "--infer-dtype",
                 "float32",
+            ]
+        )
+        _validate(args, parser)
+        # default float64 without cuda is allowed (ignored by CPU model)
+        args = parser.parse_args(
+            [
+                "--dataset",
+                "qm7b",
+                "--representation",
+                "fchl18",
+                "--mode",
+                "energy_only",
             ]
         )
         _validate(args, parser)
@@ -545,7 +613,7 @@ def _make_args(**kwargs: str | int | float | list | None) -> argparse.Namespace:
         "pca_center": False,
         "pca_whiten": False,
         "dtype": "float64",
-        "infer_dtype": "float32",
+        "infer_dtype": "float64",
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)

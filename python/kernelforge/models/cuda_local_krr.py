@@ -954,7 +954,8 @@ class CudaLocalKRRModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
-        compute_energy: bool = True,  # E+F computed together in matvec; param kept for API compat
+        compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         import time as _time
 
@@ -969,7 +970,13 @@ class CudaLocalKRRModel(BaseModel):
         t0 = _time.perf_counter()
 
         mode = self.training_mode_
-        need_gradients = mode in ("force_only", "energy_and_force")
+        n_test = len(coords_list)
+        if not compute_energy and not compute_forces:
+            return np.zeros(n_test, dtype=np.float64), np.empty(0, dtype=np.float64)
+
+        # Gradients are only required when producing forces (EF energy-only uses
+        # scalar + jac_T without query dX).
+        need_gradients = compute_forces and mode in ("force_only", "energy_and_force")
 
         if mode == "force_only":
             from kernelforge import local_kernels as _cpu_lk
@@ -980,36 +987,78 @@ class CudaLocalKRRModel(BaseModel):
                 coords_list,
                 z_list,
                 self.elements,
-                with_gradients=True,
+                with_gradients=compute_forces,
                 repr_params=self.repr_params,
             )
-            if dX_te is None:
-                msg = "dX_te is None in force_only predict — internal error"
-                raise RuntimeError(msg)
-            t0 = _tp("compute_fchl19 (CPU f64 + grad)", t0)
-            F_pred = _cpu_lk.kernel_gaussian_local_hessian_matvec(
-                X_te,
-                dX_te,
-                self._X_tr_f64,
-                self._alpha_desc_f64,
-                Q_te,
-                self._Q_train_np,
-                N_te,
-                self._N_train_np,
-                float(self.sigma),
+            t0 = _tp(
+                f"compute_fchl19 (CPU f64{', + grad' if compute_forces else ''})",
+                t0,
             )
-            E_pred = -_cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
-                X_te,
-                self._X_tr_f64,
-                self._alpha_desc_f64,
-                Q_te,
-                self._Q_train_np,
-                N_te,
-                self._N_train_np,
-                float(self.sigma),
-            )
+            F_pred = np.empty(0, dtype=np.float64)
+            if compute_forces:
+                if dX_te is None:
+                    msg = "dX_te is None in force_only predict — internal error"
+                    raise RuntimeError(msg)
+                F_pred = _cpu_lk.kernel_gaussian_local_hessian_matvec(
+                    X_te,
+                    dX_te,
+                    self._X_tr_f64,
+                    self._alpha_desc_f64,
+                    Q_te,
+                    self._Q_train_np,
+                    N_te,
+                    self._N_train_np,
+                    float(self.sigma),
+                )
+            if compute_energy:
+                E_pred = -_cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
+                    X_te,
+                    self._X_tr_f64,
+                    self._alpha_desc_f64,
+                    Q_te,
+                    self._Q_train_np,
+                    N_te,
+                    self._N_train_np,
+                    float(self.sigma),
+                )
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
             t0 = _tp("hessian / jacobian_t matvec (CPU)", t0)
             return E_pred, F_pred
+
+        if mode == "energy_and_force" and compute_energy and not compute_forces:
+            # Skip Hessian/full matvec: scalar + jac_T match the full_matvec energy.
+            from kernelforge import local_kernels as _cpu_lk
+
+            from .representations import compute_fchl19
+
+            X_te, _, Q_te, _, N_te = compute_fchl19(
+                coords_list,
+                z_list,
+                self.elements,
+                with_gradients=False,
+                repr_params=self.repr_params,
+            )
+            X_tr = self._X_train_np.astype(np.float64, copy=False)
+            Q_tr = self._Q_train_np
+            N_tr = self._N_train_np
+            alpha_E = self._alpha_E_np.astype(np.float64, copy=False)
+            alpha_desc = self._alpha_desc_F_np.astype(np.float64, copy=False)
+            E_pred = _cpu_lk.kernel_gaussian_local_matvec(
+                X_te, X_tr, alpha_E, Q_te, Q_tr, N_te, N_tr, float(self.sigma)
+            )
+            E_pred = E_pred + _cpu_lk.kernel_gaussian_local_jacobian_t_matvec(
+                X_te,
+                X_tr,
+                alpha_desc,
+                Q_te,
+                Q_tr,
+                N_te,
+                N_tr,
+                float(self.sigma),
+            )
+            t0 = _tp("EF energy-only (CPU scalar + jac_T)", t0)
+            return E_pred, np.empty(0, dtype=np.float64)
 
         X_te_cuda, dX_te_cuda, Q_te_cuda, _Q_te, N_te = _compute_fchl19_cuda(
             coords_list,
@@ -1025,23 +1074,30 @@ class CudaLocalKRRModel(BaseModel):
 
         if mode == "energy_only":
             # Fast energy-only predict: K_EE_test @ alpha (no dX, no matvec)
-            K_EE_test = _ext.kernel_gaussian_rect(  # type: ignore[union-attr]
-                X_te_cuda,
-                Q_te_cuda,
-                N_te_cuda,
-                self._X_train_cuda,
-                self._Q_train_cuda,
-                self._N_train_cuda,
-                float(self.sigma),
-            )
-            E_cuda = K_EE_test @ self._alpha_E_cuda
-            t0 = _tp("kernel_gaussian_rect + E = K@alpha (GPU)", t0)
-
-            E_pred = E_cuda.cpu().numpy().astype(np.float64)
-            # No forces predicted in energy_only fast path
-            F_pred = np.zeros(int(np.sum(N_te) * 3), dtype=np.float64)
+            if compute_energy:
+                K_EE_test = _ext.kernel_gaussian_rect(  # type: ignore[union-attr]
+                    X_te_cuda,
+                    Q_te_cuda,
+                    N_te_cuda,
+                    self._X_train_cuda,
+                    self._Q_train_cuda,
+                    self._N_train_cuda,
+                    float(self.sigma),
+                )
+                E_cuda = K_EE_test @ self._alpha_E_cuda
+                t0 = _tp("kernel_gaussian_rect + E = K@alpha (GPU)", t0)
+                E_pred = E_cuda.cpu().numpy().astype(np.float64)
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
+            # Energy-only never predicts physical forces; keep a zero placeholder for
+            # default callers, empty only when forces are explicitly disabled.
+            if compute_forces:
+                F_pred = np.zeros(int(np.sum(N_te) * 3), dtype=np.float64)
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
             return E_pred, F_pred
-        else:
+
+        if mode == "energy_and_force":
             graph_state = self._get_or_create_cached_graph(X_te_cuda, dX_te_cuda, Q_te_cuda, N_te)
             if graph_state is not None:
                 graph_state["X_buf"].copy_(X_te_cuda)
@@ -1069,10 +1125,19 @@ class CudaLocalKRRModel(BaseModel):
                 )
             t0 = _tp("kernel_gaussian_full_matvec_cached (GPU)", t0)
 
-            E_pred = E_cuda.cpu().numpy().astype(np.float64)
-            F_flat: NDArray[np.float64] = F_cuda.cpu().numpy().astype(np.float64)
-            F_pred = -F_flat
+            if compute_energy:
+                E_pred = E_cuda.cpu().numpy().astype(np.float64)
+            else:
+                E_pred = np.zeros(n_test, dtype=np.float64)
+            if compute_forces:
+                F_flat: NDArray[np.float64] = F_cuda.cpu().numpy().astype(np.float64)
+                F_pred = -F_flat
+            else:
+                F_pred = np.empty(0, dtype=np.float64)
             return E_pred, F_pred
+
+        msg = f"Unsupported training mode for predict: {mode!r}"
+        raise RuntimeError(msg)
 
     # ------------------------------------------------------------------
     # Training score

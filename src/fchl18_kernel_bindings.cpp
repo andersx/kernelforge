@@ -52,7 +52,8 @@ static py::array_t<double> kernel_gaussian_py(
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn2, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm
+    double cut_distance, int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (x1.ndim() != 4) throw std::invalid_argument("X1 must be 4-D");
     if (x2.ndim() != 4) throw std::invalid_argument("X2 must be 4-D");
@@ -90,7 +91,10 @@ static py::array_t<double> kernel_gaussian_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K.mutable_data()
+            K.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 
@@ -106,7 +110,8 @@ static py::array_t<double> kernel_gaussian_symm_py(
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm
+    double cut_distance, int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (x.ndim() != 4) throw std::invalid_argument("X must be 4-D");
     if (x.shape(2) != 5) throw std::invalid_argument("X dim 2 must be 5");
@@ -135,7 +140,10 @@ static py::array_t<double> kernel_gaussian_symm_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K.mutable_data()
+            K.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 
@@ -161,7 +169,8 @@ static py::array_t<double> kernel_gaussian_gradient_py(
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn2, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm
+    double cut_distance, int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     // Validate coords_A
     if (coords_A.ndim() != 2 || coords_A.shape(1) != 3)
@@ -199,7 +208,10 @@ static py::array_t<double> kernel_gaussian_gradient_py(
             cut_distance,
             fourier_order,
             use_atm,
-            grad.mutable_data()
+            grad.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 
@@ -220,7 +232,8 @@ static py::array_t<double> kernel_gaussian_hessian_py(
     const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
     const py::list &z_B_list, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     const int nm_A = static_cast<int>(coords_A_list.size());
     const int nm_B = static_cast<int>(coords_B_list.size());
@@ -287,7 +300,10 @@ static py::array_t<double> kernel_gaussian_hessian_py(
                     cut_distance,
                     fourier_order,
                     use_atm,
-                    block.data()
+                    block.data(),
+                    use_alchemy,
+                    alchemy_period_width,
+                    alchemy_group_width
                 );
 
                 double *H_ptr = H.mutable_data();
@@ -313,7 +329,8 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
     const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
@@ -356,7 +373,10 @@ static py::array_t<double> kernel_gaussian_hessian_symm_rfp_py(
             cut_distance,
             fourier_order,
             use_atm,
-            H_rfp.mutable_data()
+            H_rfp.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
         kf::fchl18::hess_phase_report("hessian_symm_rfp");
     }
@@ -376,7 +396,8 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn_test, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm
+    double cut_distance, int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     const int N_train = static_cast<int>(coords_train_list.size());
     if (static_cast<int>(z_train_list.size()) != N_train)
@@ -423,7 +444,10 @@ static py::array_t<double> kernel_gaussian_jacobian_t_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K_jt.mutable_data()
+            K_jt.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 
@@ -438,7 +462,8 @@ static py::array_t<double> kernel_gaussian_hessian_matvec_py(
     const py::list &z_B_list, const py::array_t<double> &alpha_F, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm
+    double cut_distance, int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     const int N_A = static_cast<int>(coords_A_list.size());
     const int N_B = static_cast<int>(coords_B_list.size());
@@ -484,7 +509,10 @@ static py::array_t<double> kernel_gaussian_hessian_matvec_py(
             cut_distance,
             fourier_order,
             use_atm,
-            F.mutable_data()
+            F.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return F;
@@ -501,7 +529,8 @@ static py::array_t<double> kernel_gaussian_jacobian_t_matvec_py(
     const py::array_t<double> &alpha_F, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     const int N_train = static_cast<int>(coords_train_list.size());
     if (static_cast<int>(z_train_list.size()) != N_train)
@@ -550,7 +579,10 @@ static py::array_t<double> kernel_gaussian_jacobian_t_matvec_py(
             cut_distance,
             fourier_order,
             use_atm,
-            E.mutable_data()
+            E.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return E;
@@ -596,8 +628,11 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         kg_doc
     );
 
@@ -616,8 +651,11 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         "Compute the symmetric FCHL18 Gaussian kernel matrix K[a, b] = K[b, a]."
     );
 
@@ -638,8 +676,11 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         "Compute dK[A,b]/dR_A[alpha,mu]. Returns shape (n_atoms_A, 3, nm2)."
     );
 
@@ -661,6 +702,9 @@ ndarray, shape (nm1, nm2), float64
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         "Compute d²K[A,B]/dR_A dR_B. Returns shape (D_A, D_B)."
     );
 
@@ -680,6 +724,9 @@ ndarray, shape (nm1, nm2), float64
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         "Compute symmetric Hessian kernel in RFP format. Output length N*D*(N*D+1)//2."
     );
 
@@ -700,8 +747,11 @@ ndarray, shape (nm1, nm2), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute the FCHL18 Jacobian-transpose kernel for energy prediction from force coefficients.
 
@@ -750,8 +800,11 @@ ndarray, shape (N_test, D_total), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute the symmetric FCHL18 scalar kernel in RFP (Rectangular Full Packed) format.
 
@@ -790,8 +843,11 @@ ndarray, shape (N*(N+1)//2,), float64
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute the FCHL18 Jacobian kernel dK/dR_A.
 
@@ -833,6 +889,9 @@ ndarray, shape (D_A, N_B), float64
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute the symmetric FCHL18 Hessian kernel (full matrix).
 
@@ -846,6 +905,9 @@ Z_list : list of ndarray, each shape (n_atoms_i,), int32
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False
+use_alchemy : bool, default False
+alchemy_period_width : float, default 1.6
+alchemy_group_width : float, default 1.6
 
 Returns
 -------
@@ -872,6 +934,9 @@ ndarray, shape (D, D), float64
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute the full combined energy+force FCHL18 kernel (asymmetric).
 
@@ -890,6 +955,9 @@ coords_B_list, Z_B_list : N_B training molecules
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False
+use_alchemy : bool, default False
+alchemy_period_width : float, default 1.6
+alchemy_group_width : float, default 1.6
 
 Returns
 -------
@@ -913,6 +981,9 @@ ndarray, shape (N_A+D_A_total, N_B+D_B_total), float64
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute the full combined energy+force FCHL18 kernel (symmetric training set).
 
@@ -924,6 +995,9 @@ coords_list, Z_list : N training molecules
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False
+use_alchemy : bool, default False
+alchemy_period_width : float, default 1.6
+alchemy_group_width : float, default 1.6
 
 Returns
 -------
@@ -947,6 +1021,9 @@ ndarray, shape (N+D, N+D), float64
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute the full combined energy+force FCHL18 kernel (symmetric, RFP format).
 
@@ -959,6 +1036,9 @@ coords_list, Z_list : N training molecules
 sigma : float
 cut_start : float, default 1.0
 use_atm : bool, default False
+use_alchemy : bool, default False
+alchemy_period_width : float, default 1.6
+alchemy_group_width : float, default 1.6
 
 Returns
 -------
@@ -988,6 +1068,9 @@ ndarray, shape (BIG*(BIG+1)//2,), float64
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
         py::arg("compute_energy") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Contracted energy+force inference without materialising the full kernel matrix.
 
@@ -1016,6 +1099,9 @@ matching ``K_full @ [alpha_E; alpha_F]`` with the same block layout as
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute F = H @ alpha_F without materialising the Hessian matrix.
 
@@ -1043,6 +1129,9 @@ Returns ndarray of shape (D_A,) where D_A = sum_i n_atoms_i * 3 for query molecu
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"pbdoc(
 Compute E = J^T @ alpha_F without materialising the Jacobian-transpose block.
 

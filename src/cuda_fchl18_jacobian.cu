@@ -14,15 +14,17 @@
 // with na3 = 3 * n1[a]; buffers are strided by 3 * max_size1 so a single
 // allocation covers every molecule.
 //
-// The query side is deliberately not Z-sorted (the CPU gradient path is not
-// either): the scalar product uses nested Zi == Zj loops rather than the sorted
-// merge, so both sides may be in arbitrary neighbour order.
+// Query-side neighbours stay in representation order (CPU gradient path). The
+// B-side pack buffers are Z-sorted so the tiled hot kernel can scan equal-Z
+// runs instead of Zi != Zj continues. Same path for float and double.
 
 #include "cuda_fchl18_kernel.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -37,7 +39,7 @@ namespace {
 
 constexpr int kJacBlockSize = 128;
 constexpr int kPrecomputeBlockSize = 128;
-// Shared reduction + register-tile caps for the fp32 hot kernel.
+// Shared reduction + register-tile caps for the tiled hot kernel (float/double).
 constexpr int kHotBlockSize = 128;
 constexpr int kMaxNa3Local = 64;  // up to 21 atoms with register tiles (8*8)
 constexpr int kAmuTile = 8;
@@ -63,6 +65,11 @@ struct JacParams {
     int pmax;
     int use_atm;
     int three_body_weight_mode;
+    // Periodic-table alchemy: Z-indexed pd table (emax x emax); nullptr when off.
+    // Side-2 Fourier buffers handed to the kernels are then element-mixed (see
+    // cuda_fchl18_common.cuh), so only the neighbour / central pd weights live here.
+    const T *pd;
+    int emax;
 };
 
 // ---------------------------------------------------------------------------
@@ -192,7 +199,7 @@ __device__ void compute_ksi_and_grad_device(
 
 // Three-body Fourier terms and their gradients for one query atom.
 // cosp/sinp/dcosp/dsinp must be zero-initialised by the caller.
-template <typename T>
+template <typename T, bool UseAtm>
 __device__ void compute_threebody_fourier_and_grad_device(
     const T *atom_chan,
     int max_size,
@@ -202,7 +209,6 @@ __device__ void compute_threebody_fourier_and_grad_device(
     T cut_distance,
     int order,
     const int *z_to_idx,
-    bool use_atm,
     int three_body_weight_mode,
     int centre_atom_idx,
     int na3,
@@ -277,7 +283,7 @@ __device__ void compute_threebody_fourier_and_grad_device(
             T datm_dcos_k = zero;
             T cos_j = zero;
             T cos_k_val = zero;
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 cos_j = clamp11(ukj[0] * (-ui_j[0]) + ukj[1] * (-ui_j[1]) + ukj[2] * (-ui_j[2]));
                 cos_k_val =
                     clamp11(ujk[0] * (-ui_k[0]) + ujk[1] * (-ui_k[1]) + ujk[2] * (-ui_k[2]));
@@ -327,7 +333,7 @@ __device__ void compute_threebody_fourier_and_grad_device(
 
             T dcos_j_dR[3][3] = {};
             T dcos_k_dR[3][3] = {};
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 for (int mu = 0; mu < 3; ++mu) {
                     dcos_j_dR[0][mu] = inv_dj * (ukj[mu] + cos_j * ui_j[mu]);
                     dcos_j_dR[1][mu] = inv_di * (ui_j[mu] + cos_j * ukj[mu]) -
@@ -358,7 +364,7 @@ __device__ void compute_threebody_fourier_and_grad_device(
                 gksi3[2][mu] +=
                     cut_atm_w * (radial.dlog_dk * (ui_k[mu]) + radial.dlog_di * (ukj[mu]));
 
-                if (use_atm) {
+                if constexpr (UseAtm) {
                     const T scale = cut_prod * radial.w;
                     for (int la = 0; la < 3; ++la) {
                         gksi3[la][mu] += scale * (datm_dcos_i * dcos_i_dR[la][mu] +
@@ -444,7 +450,7 @@ __device__ void compute_ksi_value_device(
     }
 }
 
-template <typename T>
+template <typename T, bool UseAtm>
 __device__ void compute_threebody_fourier_value_device(
     const T *atom_chan,
     int max_size,
@@ -454,7 +460,6 @@ __device__ void compute_threebody_fourier_value_device(
     T cut_distance,
     int order,
     const int *z_to_idx,
-    bool use_atm,
     int three_body_weight_mode,
     T *cosp,
     T *sinp
@@ -513,7 +518,7 @@ __device__ void compute_threebody_fourier_value_device(
             const T cos_i = clamp11(uxj * uxk + uyj * uyk + uzj * uzk);
 
             T atm = one;
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 const T inv_di = one / di;
                 const T cos_j = clamp11(
                     (-dxjk * inv_di) * (-uxj) + (-dyjk * inv_di) * (-uyj) +
@@ -962,9 +967,20 @@ __device__ T scalar_noalchemy_and_grad_amu(
         *ds_out = Math<T>::zero();
     }
 
+    // Alchemy (params.pd != nullptr): all neighbour pairs weighted by pd(Zi,Zj), whole
+    // scalar scaled by pd(Zc1,Zc2). Otherwise only equal-Z pairs / centrals contribute.
+    const T *pd = params.pd;
+    const int emax = params.emax;
+    const bool alch = (pd != nullptr);
     const int Z1 = static_cast<int>(x1_chan[max_size1]);
     const int Z2 = static_cast<int>(x2_chan[max_size2]);
-    if (Z1 != Z2) {
+    T pd_central = Math<T>::one();
+    if (alch) {
+        pd_central = alch_pd(pd, emax, Z1, Z2);
+        if (pd_central == Math<T>::zero()) {
+            return Math<T>::zero();
+        }
+    } else if (Z1 != Z2) {
         return Math<T>::zero();
     }
 
@@ -987,7 +1003,13 @@ __device__ T scalar_noalchemy_and_grad_amu(
         const long long i_na3 = static_cast<long long>(i) * na3;
 
         for (int j = 1; j < n_neigh2; ++j) {
-            if (Zi != static_cast<int>(x2_chan[max_size2 + j])) {
+            T pd_ij = Math<T>::one();
+            if (alch) {
+                pd_ij = alch_pd(pd, emax, Zi, static_cast<int>(x2_chan[max_size2 + j]));
+                if (pd_ij == Math<T>::zero()) {
+                    continue;
+                }
+            } else if (Zi != static_cast<int>(x2_chan[max_size2 + j])) {
                 continue;
             }
 
@@ -997,7 +1019,8 @@ __device__ T scalar_noalchemy_and_grad_amu(
                 continue;
             }
 
-            const T G = Math<T>::exp_(r2 * inv_width);
+            const T G = alch ? Math<T>::exp_(r2 * inv_width) * pd_ij
+                             : Math<T>::exp_(r2 * inv_width);
             const T dG_dri = G * T(2) * dr * inv_width;
 
             T angular = Math<T>::zero();
@@ -1044,6 +1067,10 @@ __device__ T scalar_noalchemy_and_grad_amu(
         }
     }
 
+    if (alch) {
+        aadist *= pd_central;
+        ds *= pd_central;
+    }
     if (want_grad) {
         *ds_out = ds;
     }
@@ -1114,20 +1141,35 @@ __global__ void jac_precompute_b_kernel(
         params.cut_distance,
         ksi_all + static_cast<long long>(flat_idx) * max_size2
     );
-    compute_threebody_fourier_value_device(
-        atom_chan,
-        max_size2,
-        n_neigh,
-        params.three_body_power,
-        params.cut_start,
-        params.cut_distance,
-        params.fourier_order,
-        z_to_idx,
-        params.use_atm != 0,
-        params.three_body_weight_mode,
-        cosp_all + static_cast<long long>(flat_idx) * fstride,
-        sinp_all + static_cast<long long>(flat_idx) * fstride
-    );
+    if (params.use_atm != 0) {
+        compute_threebody_fourier_value_device<T, true>(
+            atom_chan,
+            max_size2,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            cosp_all + static_cast<long long>(flat_idx) * fstride,
+            sinp_all + static_cast<long long>(flat_idx) * fstride
+        );
+    } else {
+        compute_threebody_fourier_value_device<T, false>(
+            atom_chan,
+            max_size2,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            cosp_all + static_cast<long long>(flat_idx) * fstride,
+            sinp_all + static_cast<long long>(flat_idx) * fstride
+        );
+    }
 }
 
 template <typename T>
@@ -1204,25 +1246,45 @@ __global__ void jac_precompute_a_kernel(
         dri
     );
 
-    compute_threebody_fourier_and_grad_device(
-        atom_chan,
-        max_size1,
-        n_neigh,
-        params.three_body_power,
-        params.cut_start,
-        params.cut_distance,
-        params.fourier_order,
-        z_to_idx,
-        params.use_atm != 0,
-        params.three_body_weight_mode,
-        i,
-        na3,
-        nbr,
-        cosp,
-        sinp,
-        dcosp,
-        dsinp
-    );
+    if (params.use_atm != 0) {
+        compute_threebody_fourier_and_grad_device<T, true>(
+            atom_chan,
+            max_size1,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            i,
+            na3,
+            nbr,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp
+        );
+    } else {
+        compute_threebody_fourier_and_grad_device<T, false>(
+            atom_chan,
+            max_size1,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            i,
+            na3,
+            nbr,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp
+        );
+    }
 }
 
 template <typename T>
@@ -1233,6 +1295,8 @@ __global__ void jac_self_scalar_b_kernel(
     const T *ksi_all,
     const T *cosp_all,
     const T *sinp_all,
+    const T *cosp_eff_all,
+    const T *sinp_eff_all,
     T *ss_out,
     int nm2,
     int max_size2,
@@ -1257,6 +1321,8 @@ __global__ void jac_self_scalar_b_kernel(
     const T *ksi = ksi_all + static_cast<long long>(flat_idx) * max_size2;
     const T *cosp = cosp_all + static_cast<long long>(flat_idx) * fstride;
     const T *sinp = sinp_all + static_cast<long long>(flat_idx) * fstride;
+    const T *cosp_e = cosp_eff_all + static_cast<long long>(flat_idx) * fstride;
+    const T *sinp_e = sinp_eff_all + static_cast<long long>(flat_idx) * fstride;
 
     T dummy = Math<T>::zero();
     const T *no_grad = nullptr;
@@ -1275,8 +1341,8 @@ __global__ void jac_self_scalar_b_kernel(
         max_size2,
         n_neigh,
         ksi,
-        cosp,
-        sinp,
+        cosp_e,
+        sinp_e,
         params,
         s_prefactor,
         0,
@@ -1299,6 +1365,8 @@ __global__ void jac_self_scalar_a_kernel(
     const T *sinp_all,
     const T *dcosp_all,
     const T *dsinp_all,
+    const T *cosp_eff_all,
+    const T *sinp_eff_all,
     T *ss_out,
     T *dss_out,
     int nm1,
@@ -1334,6 +1402,8 @@ __global__ void jac_self_scalar_a_kernel(
     const T *sinp = sinp_all + static_cast<long long>(flat_idx) * fstride;
     const T *dcosp = dcosp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
     const T *dsinp = dsinp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
+    const T *cosp_e = cosp_eff_all + static_cast<long long>(flat_idx) * fstride;
+    const T *sinp_e = sinp_eff_all + static_cast<long long>(flat_idx) * fstride;
     T *dss = dss_out + static_cast<long long>(flat_idx) * na3_max;
 
     T ss = Math<T>::zero();
@@ -1355,8 +1425,8 @@ __global__ void jac_self_scalar_a_kernel(
             max_size1,
             n_neigh,
             ksi,
-            cosp,
-            sinp,
+            cosp_e,
+            sinp_e,
             params,
             s_prefactor,
             na3,
@@ -1365,7 +1435,6 @@ __global__ void jac_self_scalar_a_kernel(
         );
         dss[amu] = T(2) * ds;
     }
-
     // na3 >= 3, so thread 0 always ran at least one iteration.
     if (threadIdx.x == 0) {
         ss_out[flat_idx] = ss;
@@ -1389,11 +1458,12 @@ __device__ inline long long jac_pack_fourier(
 
 // Hot path: one block per (A,B) molecule pair.
 //
-// fp32: one neighbour pass fills compile-time register tiles ds0..ds7 (no local
-// memory). Threads own flat (i,j) atom pairs; contributions reduce into shared
-// memory via atomicAdd. B-side neighbour fields are read from atom-minor packed
-// buffers (see jac_pack_b_kernel) so consecutive j in a warp coalesce.
-// fp64 / na3>64: amu-strided fallback.
+// na3 <= kMaxNa3Local (float or double): one neighbour pass fills compile-time
+// register tiles ds0..ds7. Threads own flat (i,j) atom pairs; contributions
+// reduce into shared memory via warp-aggregated atomicAdd. B-side neighbour
+// fields are read from atom-minor packed buffers (see jac_pack_b_kernel) so
+// consecutive j in a warp coalesce.
+// na3 > kMaxNa3Local: amu-strided fallback.
 template <typename T>
 __device__ inline void jac_accum_tile8(
     T ds[kAmuTile],
@@ -1432,6 +1502,24 @@ __device__ inline void jac_accum_ang_tile8(
         if (amu < na3) {
             ds[t] += scale * (dcos_row[amu] * c2 + dsin_row[amu] * s2);
         }
+    }
+}
+
+// Warp-reduce then one shared atomic per warp (vs 32) — cuts smem atomic traffic.
+template <typename T>
+__device__ inline T jac_warp_sum(T v) {
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        v += __shfl_down_sync(0xffffffffu, v, offset);
+    }
+    return v;
+}
+
+template <typename T>
+__device__ inline void jac_warp_atomic_add(T *addr, T v) {
+    v = jac_warp_sum(v);
+    if ((static_cast<int>(threadIdx.x) & 31) == 0) {
+        atomicAdd(addr, v);
     }
 }
 
@@ -1528,7 +1616,8 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
         fourier_atom_stride(params.pmax, params.fourier_order, max_size2);
     const long long row0 = row_offset[a];
 
-    const bool use_tiles = (sizeof(T) == 4) && (na3 <= kMaxNa3Local);
+    const bool use_tiles = (na3 <= kMaxNa3Local);
+    const bool alch = (params.pd != nullptr);
 
     if (!use_tiles) {
         for (int amu = tid; amu < na3; amu += static_cast<int>(blockDim.x)) {
@@ -1609,25 +1698,12 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
     const T ang_scale = params.true_angular_scale;
 
     const int n_atom_pairs = (i_hi - i_lo) * nb;
-    for (int p = tid; p < n_atom_pairs; p += static_cast<int>(blockDim.x)) {
-        const int i = i_lo + p / nb;
-        const int j = p - (i - i_lo) * nb;
-
-        const int fi = a * max_size1 + i;
-        const int fj = b * max_size2 + j;
-        const T *x1_chan = atom_slice(x1, max_size1, a, i);
-        const int n_neigh_i = nn1[fi];
-        const int n_neigh_j = nn2[fj];
-        const T sii = ss1[fi];
-        const T sjj = ss2[fj];
-        const T *dsii = dss1 + static_cast<long long>(fi) * na3_max;
-        const T *ksi_i = ksi1 + static_cast<long long>(fi) * max_size1;
-        const T *dksi_i = dksi1 + static_cast<long long>(fi) * max_size1 * na3_max;
-        const T *dri_i = dri1 + static_cast<long long>(fi) * max_size1 * na3_max;
-        const T *cos_i = cosp1 + static_cast<long long>(fi) * fstride1;
-        const T *sin_i = sinp1 + static_cast<long long>(fi) * fstride1;
-        const T *dcos_i = dcosp1 + static_cast<long long>(fi) * fstride1 * na3_max;
-        const T *dsin_i = dsinp1 + static_cast<long long>(fi) * fstride1 * na3_max;
+    const int nthreads = static_cast<int>(blockDim.x);
+    // Stride in lockstep so every warp lane participates in the shuffle reduce
+    // (inactive lanes contribute zero).
+    for (int p0 = 0; p0 < n_atom_pairs; p0 += nthreads) {
+        const int p = p0 + tid;
+        const bool active = (p < n_atom_pairs);
 
         T ds0[kAmuTile], ds1[kAmuTile], ds2[kAmuTile], ds3[kAmuTile];
         T ds4[kAmuTile], ds5[kAmuTile], ds6[kAmuTile], ds7[kAmuTile];
@@ -1636,153 +1712,288 @@ __global__ void __launch_bounds__(kHotBlockSize, 4) jac_hot_kernel(
             ds0[t] = ds1[t] = ds2[t] = ds3[t] = Math<T>::zero();
             ds4[t] = ds5[t] = ds6[t] = ds7[t] = Math<T>::zero();
         }
+        T kij = Math<T>::zero();
+        T coeff = Math<T>::zero();
+        const T *dsii = nullptr;
 
-        T aadist = Math<T>::zero();
-        const int Z1 = static_cast<int>(x1_chan[max_size1]);
-        const int Z2 = static_cast<int>(pack_z2[jac_pack_bj(b, 0, j, max_size2)]);
-        if (Z1 == Z2) {
-            aadist = Math<T>::one();
-            for (int ii = 1; ii < n_neigh_i; ++ii) {
-                const int Zi = static_cast<int>(x1_chan[max_size1 + ii]);
-                const T ri = x1_chan[ii];
-                const long long i_na3 = static_cast<long long>(ii) * na3;
-                const T ksi1_i = ksi_i[ii];
-                const T *dri_row = dri_i + i_na3;
-                const T *dksi_row = dksi_i + i_na3;
+        if (active) {
+            const int i = i_lo + p / nb;
+            const int j = p - (i - i_lo) * nb;
 
-                for (int jj = 1; jj < n_neigh_j; ++jj) {
-                    const long long bj = jac_pack_bj(b, jj, j, max_size2);
-                    if (Zi != static_cast<int>(pack_z2[bj])) {
-                        continue;
-                    }
-                    const T dr = ri - pack_dist2[bj];
-                    const T r2 = dr * dr;
-                    if (r2 >= maxgausdist2) {
-                        continue;
-                    }
-                    const T G = Math<T>::exp_(r2 * inv_width);
-                    const T dG_dri = G * T(2) * dr * inv_width;
+            const int fi = a * max_size1 + i;
+            const int fj = b * max_size2 + j;
+            const T *x1_chan = atom_slice(x1, max_size1, a, i);
+            const int n_neigh_i = nn1[fi];
+            const int n_neigh_j = nn2[fj];
+            const T sii = ss1[fi];
+            const T sjj = ss2[fj];
+            dsii = dss1 + static_cast<long long>(fi) * na3_max;
+            const T *ksi_i = ksi1 + static_cast<long long>(fi) * max_size1;
+            const T *dksi_i = dksi1 + static_cast<long long>(fi) * max_size1 * na3_max;
+            const T *dri_i = dri1 + static_cast<long long>(fi) * max_size1 * na3_max;
+            const T *cos_i = cosp1 + static_cast<long long>(fi) * fstride1;
+            const T *sin_i = sinp1 + static_cast<long long>(fi) * fstride1;
+            const T *dcos_i = dcosp1 + static_cast<long long>(fi) * fstride1 * na3_max;
+            const T *dsin_i = dsinp1 + static_cast<long long>(fi) * fstride1 * na3_max;
 
-                    T angular = Math<T>::zero();
-                    if (order2) {
-                        for (int pp = 0; pp < pmax; ++pp) {
-                            const long long i1 = jac_fourier_idx(pp, 0, ii, order, max_size1);
-                            const long long i2 = jac_pack_fourier(
-                                b, pp, 0, jj, j, pmax, order, max_size2
-                            );
-                            angular +=
-                                (cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2]) * s0;
+            T aadist = Math<T>::zero();
+            const int Z1 = static_cast<int>(x1_chan[max_size1]);
+            const int Z2 = static_cast<int>(pack_z2[jac_pack_bj(b, 0, j, max_size2)]);
+            // Alchemy folds pd(Zc1,Zc2) into every G (and the self term) so the
+            // gradient accumulators need no extra scaling; no-alchemy keeps pd_central = 1.
+            T pd_central = Math<T>::one();
+            bool pair_ok = (Z1 == Z2);
+            if (alch) {
+                pd_central = alch_pd(params.pd, params.emax, Z1, Z2);
+                pair_ok = (pd_central != Math<T>::zero());
+            }
+            if (pair_ok) {
+                aadist = pd_central;
+                // No-alchemy: B neighbours are Z-sorted in pack buffers — scan matching runs.
+                // Alchemy: scan every B neighbour with weight pd(Zi, Zj).
+                for (int ii = 1; ii < n_neigh_i; ++ii) {
+                    const int Zi = static_cast<int>(x1_chan[max_size1 + ii]);
+                    const T ri = x1_chan[ii];
+                    const long long i_na3 = static_cast<long long>(ii) * na3;
+                    const T ksi1_i = ksi_i[ii];
+                    const T *dri_row = dri_i + i_na3;
+                    const T *dksi_row = dksi_i + i_na3;
+
+                    int jj = 1;
+                    if (!alch) {
+                        while (jj < n_neigh_j &&
+                               static_cast<int>(pack_z2[jac_pack_bj(b, jj, j, max_size2)]) < Zi) {
+                            ++jj;
                         }
-                    } else {
-                        for (int m = 0; m < order; m += 2) {
-                            const T spf = s_prefactor[m];
-                            T ang_m = Math<T>::zero();
-                            for (int pp = 0; pp < pmax; ++pp) {
-                                const long long i1 =
-                                    jac_fourier_idx(pp, m, ii, order, max_size1);
-                                const long long i2 = jac_pack_fourier(
-                                    b, pp, m, jj, j, pmax, order, max_size2
-                                );
-                                ang_m += cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2];
+                    }
+                    for (; jj < n_neigh_j; ++jj) {
+                        const long long bj = jac_pack_bj(b, jj, j, max_size2);
+                        T pd_w = pd_central;
+                        if (alch) {
+                            pd_w *= alch_pd(
+                                params.pd, params.emax, Zi, static_cast<int>(pack_z2[bj])
+                            );
+                            if (pd_w == Math<T>::zero()) {
+                                continue;
                             }
-                            angular += ang_m * spf;
+                        } else if (static_cast<int>(pack_z2[bj]) != Zi) {
+                            break;
                         }
-                    }
-
-                    const T ksi2_j = pack_ksi2[bj];
-                    const T W = ksi1_i * ksi2_j * dist_scale + angular * ang_scale;
-                    aadist += G * W;
-                    const T G_dist = G * dist_scale;
-                    const T G_ang = G * ang_scale;
-
-                    jac_accum_tile8(ds0, 0, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds1, 8, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds2, 16, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds3, 24, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds4, 32, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds5, 40, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds6, 48, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-                    jac_accum_tile8(ds7, 56, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row);
-
-                    if (order2) {
-                        for (int pp = 0; pp < pmax; ++pp) {
-                            const long long i1 = jac_fourier_idx(pp, 0, ii, order, max_size1);
-                            const long long i2 = jac_pack_fourier(
-                                b, pp, 0, jj, j, pmax, order, max_size2
-                            );
-                            const T c2 = pack_cos2[i2];
-                            const T s2 = pack_sin2[i2];
-                            const T *dcos_row = dcos_i + i1 * na3;
-                            const T *dsin_row = dsin_i + i1 * na3;
-                            const T scale = G_ang * s0;
-                            jac_accum_ang_tile8(ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2);
-                            jac_accum_ang_tile8(ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2);
+                        const T dr = ri - pack_dist2[bj];
+                        const T r2 = dr * dr;
+                        if (r2 >= maxgausdist2) {
+                            continue;
                         }
-                    } else {
-                        for (int m = 0; m < order; m += 2) {
-                            const T spf = s_prefactor[m];
+                        const T G = alch ? Math<T>::exp_(r2 * inv_width) * pd_w
+                                         : Math<T>::exp_(r2 * inv_width);
+                        const T dG_dri = G * T(2) * dr * inv_width;
+
+                        T angular = Math<T>::zero();
+                        if (order2) {
                             for (int pp = 0; pp < pmax; ++pp) {
                                 const long long i1 =
-                                    jac_fourier_idx(pp, m, ii, order, max_size1);
+                                    jac_fourier_idx(pp, 0, ii, order, max_size1);
                                 const long long i2 = jac_pack_fourier(
-                                    b, pp, m, jj, j, pmax, order, max_size2
+                                    b, pp, 0, jj, j, pmax, order, max_size2
+                                );
+                                angular +=
+                                    (cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2]) * s0;
+                            }
+                        } else {
+                            for (int m = 0; m < order; m += 2) {
+                                const T spf = s_prefactor[m];
+                                T ang_m = Math<T>::zero();
+                                for (int pp = 0; pp < pmax; ++pp) {
+                                    const long long i1 =
+                                        jac_fourier_idx(pp, m, ii, order, max_size1);
+                                    const long long i2 = jac_pack_fourier(
+                                        b, pp, m, jj, j, pmax, order, max_size2
+                                    );
+                                    ang_m +=
+                                        cos_i[i1] * pack_cos2[i2] + sin_i[i1] * pack_sin2[i2];
+                                }
+                                angular += ang_m * spf;
+                            }
+                        }
+
+                        const T ksi2_j = pack_ksi2[bj];
+                        const T W = ksi1_i * ksi2_j * dist_scale + angular * ang_scale;
+                        aadist += G * W;
+                        const T G_dist = G * dist_scale;
+                        const T G_ang = G * ang_scale;
+
+                        jac_accum_tile8(
+                            ds0, 0, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds1, 8, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds2, 16, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds3, 24, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds4, 32, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds5, 40, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds6, 48, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+                        jac_accum_tile8(
+                            ds7, 56, na3, dG_dri, W, G_dist, ksi2_j, dri_row, dksi_row
+                        );
+
+                        if (order2) {
+                            for (int pp = 0; pp < pmax; ++pp) {
+                                const long long i1 =
+                                    jac_fourier_idx(pp, 0, ii, order, max_size1);
+                                const long long i2 = jac_pack_fourier(
+                                    b, pp, 0, jj, j, pmax, order, max_size2
                                 );
                                 const T c2 = pack_cos2[i2];
                                 const T s2 = pack_sin2[i2];
                                 const T *dcos_row = dcos_i + i1 * na3;
                                 const T *dsin_row = dsin_i + i1 * na3;
-                                const T scale = G_ang * spf;
-                                jac_accum_ang_tile8(ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2);
-                                jac_accum_ang_tile8(ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2);
+                                const T scale = G_ang * s0;
+                                jac_accum_ang_tile8(
+                                    ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                                jac_accum_ang_tile8(
+                                    ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2
+                                );
+                            }
+                        } else {
+                            for (int m = 0; m < order; m += 2) {
+                                const T spf = s_prefactor[m];
+                                for (int pp = 0; pp < pmax; ++pp) {
+                                    const long long i1 =
+                                        jac_fourier_idx(pp, m, ii, order, max_size1);
+                                    const long long i2 = jac_pack_fourier(
+                                        b, pp, m, jj, j, pmax, order, max_size2
+                                    );
+                                    const T c2 = pack_cos2[i2];
+                                    const T s2 = pack_sin2[i2];
+                                    const T *dcos_row = dcos_i + i1 * na3;
+                                    const T *dsin_row = dsin_i + i1 * na3;
+                                    const T scale = G_ang * spf;
+                                    jac_accum_ang_tile8(
+                                        ds0, 0, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds1, 8, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds2, 16, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds3, 24, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds4, 32, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds5, 40, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds6, 48, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                    jac_accum_ang_tile8(
+                                        ds7, 56, na3, scale, dcos_row, dsin_row, c2, s2
+                                    );
+                                }
                             }
                         }
                     }
-
                 }
             }
+
+            kij = Math<T>::exp_(-(sii + sjj - T(2) * aadist) * params.inv_sigma2);
+            coeff = kij * params.inv_sigma2;
         }
 
-        const T kij = Math<T>::exp_(-(sii + sjj - T(2) * aadist) * params.inv_sigma2);
-        const T coeff = kij * params.inv_sigma2;
-        atomicAdd(&smem_K, kij);
+        jac_warp_atomic_add(&smem_K, kij);
 
 #pragma unroll
         for (int t = 0; t < kAmuTile; ++t) {
+            T v0 = Math<T>::zero();
+            T v1 = Math<T>::zero();
+            T v2 = Math<T>::zero();
+            T v3 = Math<T>::zero();
+            T v4 = Math<T>::zero();
+            T v5 = Math<T>::zero();
+            T v6 = Math<T>::zero();
+            T v7 = Math<T>::zero();
+            if (active) {
+                if (t < na3) {
+                    v0 = coeff * (-dsii[t] + T(2) * ds0[t]);
+                }
+                if (8 + t < na3) {
+                    v1 = coeff * (-dsii[8 + t] + T(2) * ds1[t]);
+                }
+                if (16 + t < na3) {
+                    v2 = coeff * (-dsii[16 + t] + T(2) * ds2[t]);
+                }
+                if (24 + t < na3) {
+                    v3 = coeff * (-dsii[24 + t] + T(2) * ds3[t]);
+                }
+                if (32 + t < na3) {
+                    v4 = coeff * (-dsii[32 + t] + T(2) * ds4[t]);
+                }
+                if (40 + t < na3) {
+                    v5 = coeff * (-dsii[40 + t] + T(2) * ds5[t]);
+                }
+                if (48 + t < na3) {
+                    v6 = coeff * (-dsii[48 + t] + T(2) * ds6[t]);
+                }
+                if (56 + t < na3) {
+                    v7 = coeff * (-dsii[56 + t] + T(2) * ds7[t]);
+                }
+            }
             if (t < na3) {
-                atomicAdd(smem_grad + t, coeff * (-dsii[t] + T(2) * ds0[t]));
+                jac_warp_atomic_add(smem_grad + t, v0);
             }
             if (8 + t < na3) {
-                atomicAdd(smem_grad + 8 + t, coeff * (-dsii[8 + t] + T(2) * ds1[t]));
+                jac_warp_atomic_add(smem_grad + 8 + t, v1);
             }
             if (16 + t < na3) {
-                atomicAdd(smem_grad + 16 + t, coeff * (-dsii[16 + t] + T(2) * ds2[t]));
+                jac_warp_atomic_add(smem_grad + 16 + t, v2);
             }
             if (24 + t < na3) {
-                atomicAdd(smem_grad + 24 + t, coeff * (-dsii[24 + t] + T(2) * ds3[t]));
+                jac_warp_atomic_add(smem_grad + 24 + t, v3);
             }
             if (32 + t < na3) {
-                atomicAdd(smem_grad + 32 + t, coeff * (-dsii[32 + t] + T(2) * ds4[t]));
+                jac_warp_atomic_add(smem_grad + 32 + t, v4);
             }
             if (40 + t < na3) {
-                atomicAdd(smem_grad + 40 + t, coeff * (-dsii[40 + t] + T(2) * ds5[t]));
+                jac_warp_atomic_add(smem_grad + 40 + t, v5);
             }
             if (48 + t < na3) {
-                atomicAdd(smem_grad + 48 + t, coeff * (-dsii[48 + t] + T(2) * ds6[t]));
+                jac_warp_atomic_add(smem_grad + 48 + t, v6);
             }
             if (56 + t < na3) {
-                atomicAdd(smem_grad + 56 + t, coeff * (-dsii[56 + t] + T(2) * ds7[t]));
+                jac_warp_atomic_add(smem_grad + 56 + t, v7);
             }
         }
     }
@@ -1808,6 +2019,7 @@ template <typename T>
 __global__ void jac_pack_b_kernel(
     const T *x2,
     const int *n2,
+    const int *nn2,
     const T *ksi2,
     const T *cosp2,
     const T *sinp2,
@@ -1821,6 +2033,9 @@ __global__ void jac_pack_b_kernel(
     int pmax,
     int order
 ) {
+    // Neighbour Z-sort permutation (centre fixed at slot 0). Caps tiled-path sizes.
+    constexpr int kSortCap = kMaxNa3Local;  // covers na3 <= kMaxNa3Local molecules
+
     const int flat = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
     if (flat >= nm2 * max_size2) {
         return;
@@ -1836,21 +2051,39 @@ __global__ void jac_pack_b_kernel(
     const long long fstride = fourier_atom_stride(pmax, order, max_size2);
     const T *cosp = cosp2 + static_cast<long long>(flat) * fstride;
     const T *sinp = sinp2 + static_cast<long long>(flat) * fstride;
+    const int n_neigh = nn2[flat];
 
-    for (int jj = 0; jj < max_size2; ++jj) {
-        const long long dst = jac_pack_bj(b, jj, j, max_size2);
-        pack_dist[dst] = x2_chan[jj];
-        pack_z[dst] = x2_chan[max_size2 + jj];
-        pack_ksi[dst] = ksi[jj];
+    int ord[kSortCap];
+    const bool do_sort = (n_neigh <= kSortCap);
+    if (do_sort) {
+        for (int k = 1; k < n_neigh; ++k) {
+            ord[k] = k;
+        }
+        const T *z_chan = x2_chan + max_size2;
+        for (int k = 2; k < n_neigh; ++k) {
+            const int key = ord[k];
+            const T z = z_chan[key];
+            int insert_at = k;
+            while (insert_at > 1 && z_chan[ord[insert_at - 1]] > z) {
+                ord[insert_at] = ord[insert_at - 1];
+                --insert_at;
+            }
+            ord[insert_at] = key;
+        }
     }
-    for (int p = 0; p < pmax; ++p) {
-        for (int m = 0; m < order; ++m) {
-            for (int jj = 0; jj < max_size2; ++jj) {
-                const long long src = jac_fourier_idx(p, m, jj, order, max_size2);
-                const long long dst =
-                    jac_pack_fourier(b, p, m, jj, j, pmax, order, max_size2);
-                pack_cos[dst] = cosp[src];
-                pack_sin[dst] = sinp[src];
+
+    for (int t = 0; t < n_neigh; ++t) {
+        const int src = (t == 0 || !do_sort) ? t : ord[t];
+        const long long dst = jac_pack_bj(b, t, j, max_size2);
+        pack_dist[dst] = x2_chan[src];
+        pack_z[dst] = x2_chan[max_size2 + src];
+        pack_ksi[dst] = ksi[src];
+        for (int p = 0; p < pmax; ++p) {
+            for (int m = 0; m < order; ++m) {
+                const long long s = jac_fourier_idx(p, m, src, order, max_size2);
+                const long long d = jac_pack_fourier(b, p, m, t, j, pmax, order, max_size2);
+                pack_cos[d] = cosp[s];
+                pack_sin[d] = sinp[s];
             }
         }
     }
@@ -1882,6 +2115,11 @@ struct JacWorkspace {
     T *pack_cos2 = nullptr;
     T *pack_sin2 = nullptr;
     T *s_prefactor = nullptr;
+    // Alchemy scratch: element-channel-mixed Fourier buffers (CPU layout).
+    T *cos_eff = nullptr;
+    T *sin_eff = nullptr;
+    size_t cos_eff_cap = 0;
+    size_t sin_eff_cap = 0;
     int *nbr1 = nullptr;
     int *row_offset = nullptr;
     int *z_present = nullptr;
@@ -1932,9 +2170,20 @@ struct JacWorkspace {
     size_t tr_nbr1_cap = 0;
     size_t tr_row_offset_cap = 0;
     const T *tr_A_x = nullptr;
+    const int *tr_A_n = nullptr;
+    const int *tr_A_nn = nullptr;
+    unsigned long long tr_A_fp = 0;
     int tr_A_nm = 0;
     int tr_A_max = 0;
     int tr_A_pmax = -1;
+    int tr_A_map[256] = {};  // Z -> channel map the cached A buffers were built with
+    int tr_A_fourier_order = -1;
+    int tr_A_use_atm = -1;
+    int tr_A_tb_weight_mode = -1;
+    // ss1 / dss1 depend on alchemy (+ widths); 0 widths when alchemy is off.
+    int tr_A_alch = 0;
+    double tr_A_alch_pw = 0.0;
+    double tr_A_alch_gw = 0.0;
 
     // Persistent train-as-B cache (jacobian / force path).
     T *tr_ksi2 = nullptr;
@@ -1956,9 +2205,20 @@ struct JacWorkspace {
     size_t tr_pack_cos2_cap = 0;
     size_t tr_pack_sin2_cap = 0;
     const T *tr_B_x = nullptr;
+    const int *tr_B_n = nullptr;
+    const int *tr_B_nn = nullptr;
+    unsigned long long tr_B_fp = 0;
     int tr_B_nm = 0;
     int tr_B_max = 0;
     int tr_B_pmax = -1;
+    int tr_B_map[256] = {};  // Z -> channel map the cached B buffers were built with
+    int tr_B_fourier_order = -1;
+    int tr_B_use_atm = -1;
+    int tr_B_tb_weight_mode = -1;
+    // Cached B Fourier / pack buffers hold element-mixed data when alchemy is on.
+    int tr_B_alch = 0;
+    double tr_B_alch_pw = 0.0;
+    double tr_B_alch_gw = 0.0;
 };
 
 template <typename T>
@@ -1995,6 +2255,9 @@ void kernel_gaussian_jacobian_cu_impl(
     T cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool cols_are_coords,
     int matvec_mode,
     T *d_E_k = nullptr
@@ -2016,10 +2279,33 @@ void kernel_gaussian_jacobian_cu_impl(
 
     const bool cache_A = (nm1 > nm2);
     const bool cache_B = (nm2 > nm1);
-    const bool hit_A =
-        cache_A && d_x1 == ws.tr_A_x && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max;
-    const bool hit_B =
-        cache_B && d_x2 == ws.tr_B_x && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max;
+    const size_t x1_n =
+        static_cast<size_t>(nm1) * static_cast<size_t>(max_size1) * 5 * static_cast<size_t>(max_size1);
+    const size_t x2_n =
+        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
+    const int tb_mode = get_fchl18_three_body_weight_mode();
+    const int use_atm_i = use_atm ? 1 : 0;
+    const int alch_i = use_alchemy ? 1 : 0;
+    const double alch_pw = use_alchemy ? alchemy_period_width : 0.0;
+    const double alch_gw = use_alchemy ? alchemy_group_width : 0.0;
+    // Fingerprint only when pointer keys already match (skip 3× D2H on cold path).
+    // Fourier precompute depends on fourier_order / use_atm / three_body_weight_mode /
+    // alchemy (+ widths) — stale cache after changing those params caused CUDA
+    // illegal-memory (fo=1→2).
+    const bool ptr_A = cache_A && d_x1 == ws.tr_A_x && d_n1 == ws.tr_A_n &&
+                       d_nn1 == ws.tr_A_nn && nm1 == ws.tr_A_nm && max_size1 == ws.tr_A_max &&
+                       fourier_order == ws.tr_A_fourier_order && use_atm_i == ws.tr_A_use_atm &&
+                       tb_mode == ws.tr_A_tb_weight_mode && alch_i == ws.tr_A_alch &&
+                       alch_pw == ws.tr_A_alch_pw && alch_gw == ws.tr_A_alch_gw;
+    const bool ptr_B = cache_B && d_x2 == ws.tr_B_x && d_n2 == ws.tr_B_n &&
+                       d_nn2 == ws.tr_B_nn && nm2 == ws.tr_B_nm && max_size2 == ws.tr_B_max &&
+                       fourier_order == ws.tr_B_fourier_order && use_atm_i == ws.tr_B_use_atm &&
+                       tb_mode == ws.tr_B_tb_weight_mode && alch_i == ws.tr_B_alch &&
+                       alch_pw == ws.tr_B_alch_pw && alch_gw == ws.tr_B_alch_gw;
+    const unsigned long long x1_fp = ptr_A ? buffer_fingerprint(d_x1, x1_n) : 0ULL;
+    const unsigned long long x2_fp = ptr_B ? buffer_fingerprint(d_x2, x2_n) : 0ULL;
+    const bool hit_A = ptr_A && x1_fp == ws.tr_A_fp;
+    const bool hit_B = ptr_B && x2_fp == ws.tr_B_fp;
 
     const size_t n_atoms1 = static_cast<size_t>(nm1) * max_size1;
     const size_t n_atoms2 = static_cast<size_t>(nm2) * max_size2;
@@ -2031,6 +2317,13 @@ void kernel_gaussian_jacobian_cu_impl(
     int pmax = 0;
     if (hit_A || hit_B) {
         pmax = hit_A ? ws.tr_A_pmax : ws.tr_B_pmax;
+        // The shared device map may have been overwritten by an intervening call.
+        CUDA_CHECK(cudaMemcpy(
+            ws.z_to_idx,
+            hit_A ? ws.tr_A_map : ws.tr_B_map,
+            256 * sizeof(int),
+            cudaMemcpyHostToDevice
+        ));
     } else {
         CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
         jac_mark_elements_kernel<<<grid1, kPrecomputeBlockSize>>>(
@@ -2079,6 +2372,18 @@ void kernel_gaussian_jacobian_cu_impl(
     params.fourier_order = fourier_order;
     params.pmax = pmax;
     params.use_atm = use_atm ? 1 : 0;
+    params.pd = nullptr;
+    params.emax = 0;
+    const T *d_pdc = nullptr;
+    if (use_alchemy) {
+        params.pd = alchemy_upload_pd<T>(alchemy_period_width, alchemy_group_width);
+        params.emax = kf::fchl18::kAlchemyEmaxDefault;
+        // The element map is only re-uploaded on a cold path; rebuild the host copy
+        // from the device map so the compact PD matrix always matches z_to_idx.
+        int h_map[256];
+        CUDA_CHECK(cudaMemcpy(h_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+        d_pdc = alchemy_upload_pdc<T>(h_map, pmax);
+    }
 
     T h_s_prefactor[kMaxFourierOrder] = {};
     const double ang_norm2 = get_angular_norm2(static_cast<double>(three_body_width));
@@ -2098,29 +2403,14 @@ void kernel_gaussian_jacobian_cu_impl(
 
     // Row offsets: molecule a owns rows [offset[a], offset[a] + 3*n1[a]).
     if (!hit_A) {
-        std::vector<int> h_row_offset(static_cast<size_t>(nm1) + 1, 0);
-        if (nm1 == 1) {
-            h_row_offset[1] = d_a_rows;
-        } else {
-            std::vector<int> h_n1(static_cast<size_t>(nm1));
-            CUDA_CHECK(cudaMemcpy(
-                h_n1.data(), d_n1, static_cast<size_t>(nm1) * sizeof(int), cudaMemcpyDeviceToHost
-            ));
-            for (int a = 0; a < nm1; ++a) {
-                h_row_offset[static_cast<size_t>(a) + 1] =
-                    h_row_offset[static_cast<size_t>(a)] + h_n1[static_cast<size_t>(a)] * 3;
-            }
-            if (h_row_offset[static_cast<size_t>(nm1)] != d_a_rows) {
-                throw std::invalid_argument("jacobian output rows must equal 3 * sum(n1)");
-            }
-        }
-        ensure_capacity(&ws.row_offset, &ws.row_offset_cap, static_cast<size_t>(nm1) + 1);
-        CUDA_CHECK(cudaMemcpy(
-            ws.row_offset,
-            h_row_offset.data(),
-            (static_cast<size_t>(nm1) + 1) * sizeof(int),
-            cudaMemcpyHostToDevice
-        ));
+        fill_coord_offsets_device(
+            d_n1,
+            &ws.row_offset,
+            &ws.row_offset_cap,
+            nm1,
+            d_a_rows,
+            "jacobian output rows must equal 3 * sum(n1)"
+        );
     }
 
     const size_t na3_max = static_cast<size_t>(max_size1) * 3;
@@ -2137,54 +2427,21 @@ void kernel_gaussian_jacobian_cu_impl(
     const size_t ksi2_need = n_atoms2 * static_cast<size_t>(max_size2);
     const size_t cosp2_need = n_atoms2 * fstride2;
 
-    ensure_capacity(&ws.ksi1, &ws.ksi1_cap, ksi1_need);
-    ensure_capacity(&ws.dksi1, &ws.dksi1_cap, dksi1_need);
-    ensure_capacity(&ws.dri1, &ws.dri1_cap, dksi1_need);
-    ensure_capacity(&ws.cosp1, &ws.cosp1_cap, cosp1_need);
-    ensure_capacity(&ws.sinp1, &ws.sinp1_cap, cosp1_need);
-    ensure_capacity(&ws.dcosp1, &ws.dcosp1_cap, dcosp1_need);
-    ensure_capacity(&ws.dsinp1, &ws.dsinp1_cap, dcosp1_need);
-    ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms1);
-    ensure_capacity(&ws.dss1, &ws.dss1_cap, dss1_need);
-    ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi1_need);
-    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
-    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp2_need);
-    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp2_need);
-    ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms2);
+    // Allocate into the active pool only — avoid doubling peak when train-cache is on.
+    const bool same_ab_early =
+        (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 && nm1 == nm2 && max_size1 == max_size2);
 
-    const bool pack_b = (sizeof(T) == 4);
-    const size_t pack_bj_need =
-        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * static_cast<size_t>(max_size2);
-    const size_t pack_f_need = pack_bj_need * static_cast<size_t>(pmax) * fourier_order;
-    if (pack_b) {
-        ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
-        ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
-        ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
-        ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
-        ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
-    }
-
-    T *ksi1 = ws.ksi1;
-    T *dksi1 = ws.dksi1;
-    T *dri1 = ws.dri1;
-    T *cosp1 = ws.cosp1;
-    T *sinp1 = ws.sinp1;
-    T *dcosp1 = ws.dcosp1;
-    T *dsinp1 = ws.dsinp1;
-    T *ss1 = ws.ss1;
-    T *dss1 = ws.dss1;
-    int *nbr1 = ws.nbr1;
+    T *ksi1 = nullptr;
+    T *dksi1 = nullptr;
+    T *dri1 = nullptr;
+    T *cosp1 = nullptr;
+    T *sinp1 = nullptr;
+    T *dcosp1 = nullptr;
+    T *dsinp1 = nullptr;
+    T *ss1 = nullptr;
+    T *dss1 = nullptr;
+    int *nbr1 = nullptr;
     int *row_off = ws.row_offset;
-    T *ksi2 = ws.ksi2;
-    T *cosp2 = ws.cosp2;
-    T *sinp2 = ws.sinp2;
-    T *ss2 = ws.ss2;
-    T *pack_dist2 = ws.pack_dist2;
-    T *pack_z2 = ws.pack_z2;
-    T *pack_ksi2 = ws.pack_ksi2;
-    T *pack_cos2 = ws.pack_cos2;
-    T *pack_sin2 = ws.pack_sin2;
-
     if (cache_A) {
         ensure_capacity(&ws.tr_ksi1, &ws.tr_ksi1_cap, ksi1_need);
         ensure_capacity(&ws.tr_dksi1, &ws.tr_dksi1_cap, dksi1_need);
@@ -2216,17 +2473,53 @@ void kernel_gaussian_jacobian_cu_impl(
                 cudaMemcpyDeviceToDevice
             ));
         }
+    } else {
+        ensure_capacity(&ws.ksi1, &ws.ksi1_cap, ksi1_need);
+        ensure_capacity(&ws.dksi1, &ws.dksi1_cap, dksi1_need);
+        ensure_capacity(&ws.dri1, &ws.dri1_cap, dksi1_need);
+        ensure_capacity(&ws.cosp1, &ws.cosp1_cap, cosp1_need);
+        ensure_capacity(&ws.sinp1, &ws.sinp1_cap, cosp1_need);
+        ensure_capacity(&ws.dcosp1, &ws.dcosp1_cap, dcosp1_need);
+        ensure_capacity(&ws.dsinp1, &ws.dsinp1_cap, dcosp1_need);
+        ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms1);
+        ensure_capacity(&ws.dss1, &ws.dss1_cap, dss1_need);
+        ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi1_need);
+        ksi1 = ws.ksi1;
+        dksi1 = ws.dksi1;
+        dri1 = ws.dri1;
+        cosp1 = ws.cosp1;
+        sinp1 = ws.sinp1;
+        dcosp1 = ws.dcosp1;
+        dsinp1 = ws.dsinp1;
+        ss1 = ws.ss1;
+        dss1 = ws.dss1;
+        nbr1 = ws.nbr1;
     }
-    if (cache_B) {
-        ensure_capacity(&ws.tr_ksi2, &ws.tr_ksi2_cap, ksi2_need);
-        ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp2_need);
-        ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp2_need);
-        ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms2);
-        ksi2 = ws.tr_ksi2;
-        cosp2 = ws.tr_cosp2;
-        sinp2 = ws.tr_sinp2;
-        ss2 = ws.tr_ss2;
-        if (pack_b) {
+
+    // Always pack B for the tiled hot path (float and double share it).
+    const size_t pack_bj_need =
+        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * static_cast<size_t>(max_size2);
+    const size_t pack_f_need = pack_bj_need * static_cast<size_t>(pmax) * fourier_order;
+
+    T *ksi2 = nullptr;
+    T *cosp2 = nullptr;
+    T *sinp2 = nullptr;
+    T *ss2 = nullptr;
+    T *pack_dist2 = nullptr;
+    T *pack_z2 = nullptr;
+    T *pack_ksi2 = nullptr;
+    T *pack_cos2 = nullptr;
+    T *pack_sin2 = nullptr;
+    if (!same_ab_early) {
+        if (cache_B) {
+            ensure_capacity(&ws.tr_ksi2, &ws.tr_ksi2_cap, ksi2_need);
+            ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp2_need);
+            ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp2_need);
+            ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms2);
+            ksi2 = ws.tr_ksi2;
+            cosp2 = ws.tr_cosp2;
+            sinp2 = ws.tr_sinp2;
+            ss2 = ws.tr_ss2;
             ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_need);
             ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_need);
             ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_need);
@@ -2237,7 +2530,38 @@ void kernel_gaussian_jacobian_cu_impl(
             pack_ksi2 = ws.tr_pack_ksi2;
             pack_cos2 = ws.tr_pack_cos2;
             pack_sin2 = ws.tr_pack_sin2;
+        } else {
+            ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi2_need);
+            ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp2_need);
+            ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp2_need);
+            ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms2);
+            ksi2 = ws.ksi2;
+            cosp2 = ws.cosp2;
+            sinp2 = ws.sinp2;
+            ss2 = ws.ss2;
+            ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
+            ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
+            ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
+            ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
+            ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
+            pack_dist2 = ws.pack_dist2;
+            pack_z2 = ws.pack_z2;
+            pack_ksi2 = ws.pack_ksi2;
+            pack_cos2 = ws.pack_cos2;
+            pack_sin2 = ws.pack_sin2;
         }
+    } else {
+        // Aliased A/B still needs a B-layout pack for the tiled hot path.
+        ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_need);
+        ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_need);
+        ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_need);
+        ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_need);
+        ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_need);
+        pack_dist2 = ws.pack_dist2;
+        pack_z2 = ws.pack_z2;
+        pack_ksi2 = ws.pack_ksi2;
+        pack_cos2 = ws.pack_cos2;
+        pack_sin2 = ws.pack_sin2;
     }
 
     if (!hit_A) {
@@ -2268,6 +2592,24 @@ void kernel_gaussian_jacobian_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        // Alchemy: element-mix A's Fourier into scratch for the self scalar (side 2).
+        const T *cosp1_e = cosp1;
+        const T *sinp1_e = sinp1;
+        if (use_alchemy) {
+            ensure_capacity(&ws.cos_eff, &ws.cos_eff_cap, std::max(cosp1_need, cosp2_need));
+            ensure_capacity(&ws.sin_eff, &ws.sin_eff_cap, std::max(cosp1_need, cosp2_need));
+            const long long chunk = static_cast<long long>(fourier_order) * max_size1;
+            alchemy_mix_fourier(
+                cosp1, ws.cos_eff, d_pdc, d_n1, nm1, max_size1, pmax, static_cast<long long>(fstride1),
+                1, 0, chunk, false, true, 0
+            );
+            alchemy_mix_fourier(
+                sinp1, ws.sin_eff, d_pdc, d_n1, nm1, max_size1, pmax, static_cast<long long>(fstride1),
+                1, 0, chunk, false, true, 0
+            );
+            cosp1_e = ws.cos_eff;
+            sinp1_e = ws.sin_eff;
+        }
         jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms1), kJacBlockSize>>>(
             d_x1,
             d_n1,
@@ -2279,6 +2621,8 @@ void kernel_gaussian_jacobian_cu_impl(
             sinp1,
             dcosp1,
             dsinp1,
+            cosp1_e,
+            sinp1_e,
             ss1,
             dss1,
             nm1,
@@ -2289,57 +2633,122 @@ void kernel_gaussian_jacobian_cu_impl(
         CUDA_CHECK(cudaGetLastError());
         if (cache_A) {
             ws.tr_A_x = d_x1;
+            ws.tr_A_n = d_n1;
+            ws.tr_A_nn = d_nn1;
+            ws.tr_A_fp = ptr_A ? x1_fp : buffer_fingerprint(d_x1, x1_n);
             ws.tr_A_nm = nm1;
             ws.tr_A_max = max_size1;
             ws.tr_A_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_A_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+            ws.tr_A_fourier_order = fourier_order;
+            ws.tr_A_use_atm = use_atm_i;
+            ws.tr_A_tb_weight_mode = tb_mode;
+            ws.tr_A_alch = alch_i;
+            ws.tr_A_alch_pw = alch_pw;
+            ws.tr_A_alch_gw = alch_gw;
         }
     }
 
+    // Identical A/B representations: reuse A light buffers (ksi/cos/sin/ss).
+    const bool same_ab = same_ab_early;
+
     if (!hit_B) {
-        CUDA_CHECK(cudaMemset(cosp2, 0, cosp2_need * sizeof(T)));
-        CUDA_CHECK(cudaMemset(sinp2, 0, cosp2_need * sizeof(T)));
-        jac_precompute_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-            d_x2, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params, ws.z_to_idx
-        );
-        CUDA_CHECK(cudaGetLastError());
-        jac_self_scalar_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+        if (same_ab) {
+            ksi2 = ksi1;
+            cosp2 = cosp1;
+            sinp2 = sinp1;
+            ss2 = ss1;
+            if (use_alchemy) {
+                // A and B alias: ws.cos_eff/sin_eff already hold the element-mixed A
+                // Fourier (written for the A self scalar above); B reads those.
+                cosp2 = ws.cos_eff;
+                sinp2 = ws.sin_eff;
+            }
+        } else {
+            CUDA_CHECK(cudaMemset(cosp2, 0, cosp2_need * sizeof(T)));
+            CUDA_CHECK(cudaMemset(sinp2, 0, cosp2_need * sizeof(T)));
+            jac_precompute_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+                d_x2, d_n2, d_nn2, ksi2, cosp2, sinp2, nm2, max_size2, params, ws.z_to_idx
+            );
+            CUDA_CHECK(cudaGetLastError());
+            const T *cosp2_e = cosp2;
+            const T *sinp2_e = sinp2;
+            if (use_alchemy) {
+                ensure_capacity(&ws.cos_eff, &ws.cos_eff_cap, std::max(cosp1_need, cosp2_need));
+                ensure_capacity(&ws.sin_eff, &ws.sin_eff_cap, std::max(cosp1_need, cosp2_need));
+                const long long chunk = static_cast<long long>(fourier_order) * max_size2;
+                alchemy_mix_fourier(
+                    cosp2, ws.cos_eff, d_pdc, d_n2, nm2, max_size2, pmax,
+                    static_cast<long long>(fstride2), 1, 0, chunk, false, true, 0
+                );
+                alchemy_mix_fourier(
+                    sinp2, ws.sin_eff, d_pdc, d_n2, nm2, max_size2, pmax,
+                    static_cast<long long>(fstride2), 1, 0, chunk, false, true, 0
+                );
+                cosp2_e = ws.cos_eff;
+                sinp2_e = ws.sin_eff;
+            }
+            jac_self_scalar_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
+                d_x2,
+                d_n2,
+                d_nn2,
+                ksi2,
+                cosp2,
+                sinp2,
+                cosp2_e,
+                sinp2_e,
+                ss2,
+                nm2,
+                max_size2,
+                params,
+                ws.s_prefactor
+            );
+            CUDA_CHECK(cudaGetLastError());
+            if (use_alchemy) {
+                // Keep the element-mixed Fourier in the (cached) B buffers: the pack and
+                // the amu-strided fallback read side-2 data from here.
+                CUDA_CHECK(cudaMemcpy(
+                    cosp2, ws.cos_eff, cosp2_need * sizeof(T), cudaMemcpyDeviceToDevice
+                ));
+                CUDA_CHECK(cudaMemcpy(
+                    sinp2, ws.sin_eff, cosp2_need * sizeof(T), cudaMemcpyDeviceToDevice
+                ));
+            }
+        }
+        jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
             d_x2,
             d_n2,
             d_nn2,
             ksi2,
             cosp2,
             sinp2,
-            ss2,
+            pack_dist2,
+            pack_z2,
+            pack_ksi2,
+            pack_cos2,
+            pack_sin2,
             nm2,
             max_size2,
-            params,
-            ws.s_prefactor
+            pmax,
+            fourier_order
         );
         CUDA_CHECK(cudaGetLastError());
-        if (pack_b) {
-            jac_pack_b_kernel<<<grid2, kPrecomputeBlockSize>>>(
-                d_x2,
-                d_n2,
-                ksi2,
-                cosp2,
-                sinp2,
-                pack_dist2,
-                pack_z2,
-                pack_ksi2,
-                pack_cos2,
-                pack_sin2,
-                nm2,
-                max_size2,
-                pmax,
-                fourier_order
-            );
-            CUDA_CHECK(cudaGetLastError());
-        }
-        if (cache_B) {
+        // Do not cache B when aliased to A — tr_ksi2 was never written.
+        if (cache_B && !same_ab) {
             ws.tr_B_x = d_x2;
+            ws.tr_B_n = d_n2;
+            ws.tr_B_nn = d_nn2;
+            ws.tr_B_fp = ptr_B ? x2_fp : buffer_fingerprint(d_x2, x2_n);
             ws.tr_B_nm = nm2;
             ws.tr_B_max = max_size2;
             ws.tr_B_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_B_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+            ws.tr_B_fourier_order = fourier_order;
+            ws.tr_B_use_atm = use_atm_i;
+            ws.tr_B_tb_weight_mode = tb_mode;
+            ws.tr_B_alch = alch_i;
+            ws.tr_B_alch_pw = alch_pw;
+            ws.tr_B_alch_gw = alch_gw;
         }
     }
 
@@ -2366,11 +2775,11 @@ void kernel_gaussian_jacobian_cu_impl(
         cosp2,
         sinp2,
         ss2,
-        pack_b ? pack_dist2 : nullptr,
-        pack_b ? pack_z2 : nullptr,
-        pack_b ? pack_ksi2 : nullptr,
-        pack_b ? pack_cos2 : nullptr,
-        pack_b ? pack_sin2 : nullptr,
+        pack_dist2,
+        pack_z2,
+        pack_ksi2,
+        pack_cos2,
+        pack_sin2,
         d_jac_out,
         d_alpha,
         nm1,
@@ -2422,6 +2831,9 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     T cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool compute_energy
 ) {
     if (nm_q <= 0 || nm_tr <= 0 || d_a_rows <= 0 || d_b_cols <= 0) {
@@ -2480,6 +2892,17 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     params.fourier_order = fourier_order;
     params.pmax = pmax;
     params.use_atm = use_atm ? 1 : 0;
+    params.pd = nullptr;
+    params.emax = 0;
+    const T *d_pdc = nullptr;
+    const int alch_i = use_alchemy ? 1 : 0;
+    const double alch_pw = use_alchemy ? alchemy_period_width : 0.0;
+    const double alch_gw = use_alchemy ? alchemy_group_width : 0.0;
+    if (use_alchemy) {
+        params.pd = alchemy_upload_pd<T>(alchemy_period_width, alchemy_group_width);
+        params.emax = kf::fchl18::kAlchemyEmaxDefault;
+        d_pdc = alchemy_upload_pdc<T>(h_z_to_idx, pmax);
+    }
 
     T h_s_prefactor[kMaxFourierOrder] = {};
     const double ang_norm2 = get_angular_norm2(static_cast<double>(three_body_width));
@@ -2497,13 +2920,15 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         cudaMemcpyHostToDevice
     ));
 
-    {
-        int h_row_offset[2] = {0, d_a_rows};
-        ensure_capacity(&ws.row_offset, &ws.row_offset_cap, 2);
-        CUDA_CHECK(cudaMemcpy(
-            ws.row_offset, h_row_offset, 2 * sizeof(int), cudaMemcpyHostToDevice
-        ));
-    }
+    // Query molecule a owns force rows [offset[a], offset[a] + 3*n_q[a]).
+    fill_coord_offsets_device(
+        d_n_q,
+        &ws.row_offset,
+        &ws.row_offset_cap,
+        nm_q,
+        d_a_rows,
+        "full_matvec output rows must equal 3 * sum(n_query)"
+    );
 
     const size_t na3_max_q = static_cast<size_t>(max_size_q) * 3;
     const size_t fstride_q =
@@ -2531,31 +2956,54 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
     ensure_capacity(&ws.ss1, &ws.ss1_cap, n_atoms_q);
     ensure_capacity(&ws.dss1, &ws.dss1_cap, dss_q_need);
     ensure_capacity(&ws.nbr1, &ws.nbr1_cap, ksi_q_need);
-    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, ksi_tr_need);
-    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, cosp_tr_need);
-    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, cosp_tr_need);
-    ensure_capacity(&ws.ss2, &ws.ss2_cap, n_atoms_tr);
+    ensure_capacity(&ws.ksi2, &ws.ksi2_cap, std::max(ksi_q_need, ksi_tr_need));
+    ensure_capacity(&ws.cosp2, &ws.cosp2_cap, std::max(cosp_q_need, cosp_tr_need));
+    ensure_capacity(&ws.sinp2, &ws.sinp2_cap, std::max(cosp_q_need, cosp_tr_need));
+    ensure_capacity(&ws.ss2, &ws.ss2_cap, std::max(n_atoms_q, n_atoms_tr));
 
-    const bool pack_b = (sizeof(T) == 4);
     const size_t pack_bj_tr =
         static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * static_cast<size_t>(max_size_tr);
     const size_t pack_f_tr = pack_bj_tr * static_cast<size_t>(pmax) * fourier_order;
-    if (pack_b) {
-        ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, pack_bj_tr);
-        ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, pack_bj_tr);
-        ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, pack_bj_tr);
-        ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, pack_f_tr);
-        ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, pack_f_tr);
+    const size_t pack_bj_q =
+        static_cast<size_t>(nm_q) * static_cast<size_t>(max_size_q) * static_cast<size_t>(max_size_q);
+    const size_t pack_f_q = pack_bj_q * static_cast<size_t>(pmax) * fourier_order;
+    ensure_capacity(&ws.pack_dist2, &ws.pack_dist2_cap, std::max(pack_bj_q, pack_bj_tr));
+    ensure_capacity(&ws.pack_z2, &ws.pack_z2_cap, std::max(pack_bj_q, pack_bj_tr));
+    ensure_capacity(&ws.pack_ksi2, &ws.pack_ksi2_cap, std::max(pack_bj_q, pack_bj_tr));
+    ensure_capacity(&ws.pack_cos2, &ws.pack_cos2_cap, std::max(pack_f_q, pack_f_tr));
+    ensure_capacity(&ws.pack_sin2, &ws.pack_sin2_cap, std::max(pack_f_q, pack_f_tr));
+    if (use_alchemy) {
+        // Scratch for the element-mixed Fourier (consumed immediately by self scalars / copied back).
+        ensure_capacity(&ws.cos_eff, &ws.cos_eff_cap, std::max(cosp_q_need, cosp_tr_need));
+        ensure_capacity(&ws.sin_eff, &ws.sin_eff_cap, std::max(cosp_q_need, cosp_tr_need));
     }
 
     const bool cache_tr_A = (nm_tr > nm_q);
     const bool cache_tr_B = (nm_tr > nm_q);
-    const bool hit_tr_A =
-        cache_tr_A && d_x_tr == ws.tr_A_x && nm_tr == ws.tr_A_nm && max_size_tr == ws.tr_A_max &&
-        pmax == ws.tr_A_pmax;
-    const bool hit_tr_B =
-        cache_tr_B && d_x_tr == ws.tr_B_x && nm_tr == ws.tr_B_nm && max_size_tr == ws.tr_B_max &&
-        pmax == ws.tr_B_pmax;
+    const size_t x_tr_n = static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * 5 *
+                          static_cast<size_t>(max_size_tr);
+    const int tb_mode_jt = params.three_body_weight_mode;
+    const int use_atm_jt = params.use_atm;
+    const bool ptr_tr_A = cache_tr_A && d_x_tr == ws.tr_A_x && d_n_tr == ws.tr_A_n &&
+                          d_nn_tr == ws.tr_A_nn && nm_tr == ws.tr_A_nm &&
+                          max_size_tr == ws.tr_A_max && pmax == ws.tr_A_pmax &&
+                          fourier_order == ws.tr_A_fourier_order &&
+                          use_atm_jt == ws.tr_A_use_atm &&
+                          tb_mode_jt == ws.tr_A_tb_weight_mode && alch_i == ws.tr_A_alch &&
+                          alch_pw == ws.tr_A_alch_pw && alch_gw == ws.tr_A_alch_gw &&
+                          std::memcmp(h_z_to_idx, ws.tr_A_map, sizeof(h_z_to_idx)) == 0;
+    const bool ptr_tr_B = cache_tr_B && d_x_tr == ws.tr_B_x && d_n_tr == ws.tr_B_n &&
+                          d_nn_tr == ws.tr_B_nn && nm_tr == ws.tr_B_nm &&
+                          max_size_tr == ws.tr_B_max && pmax == ws.tr_B_pmax &&
+                          fourier_order == ws.tr_B_fourier_order &&
+                          use_atm_jt == ws.tr_B_use_atm &&
+                          tb_mode_jt == ws.tr_B_tb_weight_mode && alch_i == ws.tr_B_alch &&
+                          alch_pw == ws.tr_B_alch_pw && alch_gw == ws.tr_B_alch_gw &&
+                          std::memcmp(h_z_to_idx, ws.tr_B_map, sizeof(h_z_to_idx)) == 0;
+    const unsigned long long x_tr_fp =
+        (ptr_tr_A || ptr_tr_B) ? buffer_fingerprint(d_x_tr, x_tr_n) : 0ULL;
+    const bool hit_tr_A = ptr_tr_A && x_tr_fp == ws.tr_A_fp;
+    const bool hit_tr_B = ptr_tr_B && x_tr_fp == ws.tr_B_fp;
 
     if (cache_tr_A) {
         ensure_capacity(&ws.tr_ksi1, &ws.tr_ksi1_cap, ksi_tr_need);
@@ -2575,14 +3023,25 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         ensure_capacity(&ws.tr_cosp2, &ws.tr_cosp2_cap, cosp_tr_need);
         ensure_capacity(&ws.tr_sinp2, &ws.tr_sinp2_cap, cosp_tr_need);
         ensure_capacity(&ws.tr_ss2, &ws.tr_ss2_cap, n_atoms_tr);
-        if (pack_b) {
-            ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_tr);
-            ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_tr);
-            ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_tr);
-            ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_tr);
-            ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_tr);
-        }
+        ensure_capacity(&ws.tr_pack_dist2, &ws.tr_pack_dist2_cap, pack_bj_tr);
+        ensure_capacity(&ws.tr_pack_z2, &ws.tr_pack_z2_cap, pack_bj_tr);
+        ensure_capacity(&ws.tr_pack_ksi2, &ws.tr_pack_ksi2_cap, pack_bj_tr);
+        ensure_capacity(&ws.tr_pack_cos2, &ws.tr_pack_cos2_cap, pack_f_tr);
+        ensure_capacity(&ws.tr_pack_sin2, &ws.tr_pack_sin2_cap, pack_f_tr);
     }
+
+    // Element-mix a Fourier pair (cos, sin) of one side into ws.cos_eff / ws.sin_eff.
+    auto mix_side = [&](const T *cosp, const T *sinp, const int *d_n, int nm, int max_size) {
+        const long long fstride =
+            static_cast<long long>(pmax) * fourier_order * static_cast<long long>(max_size);
+        const long long chunk = static_cast<long long>(fourier_order) * max_size;
+        alchemy_mix_fourier(
+            cosp, ws.cos_eff, d_pdc, d_n, nm, max_size, pmax, fstride, 1, 0, chunk, false, true, 0
+        );
+        alchemy_mix_fourier(
+            sinp, ws.sin_eff, d_pdc, d_n, nm, max_size, pmax, fstride, 1, 0, chunk, false, true, 0
+        );
+    };
 
     // Query side A (shared by J + H).
     CUDA_CHECK(cudaMemset(ws.dksi1, 0, dksi_q_need * sizeof(T)));
@@ -2612,6 +3071,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         ws.z_to_idx
     );
     CUDA_CHECK(cudaGetLastError());
+    const T *cosp1_e = ws.cosp1;
+    const T *sinp1_e = ws.sinp1;
+    if (use_alchemy) {
+        mix_side(ws.cosp1, ws.sinp1, d_n_q, nm_q, max_size_q);
+        cosp1_e = ws.cos_eff;
+        sinp1_e = ws.sin_eff;
+    }
     jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms_q), kJacBlockSize>>>(
         d_x_q,
         d_n_q,
@@ -2623,6 +3089,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         ws.sinp1,
         ws.dcosp1,
         ws.dsinp1,
+        cosp1_e,
+        sinp1_e,
         ws.ss1,
         ws.dss1,
         nm_q,
@@ -2649,6 +3117,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        const T *cosp2q_e = ws.cosp2;
+        const T *sinp2q_e = ws.sinp2;
+        if (use_alchemy) {
+            mix_side(ws.cosp2, ws.sinp2, d_n_q, nm_q, max_size_q);
+            cosp2q_e = ws.cos_eff;
+            sinp2q_e = ws.sin_eff;
+        }
         jac_self_scalar_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
             d_x_q,
             d_n_q,
@@ -2656,6 +3131,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.ksi2,
             ws.cosp2,
             ws.sinp2,
+            cosp2q_e,
+            sinp2q_e,
             ws.ss2,
             nm_q,
             max_size_q,
@@ -2663,25 +3140,33 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.s_prefactor
         );
         CUDA_CHECK(cudaGetLastError());
-        if (pack_b) {
-            jac_pack_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
-                d_x_q,
-                d_n_q,
-                ws.ksi2,
-                ws.cosp2,
-                ws.sinp2,
-                ws.pack_dist2,
-                ws.pack_z2,
-                ws.pack_ksi2,
-                ws.pack_cos2,
-                ws.pack_sin2,
-                nm_q,
-                max_size_q,
-                pmax,
-                fourier_order
-            );
-            CUDA_CHECK(cudaGetLastError());
+        if (use_alchemy) {
+            // Pack (and the Jt hot kernel) read the element-mixed side-2 Fourier.
+            CUDA_CHECK(cudaMemcpy(
+                ws.cosp2, ws.cos_eff, cosp_q_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
+            CUDA_CHECK(cudaMemcpy(
+                ws.sinp2, ws.sin_eff, cosp_q_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
         }
+        jac_pack_b_kernel<<<grid_q, kPrecomputeBlockSize>>>(
+            d_x_q,
+            d_n_q,
+            d_nn_q,
+            ws.ksi2,
+            ws.cosp2,
+            ws.sinp2,
+            ws.pack_dist2,
+            ws.pack_z2,
+            ws.pack_ksi2,
+            ws.pack_cos2,
+            ws.pack_sin2,
+            nm_q,
+            max_size_q,
+            pmax,
+            fourier_order
+        );
+        CUDA_CHECK(cudaGetLastError());
     }
 
     T *tr_ksi1 = ws.ksi1;
@@ -2723,13 +3208,11 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         tr_cosp2 = ws.tr_cosp2;
         tr_sinp2 = ws.tr_sinp2;
         tr_ss2 = ws.tr_ss2;
-        if (pack_b) {
-            tr_pack_dist2 = ws.tr_pack_dist2;
-            tr_pack_z2 = ws.tr_pack_z2;
-            tr_pack_ksi2 = ws.tr_pack_ksi2;
-            tr_pack_cos2 = ws.tr_pack_cos2;
-            tr_pack_sin2 = ws.tr_pack_sin2;
-        }
+        tr_pack_dist2 = ws.tr_pack_dist2;
+        tr_pack_z2 = ws.tr_pack_z2;
+        tr_pack_ksi2 = ws.tr_pack_ksi2;
+        tr_pack_cos2 = ws.tr_pack_cos2;
+        tr_pack_sin2 = ws.tr_pack_sin2;
     }
 
     if (!hit_tr_A) {
@@ -2760,6 +3243,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        const T *tr_cosp1_e = tr_cosp1;
+        const T *tr_sinp1_e = tr_sinp1;
+        if (use_alchemy) {
+            mix_side(tr_cosp1, tr_sinp1, d_n_tr, nm_tr, max_size_tr);
+            tr_cosp1_e = ws.cos_eff;
+            tr_sinp1_e = ws.sin_eff;
+        }
         jac_self_scalar_a_kernel<<<static_cast<int>(n_atoms_tr), kJacBlockSize>>>(
             d_x_tr,
             d_n_tr,
@@ -2771,6 +3261,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             tr_sinp1,
             tr_dcosp1,
             tr_dsinp1,
+            tr_cosp1_e,
+            tr_sinp1_e,
             tr_ss1,
             tr_dss1,
             nm_tr,
@@ -2780,30 +3272,29 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         );
         CUDA_CHECK(cudaGetLastError());
         if (cache_tr_A) {
-            if (!hit_tr_A) {
-                std::vector<int> h_row_offset(static_cast<size_t>(nm_tr) + 1, 0);
-                std::vector<int> h_n_tr(static_cast<size_t>(nm_tr));
-                CUDA_CHECK(cudaMemcpy(
-                    h_n_tr.data(),
-                    d_n_tr,
-                    static_cast<size_t>(nm_tr) * sizeof(int),
-                    cudaMemcpyDeviceToHost
-                ));
-                for (int a = 0; a < nm_tr; ++a) {
-                    h_row_offset[static_cast<size_t>(a) + 1] =
-                        h_row_offset[static_cast<size_t>(a)] + h_n_tr[static_cast<size_t>(a)] * 3;
-                }
-                CUDA_CHECK(cudaMemcpy(
-                    tr_row_off,
-                    h_row_offset.data(),
-                    (static_cast<size_t>(nm_tr) + 1) * sizeof(int),
-                    cudaMemcpyHostToDevice
-                ));
-            }
+            fill_coord_offsets_device(
+                d_n_tr,
+                &ws.tr_row_offset,
+                &ws.tr_row_offset_cap,
+                nm_tr,
+                -1,
+                "jacobian_t train row offsets"
+            );
+            tr_row_off = ws.tr_row_offset;
             ws.tr_A_x = d_x_tr;
+            ws.tr_A_n = d_n_tr;
+            ws.tr_A_nn = d_nn_tr;
+            ws.tr_A_fp = (ptr_tr_A || ptr_tr_B) ? x_tr_fp : buffer_fingerprint(d_x_tr, x_tr_n);
             ws.tr_A_nm = nm_tr;
             ws.tr_A_max = max_size_tr;
             ws.tr_A_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_A_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+            ws.tr_A_fourier_order = fourier_order;
+            ws.tr_A_use_atm = use_atm_jt;
+            ws.tr_A_tb_weight_mode = tb_mode_jt;
+            ws.tr_A_alch = alch_i;
+            ws.tr_A_alch_pw = alch_pw;
+            ws.tr_A_alch_gw = alch_gw;
         }
     }
 
@@ -2823,6 +3314,13 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.z_to_idx
         );
         CUDA_CHECK(cudaGetLastError());
+        const T *tr_cosp2_e = tr_cosp2;
+        const T *tr_sinp2_e = tr_sinp2;
+        if (use_alchemy) {
+            mix_side(tr_cosp2, tr_sinp2, d_n_tr, nm_tr, max_size_tr);
+            tr_cosp2_e = ws.cos_eff;
+            tr_sinp2_e = ws.sin_eff;
+        }
         jac_self_scalar_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
             d_x_tr,
             d_n_tr,
@@ -2830,6 +3328,8 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             tr_ksi2,
             tr_cosp2,
             tr_sinp2,
+            tr_cosp2_e,
+            tr_sinp2_e,
             tr_ss2,
             nm_tr,
             max_size_tr,
@@ -2837,30 +3337,48 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.s_prefactor
         );
         CUDA_CHECK(cudaGetLastError());
-        if (pack_b) {
-            jac_pack_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
-                d_x_tr,
-                d_n_tr,
-                tr_ksi2,
-                tr_cosp2,
-                tr_sinp2,
-                tr_pack_dist2,
-                tr_pack_z2,
-                tr_pack_ksi2,
-                tr_pack_cos2,
-                tr_pack_sin2,
-                nm_tr,
-                max_size_tr,
-                pmax,
-                fourier_order
-            );
-            CUDA_CHECK(cudaGetLastError());
+        if (use_alchemy) {
+            // Cached B buffers (and the pack below) hold the element-mixed Fourier.
+            CUDA_CHECK(cudaMemcpy(
+                tr_cosp2, ws.cos_eff, cosp_tr_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
+            CUDA_CHECK(cudaMemcpy(
+                tr_sinp2, ws.sin_eff, cosp_tr_need * sizeof(T), cudaMemcpyDeviceToDevice
+            ));
         }
+        jac_pack_b_kernel<<<grid_tr, kPrecomputeBlockSize>>>(
+            d_x_tr,
+            d_n_tr,
+            d_nn_tr,
+            tr_ksi2,
+            tr_cosp2,
+            tr_sinp2,
+            tr_pack_dist2,
+            tr_pack_z2,
+            tr_pack_ksi2,
+            tr_pack_cos2,
+            tr_pack_sin2,
+            nm_tr,
+            max_size_tr,
+            pmax,
+            fourier_order
+        );
+        CUDA_CHECK(cudaGetLastError());
         if (cache_tr_B) {
             ws.tr_B_x = d_x_tr;
+            ws.tr_B_n = d_n_tr;
+            ws.tr_B_nn = d_nn_tr;
+            ws.tr_B_fp = (ptr_tr_A || ptr_tr_B) ? x_tr_fp : buffer_fingerprint(d_x_tr, x_tr_n);
             ws.tr_B_nm = nm_tr;
             ws.tr_B_max = max_size_tr;
             ws.tr_B_pmax = pmax;
+            CUDA_CHECK(cudaMemcpy(ws.tr_B_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+            ws.tr_B_fourier_order = fourier_order;
+            ws.tr_B_use_atm = use_atm_jt;
+            ws.tr_B_tb_weight_mode = tb_mode_jt;
+            ws.tr_B_alch = alch_i;
+            ws.tr_B_alch_pw = alch_pw;
+            ws.tr_B_alch_gw = alch_gw;
         }
     }
 
@@ -2887,11 +3405,11 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
             ws.cosp2,
             ws.sinp2,
             ws.ss2,
-            pack_b ? ws.pack_dist2 : nullptr,
-            pack_b ? ws.pack_z2 : nullptr,
-            pack_b ? ws.pack_ksi2 : nullptr,
-            pack_b ? ws.pack_cos2 : nullptr,
-            pack_b ? ws.pack_sin2 : nullptr,
+            ws.pack_dist2,
+            ws.pack_z2,
+            ws.pack_ksi2,
+            ws.pack_cos2,
+            ws.pack_sin2,
             d_E,
             d_alpha_F,
             nm_tr,
@@ -2930,11 +3448,11 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         tr_cosp2,
         tr_sinp2,
         tr_ss2,
-        pack_b ? tr_pack_dist2 : nullptr,
-        pack_b ? tr_pack_z2 : nullptr,
-        pack_b ? tr_pack_ksi2 : nullptr,
-        pack_b ? tr_pack_cos2 : nullptr,
-        pack_b ? tr_pack_sin2 : nullptr,
+        tr_pack_dist2,
+        tr_pack_z2,
+        tr_pack_ksi2,
+        tr_pack_cos2,
+        tr_pack_sin2,
         d_F,
         d_alpha_E,
         nm_q,
@@ -2990,7 +3508,10 @@ void kernel_gaussian_full_matvec_fused_cu_impl(
         use_atm,
         pmax,
         ws.z_to_idx,
-        ws.s_prefactor
+        ws.s_prefactor,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 
@@ -3028,6 +3549,9 @@ void kernel_gaussian_full_matvec_fused_cu(
     float cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool compute_energy
 ) {
     kernel_gaussian_full_matvec_fused_cu_impl(
@@ -3062,6 +3586,9 @@ void kernel_gaussian_full_matvec_fused_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         compute_energy
     );
 }
@@ -3098,6 +3625,9 @@ void kernel_gaussian_full_matvec_fused_cu(
     double cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool compute_energy
 ) {
     kernel_gaussian_full_matvec_fused_cu_impl(
@@ -3132,6 +3662,9 @@ void kernel_gaussian_full_matvec_fused_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         compute_energy
     );
 }
@@ -3161,7 +3694,10 @@ void kernel_gaussian_jacobian_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3190,6 +3726,9 @@ void kernel_gaussian_jacobian_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/0
     );
@@ -3220,7 +3759,10 @@ void kernel_gaussian_jacobian_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3249,6 +3791,9 @@ void kernel_gaussian_jacobian_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/0
     );
@@ -3279,7 +3824,10 @@ void kernel_gaussian_jacobian_t_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3308,6 +3856,9 @@ void kernel_gaussian_jacobian_t_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/true,
         /*matvec_mode=*/0
     );
@@ -3338,7 +3889,10 @@ void kernel_gaussian_jacobian_t_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3367,6 +3921,9 @@ void kernel_gaussian_jacobian_t_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/true,
         /*matvec_mode=*/0
     );
@@ -3399,7 +3956,10 @@ void kernel_gaussian_jacobian_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3428,6 +3988,9 @@ void kernel_gaussian_jacobian_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/1,
         d_E_out
@@ -3461,7 +4024,10 @@ void kernel_gaussian_jacobian_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3490,6 +4056,9 @@ void kernel_gaussian_jacobian_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/1,
         d_E_out
@@ -3522,7 +4091,10 @@ void kernel_gaussian_jacobian_t_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3551,6 +4123,9 @@ void kernel_gaussian_jacobian_t_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/2
     );
@@ -3582,7 +4157,10 @@ void kernel_gaussian_jacobian_t_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_cu_impl(
         d_x1,
@@ -3611,6 +4189,9 @@ void kernel_gaussian_jacobian_t_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*cols_are_coords=*/false,
         /*matvec_mode=*/2
     );

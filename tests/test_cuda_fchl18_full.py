@@ -182,6 +182,26 @@ def test_full_matches_cpu_f64() -> None:
     np.testing.assert_allclose(K_gpu.cpu().numpy(), K_cpu, rtol=1e-9, atol=1e-11)
 
 
+def test_full_matches_cpu_f64_atm() -> None:
+    coords_A = [WATER_COORDS, HF_COORDS]
+    z_A = [WATER_Z, HF_Z]
+    coords_B = [AMMONIA_COORDS, METHANE_COORDS]
+    z_B = [AMMONIA_Z, METHANE_Z]
+
+    args = KERNEL_ARGS.copy()
+    args["use_atm"] = True
+
+    x1, n1, nn1, c1, z1, d_a = _prep_side(coords_A, z_A, torch.float64)
+    x2, n2, nn2, c2, z2, d_b = _prep_side(coords_B, z_B, torch.float64)
+    K_gpu = cuda_fchl18_kernel.kernel_gaussian_full(
+        x1, x2, n1, n2, nn1, nn2, c1, z1, c2, z2, sigma=SIGMA, **args
+    )
+    K_cpu = cpu_kernel.kernel_gaussian_full(coords_A, z_A, coords_B, z_B, sigma=SIGMA, **args)
+
+    assert K_gpu.shape == (len(coords_A) + d_a, len(coords_B) + d_b)
+    np.testing.assert_allclose(K_gpu.cpu().numpy(), K_cpu, rtol=1e-9, atol=1e-11)
+
+
 def test_full_blocks_match_standalone() -> None:
     coords_A = [WATER_COORDS]
     z_A = [WATER_Z]

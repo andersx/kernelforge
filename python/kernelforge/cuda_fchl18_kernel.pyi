@@ -3,6 +3,7 @@
 Current scope:
 - fp32 and fp64
 - rectangular energy-only kernel_gaussian
+- fused energy-only kernel_gaussian_matvec (E = K @ alpha, no K buffer)
 - symmetric energy-only kernel_gaussian_symm
 - symmetric RFP kernel_gaussian_symm_rfp (TRANSR='N', UPLO='U')
 - Jacobian kernel_gaussian_jacobian (dK/dR of the query molecules)
@@ -38,8 +39,11 @@ def kernel_gaussian(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the rectangular FCHL18 Gaussian kernel matrix on GPU.
 
@@ -61,6 +65,51 @@ def kernel_gaussian(
     """
     ...
 
+def kernel_gaussian_matvec(
+    X1: torch.Tensor,
+    X2: torch.Tensor,
+    N1: torch.Tensor,
+    N2: torch.Tensor,
+    NN1: torch.Tensor,
+    NN2: torch.Tensor,
+    alpha: torch.Tensor,
+    sigma: float,
+    two_body_scaling: float = 2.0,
+    two_body_width: float = 0.1,
+    two_body_power: float = 6.0,
+    three_body_scaling: float = 2.0,
+    three_body_width: float = 3.0,
+    three_body_power: float = 3.0,
+    cut_start: float = 0.5,
+    cut_distance: float = 1e6,
+    fourier_order: int = 1,
+    use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
+) -> torch.Tensor:
+    """Fused energy-only matvec: E = K(X1, X2) @ alpha without forming K.
+
+    Parameters
+    ----------
+    X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+        Query and train FCHL18 representations.
+    N1, N2 : torch.Tensor, shape (nm,), int32, CUDA
+        Number of real atoms per molecule.
+    NN1, NN2 : torch.Tensor, shape (nm, max_size), int32, CUDA
+        Number of neighbors per atom.
+    alpha : torch.Tensor, shape (nm2,), same dtype as X1, CUDA
+        Dual coefficients for the train set.
+    sigma : float
+        Gaussian kernel length-scale.
+
+    Returns
+    -------
+    torch.Tensor, shape (nm1,), same dtype as X1, CUDA
+        Predicted energies E[a] = sum_b K[a,b] * alpha[b].
+    """
+    ...
+
 def kernel_gaussian_symm(
     X: torch.Tensor,
     N: torch.Tensor,
@@ -74,8 +123,11 @@ def kernel_gaussian_symm(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Gaussian kernel matrix on GPU.
 
@@ -112,8 +164,11 @@ def kernel_gaussian_symm_rfp(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Gaussian kernel in RFP packed format on GPU.
 
@@ -158,8 +213,11 @@ def kernel_gaussian_jacobian(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 Jacobian kernel dK/dR_A on GPU.
 
@@ -214,8 +272,11 @@ def kernel_gaussian_jacobian_t(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 Jacobian-T kernel on GPU.
 
@@ -245,8 +306,11 @@ def kernel_gaussian_gradient(
     three_body_power: float = 3.0,
     cut_start: float = 0.5,
     cut_distance: float = 1e6,
-    fourier_order: int = 2,
+    fourier_order: int = 1,
     use_atm: bool = True,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 gradient kernel for a single query molecule on GPU.
 
@@ -277,6 +341,9 @@ def kernel_gaussian_hessian(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the FCHL18 Hessian kernel d2K/dR_A dR_B on GPU.
 
@@ -334,6 +401,9 @@ def kernel_gaussian_hessian_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Hessian kernel on GPU.
 
@@ -359,6 +429,9 @@ def kernel_gaussian_hessian_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric FCHL18 Hessian kernel in RFP format on GPU.
 
@@ -389,6 +462,9 @@ def kernel_gaussian_full(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the full FCHL18 energy+force kernel matrix on GPU.
 
@@ -421,6 +497,9 @@ def kernel_gaussian_full_symm(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric full FCHL18 energy+force kernel on GPU.
 
@@ -448,6 +527,9 @@ def kernel_gaussian_full_symm_rfp(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor:
     """Compute the symmetric full FCHL18 kernel in RFP packed format on GPU.
 
@@ -486,7 +568,21 @@ def kernel_gaussian_full_matvec(
     fourier_order: int = 1,
     use_atm: bool = False,
     compute_energy: bool = True,
-) -> tuple[torch.Tensor, torch.Tensor]: ...
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Contracted ``K_full(X1, X2) @ [alpha_E, alpha_F]`` without forming ``K_full``.
+
+    Uses a fused one-shot path when ``N_B > N_A`` (train set larger than the query set) and
+    the unfused kernels otherwise. Both paths support ``use_alchemy`` (periodic-table
+    alchemy) and give the same result as the dense ``kernel_gaussian_full`` product.
+
+    Parameter order matches the CPU binding: ``compute_energy`` precedes alchemy options
+    so older positional callers that pass a bool after ``use_atm`` keep skipping energy.
+    """
+    ...
+
 def kernel_gaussian_hessian_matvec(
     X1: torch.Tensor,
     X2: torch.Tensor,
@@ -510,6 +606,9 @@ def kernel_gaussian_hessian_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor: ...
 def kernel_gaussian_jacobian_t_matvec(
     X_train: torch.Tensor,
@@ -532,4 +631,7 @@ def kernel_gaussian_jacobian_t_matvec(
     cut_distance: float = 1e6,
     fourier_order: int = 1,
     use_atm: bool = False,
+    use_alchemy: bool = False,
+    alchemy_period_width: float = 1.6,
+    alchemy_group_width: float = 1.6,
 ) -> torch.Tensor: ...

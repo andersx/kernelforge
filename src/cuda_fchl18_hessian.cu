@@ -43,18 +43,31 @@ constexpr int kHessMaxNa3 = 384;  // up to 128 atoms per molecule
 constexpr int kHessSharedHMax = 8192;
 constexpr size_t kHessMaxShmemBytes = 48 * 1024;
 
+// How many Hij elements to reserve in dynamic shared memory.
+// Cap by (1) 48 KiB budget after dsA/dsB/dVA/dVB/sij, (2) kHessSharedHMax, and
+// (3) strideA*strideB so we do not over-allocate shmem when max_size is modest
+// (over-allocating to 8192 killed occupancy ~2x on QM7b max_size≈20).
+// When strideA*strideB > kHessSharedHMax, remaining budget still allows shared Hij
+// for real molecules with na3A*na3B <= cap (padded large-max_size batches).
 template <typename T>
 __host__ __device__ inline int hess_shared_h_cap(int strideA, int strideB) {
-    const int n = strideA * strideB;
-    if (n <= 0 || n > kHessSharedHMax) {
+    if (strideA <= 0 || strideB <= 0) {
         return 0;
     }
-    const size_t bytes =
-        sizeof(T) * static_cast<size_t>(2 * strideA + 2 * strideB + n + 1);
-    if (bytes > kHessMaxShmemBytes) {
+    const size_t base =
+        sizeof(T) * static_cast<size_t>(2 * strideA + 2 * strideB + 1);
+    if (base >= kHessMaxShmemBytes) {
         return 0;
     }
-    return n;
+    int cap = static_cast<int>((kHessMaxShmemBytes - base) / sizeof(T));
+    if (cap > kHessSharedHMax) {
+        cap = kHessSharedHMax;
+    }
+    const int n_full = strideA * strideB;
+    if (n_full < cap) {
+        cap = n_full;
+    }
+    return cap;
 }
 
 // Write H[row,col] into a dense matrix, or F[row] += H[row,col] * alpha_F[col].
@@ -96,6 +109,11 @@ struct HessParams {
     int pmax;
     int use_atm;
     int three_body_weight_mode;
+    // Periodic-table alchemy: Z-indexed pd table (emax x emax); nullptr when off.
+    // Side-2 Fourier / dFourier buffers handed to the kernels are then element-mixed
+    // (see cuda_fchl18_common.cuh); only neighbour / central pd weights live here.
+    const T *pd;
+    int emax;
 };
 
 // ---------------------------------------------------------------------------
@@ -224,7 +242,7 @@ __device__ void hess_compute_ksi_and_grad(
 
 // Three-body Fourier terms and their gradients for one atom.
 // cosp/sinp/dcosp/dsinp must be zero-initialised by the caller.
-template <typename T>
+template <typename T, bool UseAtm>
 __device__ void hess_compute_threebody_fourier_and_grad(
     const T *atom_chan,
     int max_size,
@@ -234,7 +252,6 @@ __device__ void hess_compute_threebody_fourier_and_grad(
     T cut_distance,
     int order,
     const int *z_to_idx,
-    bool use_atm,
     int three_body_weight_mode,
     int centre_atom_idx,
     int na3,
@@ -308,7 +325,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
             T datm_dcos_k = zero;
             T cos_j = zero;
             T cos_k_val = zero;
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 cos_j = clamp11(ukj[0] * (-ui_j[0]) + ukj[1] * (-ui_j[1]) + ukj[2] * (-ui_j[2]));
                 cos_k_val =
                     clamp11(ujk[0] * (-ui_k[0]) + ujk[1] * (-ui_k[1]) + ujk[2] * (-ui_k[2]));
@@ -358,7 +375,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
 
             T dcos_j_dR[3][3] = {};
             T dcos_k_dR[3][3] = {};
-            if (use_atm) {
+            if constexpr (UseAtm) {
                 for (int mu = 0; mu < 3; ++mu) {
                     dcos_j_dR[0][mu] = inv_dj * (ukj[mu] + cos_j * ui_j[mu]);
                     dcos_j_dR[1][mu] = inv_di * (ui_j[mu] + cos_j * ukj[mu]) -
@@ -390,7 +407,7 @@ __device__ void hess_compute_threebody_fourier_and_grad(
                 gksi3[2][mu] +=
                     cut_atm_w * (radial.dlog_dk * (ui_k[mu]) + radial.dlog_di * (ukj[mu]));
 
-                if (use_atm) {
+                if constexpr (UseAtm) {
                     const T scale = cut_prod * radial.w;
                     for (int la = 0; la < 3; ++la) {
                         gksi3[la][mu] += scale * (datm_dcos_i * dcos_i_dR[la][mu] +
@@ -489,9 +506,18 @@ __device__ T hess_scalar_and_grad_amu(
         *ds_out = Math<T>::zero();
     }
 
+    const T *pd = params.pd;
+    const int emax = params.emax;
+    const bool alch = (pd != nullptr);
     const int Z1 = static_cast<int>(x1_chan[max_size1]);
     const int Z2 = static_cast<int>(x2_chan[max_size2]);
-    if (Z1 != Z2) {
+    T pd_central = Math<T>::one();
+    if (alch) {
+        pd_central = alch_pd(pd, emax, Z1, Z2);
+        if (pd_central == Math<T>::zero()) {
+            return Math<T>::zero();
+        }
+    } else if (Z1 != Z2) {
         return Math<T>::zero();
     }
 
@@ -512,7 +538,13 @@ __device__ T hess_scalar_and_grad_amu(
         const long long i_na3 = static_cast<long long>(i) * na3;
 
         for (int j = 1; j < n_neigh2; ++j) {
-            if (Zi != static_cast<int>(x2_chan[max_size2 + j])) {
+            T pd_ij = Math<T>::one();
+            if (alch) {
+                pd_ij = alch_pd(pd, emax, Zi, static_cast<int>(x2_chan[max_size2 + j]));
+                if (pd_ij == Math<T>::zero()) {
+                    continue;
+                }
+            } else if (Zi != static_cast<int>(x2_chan[max_size2 + j])) {
                 continue;
             }
 
@@ -522,18 +554,19 @@ __device__ T hess_scalar_and_grad_amu(
                 continue;
             }
 
-            const T G = Math<T>::exp_(r2 * inv_width);
+            const T G = alch ? Math<T>::exp_(r2 * inv_width) * pd_ij
+                             : Math<T>::exp_(r2 * inv_width);
             const T dG_dri = G * T(2) * dr * inv_width;
 
             T angular = Math<T>::zero();
             T d_angular = Math<T>::zero();
-            for (int m = 0; m < order; m += 2) {
-                const T spf = s_prefactor[m];
+            if (order == 1) {
+                const T spf = s_prefactor[0];
                 T ang_m = Math<T>::zero();
                 T dang_m = Math<T>::zero();
                 for (int p = 0; p < pmax; ++p) {
-                    const long long i1 = hess_fourier_idx(p, m, i, order, max_size1);
-                    const long long i2 = hess_fourier_idx(p, m, j, order, max_size2);
+                    const long long i1 = hess_fourier_idx(p, 0, i, order, max_size1);
+                    const long long i2 = hess_fourier_idx(p, 0, j, order, max_size2);
                     const T c2 = cos2[i2];
                     const T s2 = sin2[i2];
                     ang_m += cos1[i1] * c2 + sin1[i1] * s2;
@@ -541,8 +574,26 @@ __device__ T hess_scalar_and_grad_amu(
                         dang_m += dcos1[i1 * na3 + amu] * c2 + dsin1[i1 * na3 + amu] * s2;
                     }
                 }
-                angular += ang_m * spf;
-                d_angular += dang_m * spf;
+                angular = ang_m * spf;
+                d_angular = dang_m * spf;
+            } else {
+                for (int m = 0; m < order; m += 2) {
+                    const T spf = s_prefactor[m];
+                    T ang_m = Math<T>::zero();
+                    T dang_m = Math<T>::zero();
+                    for (int p = 0; p < pmax; ++p) {
+                        const long long i1 = hess_fourier_idx(p, m, i, order, max_size1);
+                        const long long i2 = hess_fourier_idx(p, m, j, order, max_size2);
+                        const T c2 = cos2[i2];
+                        const T s2 = sin2[i2];
+                        ang_m += cos1[i1] * c2 + sin1[i1] * s2;
+                        if (want_grad) {
+                            dang_m += dcos1[i1 * na3 + amu] * c2 + dsin1[i1 * na3 + amu] * s2;
+                        }
+                    }
+                    angular += ang_m * spf;
+                    d_angular += dang_m * spf;
+                }
             }
 
             const T ksi2_j = ksi2[j];
@@ -556,6 +607,10 @@ __device__ T hess_scalar_and_grad_amu(
         }
     }
 
+    if (alch) {
+        aadist *= pd_central;
+        ds *= pd_central;
+    }
     if (want_grad) {
         *ds_out = ds;
     }
@@ -614,7 +669,9 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
     int lower_triangle,
     int matvec_mode,
     HessParams<T> params,
-    const T *s_prefactor
+    const T *s_prefactor,
+    const int *pair_offset,
+    int n_hot_blocks
 ) {
     extern __shared__ unsigned char hess_smem[];
     const int strideA = 3 * max_size1;
@@ -629,14 +686,24 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
 
     const int n_mol_pairs =
         lower_triangle ? (nm1 * (nm1 + 1) / 2) : (nm1 * nm2);
-    const int n_ij_slots = max_size1 * max_size2;
     const int flat_block = static_cast<int>(blockIdx.x);
-    if (flat_block >= n_mol_pairs * n_ij_slots) {
+    if (flat_block >= n_hot_blocks) {
         return;
     }
 
-    const int mol_pair = flat_block / n_ij_slots;
-    const int ij = flat_block - mol_pair * n_ij_slots;
+    // Compact map: pair_offset = exclusive prefix of na[a]*nb[b] (no empty pads).
+    int lo = 0;
+    int hi = n_mol_pairs;
+    while (lo + 1 < hi) {
+        const int mid = (lo + hi) >> 1;
+        if (pair_offset[mid] <= flat_block) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    const int mol_pair = lo;
+    const int local = flat_block - pair_offset[mol_pair];
     int a;
     int b;
     if (lower_triangle) {
@@ -654,14 +721,11 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
         a = mol_pair / nm2;
         b = mol_pair - a * nm2;
     }
-    const int i = ij / max_size2;
-    const int j = ij - i * max_size2;
 
     const int na = n1[a];
     const int nb = n2[b];
-    if (i >= na || j >= nb) {
-        return;
-    }
+    const int i = local / nb;
+    const int j = local - i * nb;
 
     const int na3A = na * 3;
     const int na3B = nb * 3;
@@ -720,8 +784,17 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
             s_H[flat] = Math<T>::zero();
         }
     }
+    // Alchemy folds pd(Zc_i,Zc_j) and pd(Zp,Zq) into G (every term of s_ij, its gradients
+    // and Hij is linear in G) and starts s_ij at pd_central instead of 1.
+    const bool alch = (params.pd != nullptr);
+    T pd_central = Math<T>::one();
+    bool pair_on = (Zi == Zj);
+    if (alch) {
+        pd_central = alch_pd(params.pd, params.emax, Zi, Zj);
+        pair_on = (pd_central != Math<T>::zero());
+    }
     if (tid == 0) {
-        s_sij[0] = (Zi == Zj) ? Math<T>::one() : Math<T>::zero();
+        s_sij[0] = pair_on ? pd_central : Math<T>::zero();
     }
     __syncthreads();
 
@@ -735,7 +808,7 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
     const bool order1 = (order == 1);
     const T s0 = s_prefactor[0];
 
-    if (Zi == Zj) {
+    if (pair_on) {
         for (int p = 1; p < n_neigh_i; ++p) {
             const int Zp = static_cast<int>(x1_chan[max_size1 + p]);
             const T rp = x1_chan[p];
@@ -743,7 +816,13 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
             const T ksi_p = ksi_i[p];
 
             for (int q = 1; q < n_neigh_j; ++q) {
-                if (Zp != static_cast<int>(x2_chan[max_size2 + q])) {
+                T pd_pq = pd_central;
+                if (alch) {
+                    pd_pq *= alch_pd(params.pd, params.emax, Zp, static_cast<int>(x2_chan[max_size2 + q]));
+                    if (pd_pq == Math<T>::zero()) {
+                        continue;
+                    }
+                } else if (Zp != static_cast<int>(x2_chan[max_size2 + q])) {
                     continue;
                 }
                 const T rq = x2_chan[q];
@@ -753,7 +832,8 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
                     continue;
                 }
 
-                const T G = Math<T>::exp_(r2 * inv_width);
+                const T G = alch ? Math<T>::exp_(r2 * inv_width) * pd_pq
+                                 : Math<T>::exp_(r2 * inv_width);
                 const T dG_drp = G * T(2) * dr * inv_width;
                 const T dG_drq = -dG_drp;
                 const T d2G_drpq =
@@ -944,7 +1024,7 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
     }
     __syncthreads();
 
-    if (Zi != Zj) {
+    if (!pair_on) {
         return;
     }
 
@@ -956,7 +1036,13 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
         const T ksi_p = ksi_i[p];
 
         for (int q = 1; q < n_neigh_j; ++q) {
-            if (Zp != static_cast<int>(x2_chan[max_size2 + q])) {
+            T pd_pq = pd_central;
+            if (alch) {
+                pd_pq *= alch_pd(params.pd, params.emax, Zp, static_cast<int>(x2_chan[max_size2 + q]));
+                if (pd_pq == Math<T>::zero()) {
+                    continue;
+                }
+            } else if (Zp != static_cast<int>(x2_chan[max_size2 + q])) {
                 continue;
             }
             const T rq = x2_chan[q];
@@ -966,7 +1052,8 @@ __global__ void __launch_bounds__(kHessBlockSize, 8) hess_hot_kernel(
                 continue;
             }
 
-            const T G = Math<T>::exp_(r2 * inv_width);
+            const T G = alch ? Math<T>::exp_(r2 * inv_width) * pd_pq
+                             : Math<T>::exp_(r2 * inv_width);
             const T dG_drp = G * T(2) * dr * inv_width;
             const T dG_drq = -dG_drp;
             const T d2G_drpq =
@@ -1247,25 +1334,45 @@ __global__ void hess_precompute_kernel(
         dri
     );
 
-    hess_compute_threebody_fourier_and_grad(
-        atom_chan,
-        max_size,
-        n_neigh,
-        params.three_body_power,
-        params.cut_start,
-        params.cut_distance,
-        params.fourier_order,
-        z_to_idx,
-        params.use_atm != 0,
-        params.three_body_weight_mode,
-        i,
-        na3,
-        nbr,
-        cosp,
-        sinp,
-        dcosp,
-        dsinp
-    );
+    if (params.use_atm != 0) {
+        hess_compute_threebody_fourier_and_grad<T, true>(
+            atom_chan,
+            max_size,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            i,
+            na3,
+            nbr,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp
+        );
+    } else {
+        hess_compute_threebody_fourier_and_grad<T, false>(
+            atom_chan,
+            max_size,
+            n_neigh,
+            params.three_body_power,
+            params.cut_start,
+            params.cut_distance,
+            params.fourier_order,
+            z_to_idx,
+            params.three_body_weight_mode,
+            i,
+            na3,
+            nbr,
+            cosp,
+            sinp,
+            dcosp,
+            dsinp
+        );
+    }
 }
 
 // One block per atom (a, i); threads split the na3 gradient components.
@@ -1282,6 +1389,8 @@ __global__ void hess_self_scalar_kernel(
     const T *sinp_all,
     const T *dcosp_all,
     const T *dsinp_all,
+    const T *cosp_eff_all,
+    const T *sinp_eff_all,
     T *ss_out,
     T *dss_out,
     int nm,
@@ -1316,6 +1425,8 @@ __global__ void hess_self_scalar_kernel(
     const T *sinp = sinp_all + static_cast<long long>(flat_idx) * fstride;
     const T *dcosp = dcosp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
     const T *dsinp = dsinp_all + static_cast<long long>(flat_idx) * fstride * na3_max;
+    const T *cosp_e = cosp_eff_all + static_cast<long long>(flat_idx) * fstride;
+    const T *sinp_e = sinp_eff_all + static_cast<long long>(flat_idx) * fstride;
     T *dss = dss_out + static_cast<long long>(flat_idx) * na3_max;
 
     T ss = Math<T>::zero();
@@ -1337,8 +1448,8 @@ __global__ void hess_self_scalar_kernel(
             max_size,
             n_neigh,
             ksi,
-            cosp,
-            sinp,
+            cosp_e,
+            sinp_e,
             params,
             s_prefactor,
             na3,
@@ -1347,7 +1458,6 @@ __global__ void hess_self_scalar_kernel(
         );
         dss[amu] = T(2) * ds;
     }
-
     // na3 >= 3, so thread 0 always ran at least one iteration.
     if (threadIdx.x == 0) {
         ss_out[flat_idx] = ss;
@@ -1369,6 +1479,15 @@ struct HessSideBuffers {
     T *dsinp = nullptr;
     T *ss = nullptr;
     T *dss = nullptr;
+    // Alchemy only: element-channel-mixed (PD-weighted) copies of cosp/sinp/dcosp/dsinp.
+    T *cosp_e = nullptr;
+    T *sinp_e = nullptr;
+    T *dcosp_e = nullptr;
+    T *dsinp_e = nullptr;
+    size_t cosp_e_cap = 0;
+    size_t sinp_e_cap = 0;
+    size_t dcosp_e_cap = 0;
+    size_t dsinp_e_cap = 0;
     int *nbr = nullptr;
     int *offset = nullptr;
     size_t ksi_cap = 0;
@@ -1390,13 +1509,32 @@ struct HessWorkspace {
     HessSideBuffers<T> b;
     HessSideBuffers<T> b_train;
     const T *b_train_x = nullptr;
+    const int *b_train_n = nullptr;
+    const int *b_train_nn = nullptr;
+    const T *b_train_coords = nullptr;
+    const int *b_train_z = nullptr;
+    unsigned long long b_train_fp = 0;
     int b_train_nm = 0;
     int b_train_max = 0;
     int b_train_pmax = -1;
+    int b_train_fourier_order = -1;
+    int b_train_use_atm = -1;
+    int b_train_tb_weight_mode = -1;
+    // b_train holds element-mixed Fourier buffers when alchemy is on.
+    int b_train_alch = 0;
+    double b_train_alch_pw = 0.0;
+    double b_train_alch_gw = 0.0;
+    // Element map (Z -> channel index) the b_train buffers were prepared with.
+    int b_train_map[256] = {};
     T *s_prefactor = nullptr;
     size_t s_prefactor_cap = 0;
+    T *rfp_dense = nullptr;
+    size_t rfp_dense_cap = 0;
     int *z_present = nullptr;
     int *z_to_idx = nullptr;
+    // Exclusive prefix of na[a]*nb[b] over mol pairs — compacted hot launch.
+    int *pair_offset = nullptr;
+    size_t pair_offset_cap = 0;
 };
 
 template <typename T>
@@ -1420,7 +1558,8 @@ void hess_prepare_side(
     int fourier_order,
     const HessParams<T> &params,
     const int *d_z_to_idx,
-    const T *d_s_prefactor
+    const T *d_s_prefactor,
+    const T *d_pdc = nullptr
 ) {
     const size_t n_atoms = static_cast<size_t>(nm) * max_size;
     const size_t na3_max = static_cast<size_t>(max_size) * 3;
@@ -1477,6 +1616,33 @@ void hess_prepare_side(
     );
     CUDA_CHECK(cudaGetLastError());
 
+    // Alchemy: element-mix Fourier + dFourier into the *_e buffers; side 2 of every
+    // scalar-product consumer (self scalar here, hot kernel's B side) reads those.
+    if (params.pd != nullptr && d_pdc != nullptr) {
+        ensure_capacity(&buf.cosp_e, &buf.cosp_e_cap, cosp_need);
+        ensure_capacity(&buf.sinp_e, &buf.sinp_e_cap, cosp_need);
+        ensure_capacity(&buf.dcosp_e, &buf.dcosp_e_cap, dcosp_need);
+        ensure_capacity(&buf.dsinp_e, &buf.dsinp_e_cap, dcosp_need);
+        const long long chunk = static_cast<long long>(fourier_order) * max_size;
+        alchemy_mix_fourier(
+            buf.cosp, buf.cosp_e, d_pdc, d_n, nm, max_size, pmax, static_cast<long long>(fstride),
+            1, 0, chunk, false, true, 0
+        );
+        alchemy_mix_fourier(
+            buf.sinp, buf.sinp_e, d_pdc, d_n, nm, max_size, pmax, static_cast<long long>(fstride),
+            1, 0, chunk, false, true, 0
+        );
+        alchemy_mix_fourier(
+            buf.dcosp, buf.dcosp_e, d_pdc, d_n, nm, max_size, pmax,
+            static_cast<long long>(fstride * na3_max), 1, 0, chunk, true, true, 0
+        );
+        alchemy_mix_fourier(
+            buf.dsinp, buf.dsinp_e, d_pdc, d_n, nm, max_size, pmax,
+            static_cast<long long>(fstride * na3_max), 1, 0, chunk, true, true, 0
+        );
+    }
+    const bool mixed = (params.pd != nullptr && d_pdc != nullptr);
+
     hess_self_scalar_kernel<<<static_cast<int>(n_atoms), kHessSelfBlockSize>>>(
         d_x,
         d_n,
@@ -1488,6 +1654,8 @@ void hess_prepare_side(
         buf.sinp,
         buf.dcosp,
         buf.dsinp,
+        mixed ? buf.cosp_e : buf.cosp,
+        mixed ? buf.sinp_e : buf.sinp,
         buf.ss,
         buf.dss,
         nm,
@@ -1503,31 +1671,61 @@ template <typename T>
 void hess_upload_offsets(
     HessSideBuffers<T> &buf, const int *d_n, int nm, int expected_dim, const char *what
 ) {
-    if (nm == 1) {
-        int h_offset[2] = {0, expected_dim};
-        ensure_capacity(&buf.offset, &buf.offset_cap, 2);
-        CUDA_CHECK(cudaMemcpy(buf.offset, h_offset, 2 * sizeof(int), cudaMemcpyHostToDevice));
-        return;
-    }
-    std::vector<int> h_n(static_cast<size_t>(nm));
+    fill_coord_offsets_device(d_n, &buf.offset, &buf.offset_cap, nm, expected_dim, what);
+}
+
+// Exclusive prefix of na[a]*nb[b] over mol pairs → compacted hot-block count.
+// Drops empty padded (i,j) slots (≈50% on QM7b max_size=17, mean n≈12).
+inline int hess_build_pair_offsets(
+    int **d_pair_offset,
+    size_t *pair_offset_cap,
+    const int *d_n1,
+    const int *d_n2,
+    int nm1,
+    int nm2,
+    int lower_triangle
+) {
+    const int n_mol_pairs = lower_triangle ? (nm1 * (nm1 + 1) / 2) : (nm1 * nm2);
+    std::vector<int> h_n1(static_cast<size_t>(nm1));
+    std::vector<int> h_n2(static_cast<size_t>(nm2));
     CUDA_CHECK(cudaMemcpy(
-        h_n.data(), d_n, static_cast<size_t>(nm) * sizeof(int), cudaMemcpyDeviceToHost
+        h_n1.data(), d_n1, sizeof(int) * static_cast<size_t>(nm1), cudaMemcpyDeviceToHost
     ));
-    std::vector<int> h_offset(static_cast<size_t>(nm) + 1, 0);
-    for (int a = 0; a < nm; ++a) {
-        h_offset[static_cast<size_t>(a) + 1] =
-            h_offset[static_cast<size_t>(a)] + h_n[static_cast<size_t>(a)] * 3;
+    if (d_n2 == d_n1 && nm2 == nm1) {
+        h_n2 = h_n1;
+    } else {
+        CUDA_CHECK(cudaMemcpy(
+            h_n2.data(), d_n2, sizeof(int) * static_cast<size_t>(nm2), cudaMemcpyDeviceToHost
+        ));
     }
-    if (h_offset[static_cast<size_t>(nm)] != expected_dim) {
-        throw std::invalid_argument(what);
+    std::vector<int> h_off(static_cast<size_t>(n_mol_pairs) + 1);
+    h_off[0] = 0;
+    if (lower_triangle) {
+        int mp = 0;
+        for (int a = 0; a < nm1; ++a) {
+            for (int b = 0; b <= a; ++b, ++mp) {
+                h_off[static_cast<size_t>(mp) + 1] = h_off[static_cast<size_t>(mp)] +
+                    h_n1[static_cast<size_t>(a)] * h_n2[static_cast<size_t>(b)];
+            }
+        }
+    } else {
+        int mp = 0;
+        for (int a = 0; a < nm1; ++a) {
+            for (int b = 0; b < nm2; ++b, ++mp) {
+                h_off[static_cast<size_t>(mp) + 1] = h_off[static_cast<size_t>(mp)] +
+                    h_n1[static_cast<size_t>(a)] * h_n2[static_cast<size_t>(b)];
+            }
+        }
     }
-    ensure_capacity(&buf.offset, &buf.offset_cap, static_cast<size_t>(nm) + 1);
+    const int n_hot = h_off[static_cast<size_t>(n_mol_pairs)];
+    ensure_capacity(d_pair_offset, pair_offset_cap, static_cast<size_t>(n_mol_pairs) + 1);
     CUDA_CHECK(cudaMemcpy(
-        buf.offset,
-        h_offset.data(),
-        (static_cast<size_t>(nm) + 1) * sizeof(int),
+        *d_pair_offset,
+        h_off.data(),
+        sizeof(int) * (static_cast<size_t>(n_mol_pairs) + 1),
         cudaMemcpyHostToDevice
     ));
+    return n_hot;
 }
 
 template <typename T>
@@ -1561,6 +1759,9 @@ void kernel_gaussian_hessian_cu_impl(
     T cut_distance,
     int fourier_order,
     bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width,
     bool lower_triangle,
     bool matvec_mode
 ) {
@@ -1589,11 +1790,34 @@ void kernel_gaussian_hessian_cu_impl(
         CUDA_CHECK(cudaMalloc(&ws.z_to_idx, 256 * sizeof(int)));
     }
 
-    const bool train_hit = !lower_triangle && d_x2 == ws.b_train_x && nm2 == ws.b_train_nm &&
-                           max_size2 == ws.b_train_max;
+    // Pointer keys first; fingerprint only on candidate hit (avoids 3× D2H every call).
+    // Fourier / ATM / weight-mode must match — stale train cache OOB'd when fo changed.
+    const int tb_mode = get_fchl18_three_body_weight_mode();
+    const int use_atm_i = use_atm ? 1 : 0;
+    const int alch_i = use_alchemy ? 1 : 0;
+    const double alch_pw = use_alchemy ? alchemy_period_width : 0.0;
+    const double alch_gw = use_alchemy ? alchemy_group_width : 0.0;
+    const bool train_ptr_hit = !lower_triangle && d_x2 == ws.b_train_x && d_n2 == ws.b_train_n &&
+                               d_nn2 == ws.b_train_nn && d_coords2 == ws.b_train_coords &&
+                               d_z2 == ws.b_train_z && nm2 == ws.b_train_nm &&
+                               max_size2 == ws.b_train_max &&
+                               fourier_order == ws.b_train_fourier_order &&
+                               use_atm_i == ws.b_train_use_atm &&
+                               tb_mode == ws.b_train_tb_weight_mode &&
+                               alch_i == ws.b_train_alch && alch_pw == ws.b_train_alch_pw &&
+                               alch_gw == ws.b_train_alch_gw;
+    const size_t x2_n =
+        static_cast<size_t>(nm2) * static_cast<size_t>(max_size2) * 5 * static_cast<size_t>(max_size2);
+    const unsigned long long x2_fp =
+        train_ptr_hit ? buffer_fingerprint(d_x2, x2_n) : 0ULL;
+    const bool train_hit = train_ptr_hit && x2_fp == ws.b_train_fp;
     int pmax = 0;
     if (train_hit) {
         pmax = ws.b_train_pmax;
+        // The shared device map may have been overwritten by an intervening call.
+        CUDA_CHECK(cudaMemcpy(
+            ws.z_to_idx, ws.b_train_map, 256 * sizeof(int), cudaMemcpyHostToDevice
+        ));
     } else {
         CUDA_CHECK(cudaMemset(ws.z_present, 0, 256 * sizeof(int)));
 
@@ -1651,6 +1875,18 @@ void kernel_gaussian_hessian_cu_impl(
     params.fourier_order = fourier_order;
     params.pmax = pmax;
     params.use_atm = use_atm ? 1 : 0;
+    params.pd = nullptr;
+    params.emax = 0;
+    const T *d_pdc = nullptr;
+    if (use_alchemy) {
+        params.pd = alchemy_upload_pd<T>(alchemy_period_width, alchemy_group_width);
+        params.emax = kf::fchl18::kAlchemyEmaxDefault;
+        // Rebuild the compact PD matrix from the device element map (valid on a cached
+        // train hit too, where the map was not rebuilt this call).
+        int h_map[256];
+        CUDA_CHECK(cudaMemcpy(h_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+        d_pdc = alchemy_upload_pdc<T>(h_map, pmax);
+    }
 
     T h_s_prefactor[kMaxFourierOrder] = {};
     const double ang_norm2 = get_angular_norm2(static_cast<double>(three_body_width));
@@ -1668,6 +1904,12 @@ void kernel_gaussian_hessian_cu_impl(
         cudaMemcpyHostToDevice
     ));
 
+    // Same physical tensors on both sides (self-kernel / kernelbench): reuse A
+    // precompute for B — halves prepare time and peak gradient buffers.
+    const bool same_side = (d_x1 == d_x2 && d_n1 == d_n2 && d_nn1 == d_nn2 &&
+                            d_coords1 == d_coords2 && d_z1 == d_z2 && nm1 == nm2 &&
+                            max_size1 == max_size2 && d_a_rows == d_b_cols);
+
     hess_upload_offsets(ws.a, d_n1, nm1, d_a_rows, "hessian output rows must equal 3 * sum(n1)");
 
     hess_prepare_side(
@@ -1683,10 +1925,13 @@ void kernel_gaussian_hessian_cu_impl(
         fourier_order,
         params,
         ws.z_to_idx,
-        ws.s_prefactor
+        ws.s_prefactor,
+        d_pdc
     );
     HessSideBuffers<T> *b_side = &ws.b;
-    if (!lower_triangle) {
+    if (same_side) {
+        b_side = &ws.a;
+    } else if (!lower_triangle) {
         if (!train_hit) {
             hess_upload_offsets(
                 ws.b_train, d_n2, nm2, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
@@ -1704,12 +1949,27 @@ void kernel_gaussian_hessian_cu_impl(
                 fourier_order,
                 params,
                 ws.z_to_idx,
-                ws.s_prefactor
+                ws.s_prefactor,
+                d_pdc
             );
             ws.b_train_x = d_x2;
+            ws.b_train_n = d_n2;
+            ws.b_train_nn = d_nn2;
+            ws.b_train_coords = d_coords2;
+            ws.b_train_z = d_z2;
+            ws.b_train_fp = train_ptr_hit ? x2_fp : buffer_fingerprint(d_x2, x2_n);
             ws.b_train_nm = nm2;
             ws.b_train_max = max_size2;
             ws.b_train_pmax = pmax;
+            ws.b_train_fourier_order = fourier_order;
+            ws.b_train_use_atm = use_atm_i;
+            ws.b_train_tb_weight_mode = tb_mode;
+            ws.b_train_alch = alch_i;
+            ws.b_train_alch_pw = alch_pw;
+            ws.b_train_alch_gw = alch_gw;
+            CUDA_CHECK(cudaMemcpy(
+                ws.b_train_map, ws.z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost
+            ));
         }
         b_side = &ws.b_train;
     } else {
@@ -1729,14 +1989,22 @@ void kernel_gaussian_hessian_cu_impl(
             fourier_order,
             params,
             ws.z_to_idx,
-            ws.s_prefactor
+            ws.s_prefactor,
+            d_pdc
         );
     }
 
-    const int n_ij_slots = max_size1 * max_size2;
     const int n_mol_pairs =
         lower_triangle ? (nm1 * (nm1 + 1) / 2) : (nm1 * nm2);
-    const int n_hot_blocks = n_mol_pairs * n_ij_slots;
+    const int n_hot_blocks = hess_build_pair_offsets(
+        &ws.pair_offset,
+        &ws.pair_offset_cap,
+        d_n1,
+        d_n2,
+        nm1,
+        nm2,
+        lower_triangle ? 1 : 0
+    );
     const int strideA = 3 * max_size1;
     const int strideB = 3 * max_size2;
     const int h_cap = hess_shared_h_cap<T>(strideA, strideB);
@@ -1763,10 +2031,10 @@ void kernel_gaussian_hessian_cu_impl(
         b_side->ksi,
         b_side->dksi,
         b_side->dri,
-        b_side->cosp,
-        b_side->sinp,
-        b_side->dcosp,
-        b_side->dsinp,
+        use_alchemy ? b_side->cosp_e : b_side->cosp,
+        use_alchemy ? b_side->sinp_e : b_side->sinp,
+        use_alchemy ? b_side->dcosp_e : b_side->dcosp,
+        use_alchemy ? b_side->dsinp_e : b_side->dsinp,
         b_side->ss,
         b_side->dss,
         d_hess_out,
@@ -1779,7 +2047,9 @@ void kernel_gaussian_hessian_cu_impl(
         lower_triangle ? 1 : 0,
         matvec_mode ? 1 : 0,
         params,
-        ws.s_prefactor
+        ws.s_prefactor,
+        ws.pair_offset,
+        n_hot_blocks
     );
     CUDA_CHECK(cudaGetLastError());
 
@@ -1829,12 +2099,29 @@ void hess_full_matvec_fused_launch(
     int fourier_order,
     const HessParams<T> &params,
     const T *d_s_prefactor,
-    const int *d_z_to_idx
+    const int *d_z_to_idx,
+    const T *d_pdc,
+    double alch_pw,
+    double alch_gw
 ) {
+    const bool use_alchemy = (params.pd != nullptr);
+    const int alch_i = use_alchemy ? 1 : 0;
     HessWorkspace<T> &ws = hess_workspace<T>();
 
-    const bool train_hit = d_x_tr == ws.b_train_x && nm_tr == ws.b_train_nm &&
-                           max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax;
+    const bool train_ptr_hit = d_x_tr == ws.b_train_x && d_n_tr == ws.b_train_n &&
+                               d_nn_tr == ws.b_train_nn && d_coords_tr == ws.b_train_coords &&
+                               d_z_tr == ws.b_train_z && nm_tr == ws.b_train_nm &&
+                               max_size_tr == ws.b_train_max && pmax == ws.b_train_pmax &&
+                               fourier_order == ws.b_train_fourier_order &&
+                               params.use_atm == ws.b_train_use_atm &&
+                               params.three_body_weight_mode == ws.b_train_tb_weight_mode &&
+                               alch_i == ws.b_train_alch && alch_pw == ws.b_train_alch_pw &&
+                               alch_gw == ws.b_train_alch_gw;
+    const size_t x_tr_n = static_cast<size_t>(nm_tr) * static_cast<size_t>(max_size_tr) * 5 *
+                          static_cast<size_t>(max_size_tr);
+    const unsigned long long x_tr_fp =
+        train_ptr_hit ? buffer_fingerprint(d_x_tr, x_tr_n) : 0ULL;
+    const bool train_hit = train_ptr_hit && x_tr_fp == ws.b_train_fp;
     if (!train_hit) {
         hess_upload_offsets(
             ws.b_train, d_n_tr, nm_tr, d_b_cols, "hessian output cols must equal 3 * sum(n2)"
@@ -1852,16 +2139,32 @@ void hess_full_matvec_fused_launch(
             fourier_order,
             params,
             d_z_to_idx,
-            d_s_prefactor
+            d_s_prefactor,
+            d_pdc
         );
         ws.b_train_x = d_x_tr;
+        ws.b_train_n = d_n_tr;
+        ws.b_train_nn = d_nn_tr;
+        ws.b_train_coords = d_coords_tr;
+        ws.b_train_z = d_z_tr;
+        ws.b_train_fp = train_ptr_hit ? x_tr_fp : buffer_fingerprint(d_x_tr, x_tr_n);
         ws.b_train_nm = nm_tr;
         ws.b_train_max = max_size_tr;
         ws.b_train_pmax = pmax;
+        ws.b_train_fourier_order = fourier_order;
+        ws.b_train_use_atm = params.use_atm;
+        ws.b_train_tb_weight_mode = params.three_body_weight_mode;
+        ws.b_train_alch = alch_i;
+        ws.b_train_alch_pw = alch_pw;
+        ws.b_train_alch_gw = alch_gw;
+        CUDA_CHECK(cudaMemcpy(
+            ws.b_train_map, d_z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost
+        ));
     }
 
-    const int n_ij_slots = max_size_q * max_size_tr;
-    const int n_hot_blocks = nm_q * nm_tr * n_ij_slots;
+    const int n_hot_blocks = hess_build_pair_offsets(
+        &ws.pair_offset, &ws.pair_offset_cap, d_n_q, d_n_tr, nm_q, nm_tr, 0
+    );
     const int strideA = 3 * max_size_q;
     const int strideB = 3 * max_size_tr;
     const int h_cap = hess_shared_h_cap<T>(strideA, strideB);
@@ -1888,10 +2191,10 @@ void hess_full_matvec_fused_launch(
         ws.b_train.ksi,
         ws.b_train.dksi,
         ws.b_train.dri,
-        ws.b_train.cosp,
-        ws.b_train.sinp,
-        ws.b_train.dcosp,
-        ws.b_train.dsinp,
+        use_alchemy ? ws.b_train.cosp_e : ws.b_train.cosp,
+        use_alchemy ? ws.b_train.sinp_e : ws.b_train.sinp,
+        use_alchemy ? ws.b_train.dcosp_e : ws.b_train.dcosp,
+        use_alchemy ? ws.b_train.dsinp_e : ws.b_train.dsinp,
         ws.b_train.ss,
         ws.b_train.dss,
         d_F_out,
@@ -1904,7 +2207,9 @@ void hess_full_matvec_fused_launch(
         0,
         1,
         params,
-        d_s_prefactor
+        d_s_prefactor,
+        ws.pair_offset,
+        n_hot_blocks
     );
     CUDA_CHECK(cudaGetLastError());
 }
@@ -1950,7 +2255,10 @@ void kernel_gaussian_hessian_matvec_fused_cu_impl(
     bool use_atm,
     int pmax,
     const int *d_z_to_idx,
-    const T *d_s_prefactor
+    const T *d_s_prefactor,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     HessParams<T> params{};
     params.two_body_width = two_body_width;
@@ -1965,6 +2273,19 @@ void kernel_gaussian_hessian_matvec_fused_cu_impl(
     params.fourier_order = fourier_order;
     params.pmax = pmax;
     params.use_atm = use_atm ? 1 : 0;
+    params.pd = nullptr;
+    params.emax = 0;
+    const T *d_pdc = nullptr;
+    const double alch_pw = use_alchemy ? alchemy_period_width : 0.0;
+    const double alch_gw = use_alchemy ? alchemy_group_width : 0.0;
+    if (use_alchemy) {
+        params.pd = alchemy_upload_pd<T>(alchemy_period_width, alchemy_group_width);
+        params.emax = kf::fchl18::kAlchemyEmaxDefault;
+        // d_z_to_idx is the device element map shared with the caller's precompute.
+        int h_map[256];
+        CUDA_CHECK(cudaMemcpy(h_map, d_z_to_idx, 256 * sizeof(int), cudaMemcpyDeviceToHost));
+        d_pdc = alchemy_upload_pdc<T>(h_map, pmax);
+    }
     hess_full_matvec_fused_launch(
         d_x_q,
         d_x_tr,
@@ -1996,7 +2317,10 @@ void kernel_gaussian_hessian_matvec_fused_cu_impl(
         fourier_order,
         params,
         d_s_prefactor,
-        d_z_to_idx
+        d_z_to_idx,
+        d_pdc,
+        alch_pw,
+        alch_gw
     );
 }
 
@@ -2030,7 +2354,10 @@ void kernel_gaussian_hessian_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_cu_impl(
         d_x1,
@@ -2062,6 +2389,9 @@ void kernel_gaussian_hessian_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*lower_triangle=*/false,
         /*matvec_mode=*/false
     );
@@ -2095,7 +2425,10 @@ void kernel_gaussian_hessian_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_cu_impl(
         d_x1,
@@ -2127,6 +2460,9 @@ void kernel_gaussian_hessian_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*lower_triangle=*/false,
         /*matvec_mode=*/false
     );
@@ -2188,22 +2524,25 @@ static void kernel_gaussian_hessian_symm_rfp_cu_impl(
     T cut_start,
     T cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     if (nm <= 0 || d_rows <= 0) {
         throw std::invalid_argument("kernel_gaussian_hessian_symm_rfp: empty molecule set");
     }
 
-    T *d_hess = nullptr;
+    HessWorkspace<T> &ws = hess_workspace<T>();
     const size_t hess_n = static_cast<size_t>(d_rows) * static_cast<size_t>(d_rows);
-    CUDA_CHECK(cudaMalloc(&d_hess, hess_n * sizeof(T)));
+    ensure_capacity(&ws.rfp_dense, &ws.rfp_dense_cap, hess_n);
     kernel_gaussian_hessian_symm_cu(
         d_x,
         d_n,
         d_nn,
         d_coords,
         d_z,
-        d_hess,
+        ws.rfp_dense,
         sigma,
         nm,
         max_size,
@@ -2217,14 +2556,16 @@ static void kernel_gaussian_hessian_symm_rfp_cu_impl(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 
     const long long rfp_n = static_cast<long long>(d_rows) * (d_rows + 1) / 2;
     const int grid = static_cast<int>((rfp_n + kHessRfpPackBlock - 1) / kHessRfpPackBlock);
-    hess_pack_rfp_kernel<<<grid, kHessRfpPackBlock>>>(d_hess, d_rfp_out, d_rows);
+    hess_pack_rfp_kernel<<<grid, kHessRfpPackBlock>>>(ws.rfp_dense, d_rfp_out, d_rows);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaFree(d_hess));
 }
 
 void kernel_gaussian_hessian_symm_cu(
@@ -2247,7 +2588,10 @@ void kernel_gaussian_hessian_symm_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_cu_impl(
         d_x,
@@ -2279,6 +2623,9 @@ void kernel_gaussian_hessian_symm_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*lower_triangle=*/true,
         /*matvec_mode=*/false
     );
@@ -2304,7 +2651,10 @@ void kernel_gaussian_hessian_symm_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_cu_impl(
         d_x,
@@ -2336,6 +2686,9 @@ void kernel_gaussian_hessian_symm_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*lower_triangle=*/true,
         /*matvec_mode=*/false
     );
@@ -2361,7 +2714,10 @@ void kernel_gaussian_hessian_symm_rfp_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_symm_rfp_cu_impl(
         d_x,
@@ -2383,7 +2739,10 @@ void kernel_gaussian_hessian_symm_rfp_cu(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 
@@ -2407,7 +2766,10 @@ void kernel_gaussian_hessian_symm_rfp_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_symm_rfp_cu_impl(
         d_x,
@@ -2429,7 +2791,10 @@ void kernel_gaussian_hessian_symm_rfp_cu(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 
@@ -2462,7 +2827,10 @@ void kernel_gaussian_hessian_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_cu_impl(
         d_x1,
@@ -2494,6 +2862,9 @@ void kernel_gaussian_hessian_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*lower_triangle=*/false,
         /*matvec_mode=*/true
     );
@@ -2528,7 +2899,10 @@ void kernel_gaussian_hessian_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_cu_impl(
         d_x1,
@@ -2560,6 +2934,9 @@ void kernel_gaussian_hessian_matvec_cu(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         /*lower_triangle=*/false,
         /*matvec_mode=*/true
     );
@@ -2605,7 +2982,10 @@ void kernel_gaussian_hessian_matvec_fused_cu(
     bool use_atm,
     int pmax,
     const int *d_z_to_idx,
-    const float *d_s_prefactor
+    const float *d_s_prefactor,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_matvec_fused_cu_impl(
         d_x_q,
@@ -2647,7 +3027,10 @@ void kernel_gaussian_hessian_matvec_fused_cu(
         use_atm,
         pmax,
         d_z_to_idx,
-        d_s_prefactor
+        d_s_prefactor,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 
@@ -2691,7 +3074,10 @@ void kernel_gaussian_hessian_matvec_fused_cu(
     bool use_atm,
     int pmax,
     const int *d_z_to_idx,
-    const double *d_s_prefactor
+    const double *d_s_prefactor,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_hessian_matvec_fused_cu_impl(
         d_x_q,
@@ -2733,7 +3119,10 @@ void kernel_gaussian_hessian_matvec_fused_cu(
         use_atm,
         pmax,
         d_z_to_idx,
-        d_s_prefactor
+        d_s_prefactor,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 

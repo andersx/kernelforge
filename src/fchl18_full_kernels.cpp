@@ -92,7 +92,8 @@ py::array_t<double> kernel_gaussian_full_py(
     const py::list &coords_A_list, const py::list &z_A_list, const py::list &coords_B_list,
     const py::list &z_B_list, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
-    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm
+    double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     const int N_A = static_cast<int>(coords_A_list.size());
     const int N_B = static_cast<int>(coords_B_list.size());
@@ -164,7 +165,10 @@ py::array_t<double> kernel_gaussian_full_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K_scalar.data()
+            K_scalar.data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
 
         double *K_ptr = K.mutable_data();
@@ -205,7 +209,10 @@ py::array_t<double> kernel_gaussian_full_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                J.data()
+                J.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             for (int row = 0; row < D_A; ++row) {
                 for (int b = 0; b < N_B; ++b) {
@@ -246,7 +253,10 @@ py::array_t<double> kernel_gaussian_full_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                Jt.data()
+                Jt.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             for (int a = 0; a < N_A; ++a) {
                 for (int flat = 0; flat < D_B; ++flat) {
@@ -290,7 +300,10 @@ py::array_t<double> kernel_gaussian_full_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                H.data()
+                H.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             for (int row = 0; row < D_A; ++row) {
                 for (int col = 0; col < D_B; ++col) {
@@ -316,7 +329,8 @@ py::array_t<double> kernel_gaussian_full_symm_py(
     const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm,
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
@@ -364,7 +378,10 @@ py::array_t<double> kernel_gaussian_full_symm_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K_scalar.data()
+            K_scalar.data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
 
         double *K_ptr = K.mutable_data();
@@ -403,7 +420,10 @@ py::array_t<double> kernel_gaussian_full_symm_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                J.data()
+                J.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             for (int flat = 0; flat < D; ++flat) {
                 const int row_jac = nm + flat;
@@ -438,7 +458,10 @@ py::array_t<double> kernel_gaussian_full_symm_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                H.data()
+                H.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             for (int row = 0; row < D; ++row) {
                 for (int col = 0; col < D; ++col) {
@@ -462,7 +485,8 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
     const py::list &coords_list, const py::list &z_list, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm,
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     const int nm = static_cast<int>(coords_list.size());
     if (static_cast<int>(z_list.size()) != nm)
@@ -513,7 +537,10 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
             cut_distance,
             fourier_order,
             use_atm,
-            K_scalar.data()
+            K_scalar.data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
 
         for (std::size_t a = 0; a < static_cast<std::size_t>(nm); ++a) {
@@ -551,7 +578,10 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                J.data()
+                J.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             for (int flat = 0; flat < D; ++flat) {
                 const std::size_t jac_row = static_cast<std::size_t>(nm + flat);
@@ -586,7 +616,10 @@ py::array_t<double> kernel_gaussian_full_symm_rfp_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                H.data()
+                H.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             // Pack upper triangle of the FF block into RFP:
             // BIG indices (nm+row, nm+col) with col <= row.
@@ -613,7 +646,8 @@ py::tuple kernel_gaussian_full_matvec_py(
     const py::array_t<double> &alpha_F, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm, bool compute_energy
+    int fourier_order, bool use_atm, bool compute_energy,
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     const int N_A = static_cast<int>(coords_A_list.size());
     const int N_B = static_cast<int>(coords_B_list.size());
@@ -690,7 +724,10 @@ py::tuple kernel_gaussian_full_matvec_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                K_scalar.data()
+                K_scalar.data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
             double *E_ptr = E.mutable_data();
             for (int a = 0; a < N_A; ++a) {
@@ -721,7 +758,10 @@ py::tuple kernel_gaussian_full_matvec_py(
                 cut_distance,
                 fourier_order,
                 use_atm,
-                E.mutable_data()
+                E.mutable_data(),
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
         }
 
@@ -745,7 +785,10 @@ py::tuple kernel_gaussian_full_matvec_py(
             cut_distance,
             fourier_order,
             use_atm,
-            F.mutable_data()
+            F.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
 
         kf::fchl18::kernel_gaussian_hessian_matvec(
@@ -765,7 +808,10 @@ py::tuple kernel_gaussian_full_matvec_py(
             cut_distance,
             fourier_order,
             use_atm,
-            F.mutable_data()
+            F.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 

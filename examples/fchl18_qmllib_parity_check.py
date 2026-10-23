@@ -26,14 +26,16 @@ Jacobian convention:
     using dx=0.005 Å displacements.  The two are numerically equal
     (K is symmetric) to the finite-difference accuracy (~rtol=1e-3).
 
-Note on Hessian:
+Note on Hessian (FD tolerance / why not compared):
     qmllib get_local_hessian_kernels uses double finite differences via
     displaced representations: [k(+,+)-k(+,-)-k(-,+)+k(-,-)]/(4 dx²).
     This suffers from catastrophic cancellation for Hessian entries that are
     small relative to the dominant kernel scale — the result does not converge
-    reliably even as dx→0.  kernelforge's analytic Hessian has been verified
-    correct via scalar-kernel numerical differentiation in controlled cases.
-    A qmllib parity check for the Hessian is therefore not included here.
+    reliably even as dx→0, so KF analytic vs qmllib FD can disagree beyond any
+    fixed rtol at the FD noise floor.  kernelforge's analytic Hessian (including
+    use_atm=True) is verified via central differences of the Jacobian / scalar
+    kernel in tests/test_fchl18_hessian.py and CUDA↔CPU ATM tests.  A qmllib
+    Hessian parity check is therefore intentionally omitted.
 """
 
 import sys

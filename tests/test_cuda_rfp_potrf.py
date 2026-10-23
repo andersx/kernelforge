@@ -41,7 +41,8 @@ def _spd(n: int, seed: int = 0) -> np.ndarray:
 
 @pytest.mark.parametrize("n", [7, 8, 16])
 @pytest.mark.parametrize("solve_uplo", ["L", "U"])
-def test_rfp_potrf_potrs_matches_numpy(n: int, solve_uplo: str) -> None:
+@pytest.mark.parametrize("dtype", [np.float32, np.float64], ids=["fp32", "fp64"])
+def test_rfp_potrf_potrs_matches_numpy(n: int, solve_uplo: str, dtype: np.dtype) -> None:
     """GPU RFP Cholesky agrees with numpy for both UPLO conventions.
 
     ``kernelmath.full_to_rfp`` uses the C-order UPLO swap (same as LAPACK
@@ -55,12 +56,58 @@ def test_rfp_potrf_potrs_matches_numpy(n: int, solve_uplo: str) -> None:
 
     # C-order UPLO swap: pack opposite of GPU solver uplo
     pack_uplo = "U" if solve_uplo == "L" else "L"
-    K_rfp = kernelmath.full_to_rfp(K, uplo=pack_uplo, transr="N").astype(np.float32)
+    K_rfp = kernelmath.full_to_rfp(K, uplo=pack_uplo, transr="N").astype(dtype)
     K_cuda = torch.from_numpy(np.ascontiguousarray(K_rfp)).cuda()
-    rhs = torch.from_numpy(y.astype(np.float32)).cuda().unsqueeze(-1).contiguous()
+    rhs = torch.from_numpy(y.astype(dtype)).cuda().unsqueeze(-1).contiguous()
 
     info = cuda_global_kernels.rfp_potrf(K_cuda, n, l2=1e-3, uplo=solve_uplo)
     assert info == 0
     cuda_global_kernels.rfp_potrs(K_cuda, rhs, uplo=solve_uplo)
     sol = rhs.squeeze(-1).cpu().numpy().astype(np.float64)
-    np.testing.assert_allclose(sol, ref, rtol=2e-3, atol=2e-3)
+    if dtype == np.float32:
+        np.testing.assert_allclose(sol, ref, rtol=2e-3, atol=2e-3)
+    else:
+        np.testing.assert_allclose(sol, ref, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("n", [64, 128])
+def test_rfp_potrf_fp64_matches_cpu_cho_solve_rfp(n: int) -> None:
+    """GPU float64 RFP solve matches CPU ``cho_solve_rfp`` (UPLO=U packing)."""
+    K = _spd(n)
+    y = np.arange(1, n + 1, dtype=np.float64)
+    l2 = 1e-6
+    # FCHL18 packing: true UPLO=U → pack with C-order opposite letter "L"
+    K_rfp = kernelmath.full_to_rfp(K, uplo="L", transr="N")
+    ref = kernelmath.cho_solve_rfp(K_rfp.copy(), y, l2=l2)
+
+    K_cuda = torch.from_numpy(np.ascontiguousarray(K_rfp)).cuda()
+    rhs = torch.from_numpy(y.copy()).cuda().unsqueeze(-1).contiguous()
+    info = cuda_global_kernels.rfp_potrf(K_cuda, n, l2=l2, uplo="U")
+    assert info == 0
+    cuda_global_kernels.rfp_potrs(K_cuda, rhs, uplo="U")
+    sol = rhs.squeeze(-1).cpu().numpy()
+    np.testing.assert_allclose(sol, ref, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64], ids=["fp32", "fp64"])
+def test_rfp_potrs_multi_rhs_matches_numpy(dtype: np.dtype) -> None:
+    """Multi-column RHS must respect LAPACK column-major layout (nrhs > 1)."""
+    n, nrhs = 16, 3
+    K = _spd(n, seed=7)
+    rng = np.random.default_rng(11)
+    B = rng.standard_normal((n, nrhs)).astype(np.float64)
+    l2 = 1e-4
+    ref = np.linalg.solve(K + l2 * np.eye(n), B)
+
+    pack_uplo = "L"  # GPU uplo="U" → C-order pack with opposite letter
+    K_rfp = kernelmath.full_to_rfp(K, uplo=pack_uplo, transr="N").astype(dtype)
+    K_cuda = torch.from_numpy(np.ascontiguousarray(K_rfp)).cuda()
+    rhs = torch.from_numpy(B.astype(dtype).copy()).cuda().contiguous()
+    info = cuda_global_kernels.rfp_potrf(K_cuda, n, l2=l2, uplo="U")
+    assert info == 0
+    cuda_global_kernels.rfp_potrs(K_cuda, rhs, uplo="U")
+    sol = rhs.cpu().numpy().astype(np.float64)
+    if dtype == np.float32:
+        np.testing.assert_allclose(sol, ref, rtol=3e-3, atol=3e-3)
+    else:
+        np.testing.assert_allclose(sol, ref, rtol=1e-10, atol=1e-10)

@@ -86,6 +86,12 @@ class _KernelArgs(TypedDict):
     use_atm: bool
 
 
+class _AlchemyParams(TypedDict):
+    use_alchemy: bool
+    alchemy_period_width: float
+    alchemy_group_width: float
+
+
 KERNEL_ARGS: _KernelArgs = {
     "two_body_scaling": 2.0,
     "two_body_width": 0.1,
@@ -165,6 +171,67 @@ def test_kernel_gaussian_matches_cpu() -> None:
         K_cpu,
         rtol=2e-4,
         atol=2e-4,
+    )
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+@pytest.mark.parametrize("use_alchemy", [False, True])
+def test_kernel_gaussian_matvec_matches_dense(dtype: str, use_alchemy: bool) -> None:
+    coords1 = [WATER_COORDS, AMMONIA_COORDS, HF_COORDS]
+    z1 = [WATER_Z, AMMONIA_Z, HF_Z]
+    coords2 = [METHANE_COORDS, WATER_COORDS, AMMONIA_COORDS]
+    z2 = [METHANE_Z, WATER_Z, AMMONIA_Z]
+
+    max_size1 = max(len(z) for z in z1)
+    max_size2 = max(len(z) for z in z2)
+    x1, n1, nn1 = repr_mod.generate(coords1, z1, max_size=max_size1, cut_distance=1e6)
+    x2, n2, nn2 = repr_mod.generate(coords2, z2, max_size=max_size2, cut_distance=1e6)
+
+    torch_dtype = torch.float32 if dtype == "float32" else torch.float64
+    to_x = (
+        (lambda a: _to_cuda_f32(a))
+        if dtype == "float32"
+        else (lambda a: torch.from_numpy(np.ascontiguousarray(a)).cuda())
+    )
+    x1_t, x2_t = to_x(x1), to_x(x2)
+    n1_t, n2_t = _to_cuda_i32(n1), _to_cuda_i32(n2)
+    nn1_t, nn2_t = _to_cuda_i32(nn1), _to_cuda_i32(nn2)
+    alpha = torch.randn(len(coords2), dtype=torch_dtype, device="cuda")
+
+    alch: _AlchemyParams | None = (
+        {
+            "use_alchemy": True,
+            "alchemy_period_width": 1.6,
+            "alchemy_group_width": 1.6,
+        }
+        if use_alchemy
+        else None
+    )
+
+    if alch is None:
+        K = cuda_fchl18_kernel.kernel_gaussian(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, sigma=2.5, **KERNEL_ARGS
+        )
+        E_mv = cuda_fchl18_kernel.kernel_gaussian_matvec(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, alpha, sigma=2.5, **KERNEL_ARGS
+        )
+    else:
+        K = cuda_fchl18_kernel.kernel_gaussian(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, sigma=2.5, **KERNEL_ARGS, **alch
+        )
+        E_mv = cuda_fchl18_kernel.kernel_gaussian_matvec(
+            x1_t, x2_t, n1_t, n2_t, nn1_t, nn2_t, alpha, sigma=2.5, **KERNEL_ARGS, **alch
+        )
+    E_ref = K @ alpha
+
+    assert E_mv.shape == (len(coords1),)
+    rtol = 2e-4 if dtype == "float32" else 1e-10
+    atol = 2e-4 if dtype == "float32" else 1e-10
+    np.testing.assert_allclose(
+        E_mv.cpu().numpy().astype(np.float64),
+        E_ref.cpu().numpy().astype(np.float64),
+        rtol=rtol,
+        atol=atol,
     )
 
 

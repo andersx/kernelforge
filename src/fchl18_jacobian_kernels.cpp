@@ -49,7 +49,8 @@ py::array_t<double> kernel_gaussian_jacobian_py(
     const py::array_t<int32_t, py::array::c_style | py::array::forcecast> &nn2, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm
+    double cut_distance, int fourier_order, bool use_atm,
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     if (x2.ndim() != 4 || x2.shape(2) != 5)
         throw std::invalid_argument("x2 must be 4-D with shape (N_B, max_size, 5, max_size)");
@@ -96,7 +97,10 @@ py::array_t<double> kernel_gaussian_jacobian_py(
             cut_distance,
             fourier_order,
             use_atm,
-            J.mutable_data()
+            J.mutable_data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 

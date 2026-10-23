@@ -1,6 +1,7 @@
 // Own header
 #include "fchl18_kernel.hpp"
 
+#include "fchl18_alchemy.hpp"
 #include "fchl18_repr.hpp"
 #include "rfp_utils.hpp"
 
@@ -359,6 +360,143 @@ static double scalar_noalchemy(
 }
 
 // =============================================================================
+// FCHL18 scalar product with periodic-table alchemy (qml scalar_alchemy).
+//
+// Neighbour pairs of any Z contribute with weight pd(Zi,Zj); angular channels
+// are crossed with pd(Z_p1, Z_p2); the whole scalar is scaled by pd(Zc1,Zc2).
+// Compact Fourier indices are remapped via idx_to_z[p] → nuclear charge.
+// =============================================================================
+static double scalar_alchemy(
+    const double *x1_chan, int max_size1, int n1, const double *ksi1, const double *cos1,
+    const double *sin1, const double *x2_chan, int max_size2, int n2, const double *ksi2,
+    const double *cos2, const double *sin2, double d_width, int order, int pmax,
+    const double *s_prefactor, double distance_scale, double angular_scale, const double *pd,
+    int emax, const int *idx_to_z
+) {
+    const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
+    const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
+    const double pd_central = pd_lookup(pd, emax, Z1, Z2);
+    if (pd_central == 0.0) return 0.0;
+
+    const double inv_width = -1.0 / (4.0 * d_width * d_width);
+    const double maxgausdist2 = (8.0 * d_width) * (8.0 * d_width);
+
+    double aadist = 1.0;
+
+    auto cos1_idx = [&](int p, int m, int neigh) -> std::size_t {
+        return static_cast<std::size_t>(p) * order * max_size1 +
+               static_cast<std::size_t>(m) * max_size1 + neigh;
+    };
+    auto cos2_idx = [&](int p, int m, int neigh) -> std::size_t {
+        return static_cast<std::size_t>(p) * order * max_size2 +
+               static_cast<std::size_t>(m) * max_size2 + neigh;
+    };
+
+    for (int i = 1; i < n1; ++i) {
+        const int Zi = static_cast<int>(x1_chan[1 * max_size1 + i]);
+        const double ri = x1_chan[i];
+
+        for (int j = 1; j < n2; ++j) {
+            const int Zj = static_cast<int>(x2_chan[1 * max_size2 + j]);
+            const double rj = x2_chan[j];
+            const double r2 = (rj - ri) * (rj - ri);
+            if (r2 >= maxgausdist2) continue;
+
+            const double pd_ij = pd_lookup(pd, emax, Zi, Zj);
+            if (pd_ij == 0.0) continue;
+
+            const double d = std::exp(r2 * inv_width) * pd_ij;
+
+            double angular = 0.0;
+            for (int m = 0; m < order; m += 2) {
+                double ang_m = 0.0;
+                for (int p1 = 0; p1 < pmax; ++p1) {
+                    const double c1 = cos1[cos1_idx(p1, m, i)];
+                    const double s1 = sin1[cos1_idx(p1, m, i)];
+                    if (c1 == 0.0 && s1 == 0.0) continue;
+                    const int Zp1 = idx_to_z[p1];
+                    for (int p2 = 0; p2 < pmax; ++p2) {
+                        const double pd_pp = pd_lookup(pd, emax, Zp1, idx_to_z[p2]);
+                        if (pd_pp == 0.0) continue;
+                        ang_m += (c1 * cos2[cos2_idx(p2, m, j)] + s1 * sin2[cos2_idx(p2, m, j)]) *
+                                 pd_pp;
+                    }
+                }
+                angular += ang_m * s_prefactor[m];
+            }
+
+            aadist += d * (ksi1[i] * ksi2[j] * distance_scale + angular * angular_scale);
+        }
+    }
+
+    return aadist * pd_central;
+}
+
+// Dispatch: alchemy off → scalar_noalchemy; on → scalar_alchemy.
+static double scalar_fchl18(
+    const double *x1_chan, int max_size1, int n1, const double *ksi1, const double *cos1,
+    const double *sin1, const double *x2_chan, int max_size2, int n2, const double *ksi2,
+    const double *cos2, const double *sin2, double d_width, int order, int pmax,
+    const double *s_prefactor, double distance_scale, double angular_scale, bool use_alchemy,
+    const double *pd, int emax, const int *idx_to_z
+) {
+    if (!use_alchemy) {
+        return scalar_noalchemy(
+            x1_chan,
+            max_size1,
+            n1,
+            ksi1,
+            cos1,
+            sin1,
+            x2_chan,
+            max_size2,
+            n2,
+            ksi2,
+            cos2,
+            sin2,
+            d_width,
+            order,
+            pmax,
+            s_prefactor,
+            distance_scale,
+            angular_scale
+        );
+    }
+    return scalar_alchemy(
+        x1_chan,
+        max_size1,
+        n1,
+        ksi1,
+        cos1,
+        sin1,
+        x2_chan,
+        max_size2,
+        n2,
+        ksi2,
+        cos2,
+        sin2,
+        d_width,
+        order,
+        pmax,
+        s_prefactor,
+        distance_scale,
+        angular_scale,
+        pd,
+        emax,
+        idx_to_z
+    );
+}
+
+static std::vector<int> invert_z_to_idx(const std::vector<int> &z_to_idx, int pmax) {
+    std::vector<int> idx_to_z(static_cast<std::size_t>(pmax), 0);
+    for (int z = 1; z < static_cast<int>(z_to_idx.size()); ++z) {
+        const int p = z_to_idx[static_cast<std::size_t>(z)];
+        if (p >= 0 && p < pmax) idx_to_z[static_cast<std::size_t>(p)] = z;
+    }
+    return idx_to_z;
+}
+
+// =============================================================================
 // Internal struct: per-atom precomputed data
 // =============================================================================
 struct AtomData {
@@ -435,7 +573,9 @@ static std::vector<double> compute_self_scalars(
     const double *x,  // (nm, max_size, 5, max_size)
     const int *n,     // (nm)
     const std::vector<AtomData> &ad, int nm, int max_size, int order, int pmax, double t_width,
-    double d_width, double ang_norm2, double distance_scale, double angular_scale
+    double d_width, double ang_norm2, double distance_scale, double angular_scale,
+    bool use_alchemy = false, const double *pd = nullptr, int emax = 0,
+    const int *idx_to_z = nullptr
 ) {
     const std::size_t mol_stride = static_cast<std::size_t>(max_size) * 5 * max_size;
     const std::size_t atom_stride = static_cast<std::size_t>(5) * max_size;
@@ -467,7 +607,7 @@ static std::vector<double> compute_self_scalars(
         const double *atom_chan = x + static_cast<std::size_t>(a) * mol_stride +
                                   static_cast<std::size_t>(i) * atom_stride;
 
-        ss[static_cast<std::size_t>(a) * max_size + i] = scalar_noalchemy(
+        ss[static_cast<std::size_t>(a) * max_size + i] = scalar_fchl18(
             atom_chan,
             max_size,
             adi.n_neigh,
@@ -485,7 +625,11 @@ static std::vector<double> compute_self_scalars(
             pmax,
             s_prefactor.data(),
             distance_scale,
-            angular_scale
+            angular_scale,
+            use_alchemy,
+            pd,
+            emax,
+            idx_to_z
         );
     }
     return ss;
@@ -536,7 +680,8 @@ void kernel_gaussian(
     const int *nn2, int nm1, int nm2, int max_size1, int max_size2, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *kernel_out
+    double cut_distance, int fourier_order, bool use_atm, double *kernel_out, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (!kernel_out) throw std::invalid_argument("kernel_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -557,6 +702,14 @@ void kernel_gaussian(
         std::memset(kernel_out, 0, sizeof(double) * nm1 * nm2);
         return;
     }
+
+    const std::vector<int> idx_to_z = invert_z_to_idx(z_to_idx, pmax);
+    const int emax = kAlchemyEmaxDefault;
+    std::vector<double> pd;
+    if (use_alchemy) {
+        pd = build_periodic_table_pd(emax, alchemy_period_width, alchemy_group_width);
+    }
+    const double *pd_ptr = use_alchemy ? pd.data() : nullptr;
 
     // Precompute per-atom data
     auto ad1 = precompute_atom_data(
@@ -603,7 +756,11 @@ void kernel_gaussian(
         two_body_width,
         ang_norm2,
         true_distance_scale,
-        true_angular_scale
+        true_angular_scale,
+        use_alchemy,
+        pd_ptr,
+        emax,
+        idx_to_z.data()
     );
     auto ss2 = compute_self_scalars(
         x2,
@@ -617,7 +774,11 @@ void kernel_gaussian(
         two_body_width,
         ang_norm2,
         true_distance_scale,
-        true_angular_scale
+        true_angular_scale,
+        use_alchemy,
+        pd_ptr,
+        emax,
+        idx_to_z.data()
     );
 
     // Zero output
@@ -660,7 +821,7 @@ void kernel_gaussian(
 
                     const double sjj = ss2[static_cast<std::size_t>(b) * max_size2 + j];
 
-                    const double s12 = scalar_noalchemy(
+                    const double s12 = scalar_fchl18(
                         x1_chan,
                         max_size1,
                         adi.n_neigh,
@@ -678,7 +839,11 @@ void kernel_gaussian(
                         pmax,
                         s_prefactor.data(),
                         true_distance_scale,
-                        true_angular_scale
+                        true_angular_scale,
+                        use_alchemy,
+                        pd_ptr,
+                        emax,
+                        idx_to_z.data()
                     );
 
                     kab += std::exp((sii + sjj - 2.0 * s12) * inv_sigma2);
@@ -698,7 +863,8 @@ static void kernel_gaussian_symm_impl(
     const double *x, const int *n, const int *nn, int nm, int max_size, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm,
+    double cut_distance, int fourier_order, bool use_atm, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width,
     Writer &&write  // write(a, b, kab) once per pair a <= b (thread-safe)
 ) {
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -712,6 +878,14 @@ static void kernel_gaussian_symm_impl(
     const int pmax = build_element_map(x, n, nn, nm, max_size, x, n, nn, nm, max_size, z_to_idx);
 
     if (pmax == 0) return;  // caller zero-initialised output
+
+    const std::vector<int> idx_to_z = invert_z_to_idx(z_to_idx, pmax);
+    const int emax = kAlchemyEmaxDefault;
+    std::vector<double> pd;
+    if (use_alchemy) {
+        pd = build_periodic_table_pd(emax, alchemy_period_width, alchemy_group_width);
+    }
+    const double *pd_ptr = use_alchemy ? pd.data() : nullptr;
 
     auto ad = precompute_atom_data(
         x,
@@ -741,7 +915,11 @@ static void kernel_gaussian_symm_impl(
         two_body_width,
         ang_norm2,
         true_distance_scale,
-        true_angular_scale
+        true_angular_scale,
+        use_alchemy,
+        pd_ptr,
+        emax,
+        idx_to_z.data()
     );
 
     const double inv_sigma2 = -0.5 / (sigma * sigma);
@@ -784,7 +962,7 @@ static void kernel_gaussian_symm_impl(
 
                 const double sjj = ss[static_cast<std::size_t>(b) * max_size + j];
 
-                const double s12 = scalar_noalchemy(
+                const double s12 = scalar_fchl18(
                     xa_chan,
                     max_size,
                     adi.n_neigh,
@@ -802,7 +980,11 @@ static void kernel_gaussian_symm_impl(
                     pmax,
                     s_prefactor.data(),
                     true_distance_scale,
-                    true_angular_scale
+                    true_angular_scale,
+                    use_alchemy,
+                    pd_ptr,
+                    emax,
+                    idx_to_z.data()
                 );
 
                 kab += std::exp((sii + sjj - 2.0 * s12) * inv_sigma2);
@@ -817,7 +999,8 @@ void kernel_gaussian_symm(
     const double *x, const int *n, const int *nn, int nm, int max_size, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *kernel_out
+    double cut_distance, int fourier_order, bool use_atm, double *kernel_out, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (!kernel_out) throw std::invalid_argument("kernel_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -839,6 +1022,9 @@ void kernel_gaussian_symm(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         [&](int a, int b, double kab) {
             kernel_out[static_cast<std::size_t>(a) * nm + b] = kab;
             kernel_out[static_cast<std::size_t>(b) * nm + a] = kab;
@@ -850,7 +1036,8 @@ void kernel_gaussian_symm_rfp_core(
     const double *x, const int *n, const int *nn, int nm, int max_size, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *rfp_out
+    double cut_distance, int fourier_order, bool use_atm, double *rfp_out, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (!rfp_out) throw std::invalid_argument("rfp_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -873,6 +1060,9 @@ void kernel_gaussian_symm_rfp_core(
         cut_distance,
         fourier_order,
         use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width,
         [&](int a, int b, double kab) {
             rfp_out
                 [rfp_index_upper_N(N, static_cast<std::size_t>(a), static_cast<std::size_t>(b))] =
@@ -1711,15 +1901,18 @@ static double scalar_noalchemy_and_grad(
     const double *sin2, double d_width, int order, int pmax, const double *s_prefactor,
     double distance_scale, double angular_scale,
     int n_atoms_A,              // for gradient output size
-    std::vector<double> &ds_dR  // output: size n_atoms_A*3
+    std::vector<double> &ds_dR,  // output: size n_atoms_A*3
+    bool use_alchemy = false, const double *pd = nullptr, int emax = 0,
+    const int *idx_to_z = nullptr
 ) {
-    // Early exit: central atoms must have the same nuclear charge (matches Fortran
-    // scalar_noalchemy)
+    // No-alchemy: centrals must match. Alchemy: scale by pd(Zc1,Zc2) (pd is R-independent).
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
     ds_dR.assign(static_cast<std::size_t>(n_atoms_A) * 3, 0.0);
 
-    if (Z1 != Z2) return 0.0;
+    const double pd_central =
+        use_alchemy ? pd_lookup(pd, emax, Z1, Z2) : (Z1 == Z2 ? 1.0 : 0.0);
+    if (pd_central == 0.0) return 0.0;
 
     const double inv_width = -1.0 / (4.0 * d_width * d_width);
     const double maxgausdist2 = (8.0 * d_width) * (8.0 * d_width);
@@ -1878,6 +2071,11 @@ static double scalar_noalchemy_and_grad(
         }
     }
 
+    if (use_alchemy && pd_central != 1.0) {
+        aadist *= pd_central;
+        for (double &g : ds_dR)
+            g *= pd_central;
+    }
     return aadist;
 }
 
@@ -1890,13 +2088,15 @@ static double scalar_noalchemy_and_grad_full(
     const double *dsin1, const double *x2_chan, int max_size2, int n2, const double *ksi2,
     const double *cos2, const double *sin2, double d_width, int order, int pmax,
     const double *s_prefactor, double distance_scale, double angular_scale, int n_atoms_A,
-    std::vector<double> &ds_dR
+    std::vector<double> &ds_dR, bool use_alchemy = false, const double *pd = nullptr,
+    int emax = 0, const int *idx_to_z = nullptr
 ) {
-    // Early exit: central atoms must have the same nuclear charge (matches Fortran
-    // scalar_noalchemy). Caller may also fast-path this case.
+    // No-alchemy: centrals must match. Alchemy: scale by pd(Zc1,Zc2) (R-independent).
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
-    if (Z1 != Z2) {
+    const double pd_central =
+        use_alchemy ? pd_lookup(pd, emax, Z1, Z2) : (Z1 == Z2 ? 1.0 : 0.0);
+    if (pd_central == 0.0) {
         ds_dR.assign(static_cast<std::size_t>(n_atoms_A) * 3, 0.0);
         return 0.0;
     }
@@ -1921,37 +2121,75 @@ static double scalar_noalchemy_and_grad_full(
 
         for (int j = 1; j < n2; ++j) {
             const int Zj = static_cast<int>(x2_chan[1 * max_size2 + j]);
-            if (Zi != Zj) continue;
+            const double pd_ij =
+                use_alchemy ? pd_lookup(pd, emax, Zi, Zj) : (Zi == Zj ? 1.0 : 0.0);
+            if (pd_ij == 0.0) continue;
 
             const double rj = x2_chan[j];
             const double dr = ri - rj;
             const double r2 = dr * dr;
             if (r2 >= maxgausdist2) continue;
 
-            const double G = std::exp(r2 * inv_width);
+            // Fold pd_ij into G (constant w.r.t. R).
+            const double G = std::exp(r2 * inv_width) * pd_ij;
             const double dG_dri = G * 2.0 * dr * inv_width;
 
-            // Angular scalar. order==2 reduces to a single active mode (m=0, n=1);
-            // even n are identically zero. order==1 is the same math.
+            // Angular scalar. Alchemy crosses element channels with pd(Zp1,Zp2).
             double angular = 0.0;
             if (order == 1 || order == 2) {
-                for (int p = 0; p < pmax; ++p) {
-                    const std::size_t base1 = static_cast<std::size_t>(p) * ord * ms1 + i;
-                    const std::size_t base2 = static_cast<std::size_t>(p) * ord * ms2 + j;
-                    angular +=
-                        (cos1[base1] * cos2[base2] + sin1[base1] * sin2[base2]) * s_prefactor[0];
+                if (!use_alchemy) {
+                    for (int p = 0; p < pmax; ++p) {
+                        const std::size_t base1 = static_cast<std::size_t>(p) * ord * ms1 + i;
+                        const std::size_t base2 = static_cast<std::size_t>(p) * ord * ms2 + j;
+                        angular += (cos1[base1] * cos2[base2] + sin1[base1] * sin2[base2]) *
+                                   s_prefactor[0];
+                    }
+                } else {
+                    for (int p1 = 0; p1 < pmax; ++p1) {
+                        const std::size_t base1 = static_cast<std::size_t>(p1) * ord * ms1 + i;
+                        const double c1 = cos1[base1];
+                        const double s1v = sin1[base1];
+                        if (c1 == 0.0 && s1v == 0.0) continue;
+                        const int Zp1 = idx_to_z[p1];
+                        for (int p2 = 0; p2 < pmax; ++p2) {
+                            const double pd_pp = pd_lookup(pd, emax, Zp1, idx_to_z[p2]);
+                            if (pd_pp == 0.0) continue;
+                            const std::size_t base2 = static_cast<std::size_t>(p2) * ord * ms2 + j;
+                            angular += (c1 * cos2[base2] + s1v * sin2[base2]) * pd_pp * s_prefactor[0];
+                        }
+                    }
                 }
             } else {
                 for (int m = 0; m < order; m += 2) {
                     double ang_m = 0.0;
-                    for (int p = 0; p < pmax; ++p) {
-                        const std::size_t i1 = static_cast<std::size_t>(p) * ord * ms1 +
-                                               static_cast<std::size_t>(m) * ms1 +
-                                               static_cast<std::size_t>(i);
-                        const std::size_t i2 = static_cast<std::size_t>(p) * ord * ms2 +
-                                               static_cast<std::size_t>(m) * ms2 +
-                                               static_cast<std::size_t>(j);
-                        ang_m += cos1[i1] * cos2[i2] + sin1[i1] * sin2[i2];
+                    if (!use_alchemy) {
+                        for (int p = 0; p < pmax; ++p) {
+                            const std::size_t i1 = static_cast<std::size_t>(p) * ord * ms1 +
+                                                   static_cast<std::size_t>(m) * ms1 +
+                                                   static_cast<std::size_t>(i);
+                            const std::size_t i2 = static_cast<std::size_t>(p) * ord * ms2 +
+                                                   static_cast<std::size_t>(m) * ms2 +
+                                                   static_cast<std::size_t>(j);
+                            ang_m += cos1[i1] * cos2[i2] + sin1[i1] * sin2[i2];
+                        }
+                    } else {
+                        for (int p1 = 0; p1 < pmax; ++p1) {
+                            const std::size_t i1 = static_cast<std::size_t>(p1) * ord * ms1 +
+                                                   static_cast<std::size_t>(m) * ms1 +
+                                                   static_cast<std::size_t>(i);
+                            const double c1 = cos1[i1];
+                            const double s1v = sin1[i1];
+                            if (c1 == 0.0 && s1v == 0.0) continue;
+                            const int Zp1 = idx_to_z[p1];
+                            for (int p2 = 0; p2 < pmax; ++p2) {
+                                const double pd_pp = pd_lookup(pd, emax, Zp1, idx_to_z[p2]);
+                                if (pd_pp == 0.0) continue;
+                                const std::size_t i2 = static_cast<std::size_t>(p2) * ord * ms2 +
+                                                       static_cast<std::size_t>(m) * ms2 +
+                                                       static_cast<std::size_t>(j);
+                                ang_m += (c1 * cos2[i2] + s1v * sin2[i2]) * pd_pp;
+                            }
+                        }
                     }
                     angular += ang_m * s_prefactor[m];
                 }
@@ -1979,36 +2217,81 @@ static double scalar_noalchemy_and_grad_full(
             // Angular gradient contribution (active Fourier modes only).
             if (order == 1 || order == 2) {
                 const double sp0 = s_prefactor[0];
-                for (int p = 0; p < pmax; ++p) {
-                    const std::size_t base1 = static_cast<std::size_t>(p) * ord * ms1 + i;
-                    const std::size_t base2 = static_cast<std::size_t>(p) * ord * ms2 + j;
-                    const double c2_0 = cos2[base2];
-                    const double s2_0 = sin2[base2];
-                    const std::size_t fi0 = base1 * na3;
+                if (!use_alchemy) {
+                    for (int p = 0; p < pmax; ++p) {
+                        const std::size_t base1 = static_cast<std::size_t>(p) * ord * ms1 + i;
+                        const std::size_t base2 = static_cast<std::size_t>(p) * ord * ms2 + j;
+                        const double c2_0 = cos2[base2];
+                        const double s2_0 = sin2[base2];
+                        const std::size_t fi0 = base1 * na3;
 #ifdef _OPENMP
     #pragma omp simd
 #endif
-                    for (std::size_t amu = 0; amu < na3; ++amu) {
-                        ds_dR[amu] +=
-                            G_ang * sp0 * (dcos1[fi0 + amu] * c2_0 + dsin1[fi0 + amu] * s2_0);
+                        for (std::size_t amu = 0; amu < na3; ++amu) {
+                            ds_dR[amu] += G_ang * sp0 *
+                                          (dcos1[fi0 + amu] * c2_0 + dsin1[fi0 + amu] * s2_0);
+                        }
+                    }
+                } else {
+                    for (int p1 = 0; p1 < pmax; ++p1) {
+                        const std::size_t base1 = static_cast<std::size_t>(p1) * ord * ms1 + i;
+                        const std::size_t fi0 = base1 * na3;
+                        const int Zp1 = idx_to_z[p1];
+                        for (int p2 = 0; p2 < pmax; ++p2) {
+                            const double pd_pp = pd_lookup(pd, emax, Zp1, idx_to_z[p2]);
+                            if (pd_pp == 0.0) continue;
+                            const std::size_t base2 = static_cast<std::size_t>(p2) * ord * ms2 + j;
+                            const double c2_0 = cos2[base2] * pd_pp;
+                            const double s2_0 = sin2[base2] * pd_pp;
+#ifdef _OPENMP
+    #pragma omp simd
+#endif
+                            for (std::size_t amu = 0; amu < na3; ++amu) {
+                                ds_dR[amu] += G_ang * sp0 *
+                                              (dcos1[fi0 + amu] * c2_0 + dsin1[fi0 + amu] * s2_0);
+                            }
+                        }
                     }
                 }
             } else {
                 for (int m = 0; m < order; m += 2) {
                     const double spf = s_prefactor[m];
-                    for (int p = 0; p < pmax; ++p) {
-                        const std::size_t i1 = static_cast<std::size_t>(p) * ord * ms1 +
-                                               static_cast<std::size_t>(m) * ms1 +
-                                               static_cast<std::size_t>(i);
-                        const std::size_t i2 = static_cast<std::size_t>(p) * ord * ms2 +
-                                               static_cast<std::size_t>(m) * ms2 +
-                                               static_cast<std::size_t>(j);
-                        const double c2 = cos2[i2];
-                        const double s2 = sin2[i2];
-                        const std::size_t fi = i1 * na3;
-                        for (std::size_t amu = 0; amu < na3; ++amu) {
-                            ds_dR[amu] +=
-                                G_ang * spf * (dcos1[fi + amu] * c2 + dsin1[fi + amu] * s2);
+                    if (!use_alchemy) {
+                        for (int p = 0; p < pmax; ++p) {
+                            const std::size_t i1 = static_cast<std::size_t>(p) * ord * ms1 +
+                                                   static_cast<std::size_t>(m) * ms1 +
+                                                   static_cast<std::size_t>(i);
+                            const std::size_t i2 = static_cast<std::size_t>(p) * ord * ms2 +
+                                                   static_cast<std::size_t>(m) * ms2 +
+                                                   static_cast<std::size_t>(j);
+                            const double c2 = cos2[i2];
+                            const double s2 = sin2[i2];
+                            const std::size_t fi = i1 * na3;
+                            for (std::size_t amu = 0; amu < na3; ++amu) {
+                                ds_dR[amu] +=
+                                    G_ang * spf * (dcos1[fi + amu] * c2 + dsin1[fi + amu] * s2);
+                            }
+                        }
+                    } else {
+                        for (int p1 = 0; p1 < pmax; ++p1) {
+                            const std::size_t i1 = static_cast<std::size_t>(p1) * ord * ms1 +
+                                                   static_cast<std::size_t>(m) * ms1 +
+                                                   static_cast<std::size_t>(i);
+                            const std::size_t fi = i1 * na3;
+                            const int Zp1 = idx_to_z[p1];
+                            for (int p2 = 0; p2 < pmax; ++p2) {
+                                const double pd_pp = pd_lookup(pd, emax, Zp1, idx_to_z[p2]);
+                                if (pd_pp == 0.0) continue;
+                                const std::size_t i2 = static_cast<std::size_t>(p2) * ord * ms2 +
+                                                       static_cast<std::size_t>(m) * ms2 +
+                                                       static_cast<std::size_t>(j);
+                                const double c2 = cos2[i2] * pd_pp;
+                                const double s2 = sin2[i2] * pd_pp;
+                                for (std::size_t amu = 0; amu < na3; ++amu) {
+                                    ds_dR[amu] += G_ang * spf *
+                                                  (dcos1[fi + amu] * c2 + dsin1[fi + amu] * s2);
+                                }
+                            }
                         }
                     }
                 }
@@ -2016,6 +2299,12 @@ static double scalar_noalchemy_and_grad_full(
         }
     }
 
+    // Central pd scale (constant w.r.t. R).
+    if (pd_central != 1.0) {
+        aadist *= pd_central;
+        for (std::size_t amu = 0; amu < na3; ++amu)
+            ds_dR[amu] *= pd_central;
+    }
     return aadist;
 }
 
@@ -2032,10 +2321,14 @@ static double scalar_noalchemy_and_grad_full(
 // =============================================================================
 struct GradBSide {
     std::vector<int> z_to_idx;
+    std::vector<int> idx_to_z;
     int pmax = 0;
     std::vector<AtomData> adB;
     std::vector<double> ss_B;
     std::vector<double> s_prefactor;
+    std::vector<double> pd;
+    int emax = 0;
+    bool use_alchemy = false;
     double true_distance_scale = 0.0;
     double true_angular_scale = 0.0;
     double inv_sigma2 = 0.0;
@@ -2046,11 +2339,18 @@ static GradBSide build_grad_b_side(
     std::vector<int> z_to_idx, int pmax, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm
+    int fourier_order, bool use_atm, bool use_alchemy = false,
+    double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 ) {
     GradBSide B;
     B.z_to_idx = std::move(z_to_idx);
     B.pmax = pmax;
+    B.idx_to_z = invert_z_to_idx(B.z_to_idx, pmax);
+    B.use_alchemy = use_alchemy;
+    B.emax = kAlchemyEmaxDefault;
+    if (use_alchemy) {
+        B.pd = build_periodic_table_pd(B.emax, alchemy_period_width, alchemy_group_width);
+    }
     B.true_distance_scale = two_body_scaling / 16.0;
     B.true_angular_scale = three_body_scaling / std::sqrt(8.0);
     B.inv_sigma2 = 0.5 / (sigma * sigma);
@@ -2094,7 +2394,11 @@ static GradBSide build_grad_b_side(
         two_body_width,
         ang_norm2,
         B.true_distance_scale,
-        B.true_angular_scale
+        B.true_angular_scale,
+        use_alchemy,
+        use_alchemy ? B.pd.data() : nullptr,
+        B.emax,
+        B.idx_to_z.data()
     );
     return B;
 }
@@ -2242,6 +2546,11 @@ static void gradient_one_A_against_B(
     std::vector<double> ss_A(static_cast<std::size_t>(n_atoms_A), 0.0);
     std::vector<std::vector<double>> dss_A(static_cast<std::size_t>(n_atoms_A));
 
+    const bool use_alchemy = B.use_alchemy;
+    const double *pd_ptr = use_alchemy ? B.pd.data() : nullptr;
+    const int emax = B.emax;
+    const int *idx_to_z_ptr = use_alchemy ? B.idx_to_z.data() : nullptr;
+
     for (int i = 0; i < n_atoms_A; ++i) {
         const AtomDataGrad &adi = adA[static_cast<std::size_t>(i)];
         const double *x1_chan = x_A_mol.data() + static_cast<std::size_t>(i) * atom_stride_A;
@@ -2271,7 +2580,11 @@ static void gradient_one_A_against_B(
             true_distance_scale,
             true_angular_scale,
             n_atoms_A,
-            ds_tmp
+            ds_tmp,
+            use_alchemy,
+            pd_ptr,
+            emax,
+            idx_to_z_ptr
         );
 
         dss_A[static_cast<std::size_t>(i)].resize(static_cast<std::size_t>(n_atoms_A) * 3);
@@ -2295,47 +2608,45 @@ static void gradient_one_A_against_B(
             const double *x1_chan = x_A_mol.data() + static_cast<std::size_t>(i) * atom_stride_A;
             const double sii = ss_A[static_cast<std::size_t>(i)];
             const double *dsii = dss_A[static_cast<std::size_t>(i)].data();
-            const int Zi = static_cast<int>(x1_chan[max_size_A]);  // channel 1, self
 
             for (int j = 0; j < nb; ++j) {
                 const AtomData &adj = B.adB[static_cast<std::size_t>(b) * max_size2 + j];
                 const double *x2_chan = x2 + static_cast<std::size_t>(b) * mol2_stride +
                                         static_cast<std::size_t>(j) * at2_stride;
                 const double sjj = B.ss_B[static_cast<std::size_t>(b) * max_size2 + j];
-                const int Zj = static_cast<int>(x2_chan[max_size2]);
 
-                double sij = 0.0;
-                if (Zi == Zj) {
-                    sij = scalar_noalchemy_and_grad_full(
-                        x1_chan,
-                        max_size_A,
-                        adi.n_neigh,
-                        adi.ksi.data(),
-                        adi.dksi.data(),
-                        dri_A[static_cast<std::size_t>(i)].data(),
-                        adi.cosp.data(),
-                        adi.sinp.data(),
-                        adi.dcosp.data(),
-                        adi.dsinp.data(),
-                        x2_chan,
-                        max_size2,
-                        adj.n_neigh,
-                        adj.ksi.data(),
-                        adj.cosp.data(),
-                        adj.sinp.data(),
-                        two_body_width,
-                        fourier_order,
-                        pmax,
-                        s_prefactor,
-                        true_distance_scale,
-                        true_angular_scale,
-                        n_atoms_A,
-                        dsij_dR
-                    );
-                } else {
-                    // sij = 0, dsij = 0 — only -ds_ii contributes (matches scalar early-exit).
-                    std::fill(dsij_dR.begin(), dsij_dR.end(), 0.0);
-                }
+                // Alchemy: pd(Zc_i,Zc_j) inside scalar_noalchemy_and_grad_full;
+                // no-alchemy: early-exits when centrals differ.
+                const double sij = scalar_noalchemy_and_grad_full(
+                    x1_chan,
+                    max_size_A,
+                    adi.n_neigh,
+                    adi.ksi.data(),
+                    adi.dksi.data(),
+                    dri_A[static_cast<std::size_t>(i)].data(),
+                    adi.cosp.data(),
+                    adi.sinp.data(),
+                    adi.dcosp.data(),
+                    adi.dsinp.data(),
+                    x2_chan,
+                    max_size2,
+                    adj.n_neigh,
+                    adj.ksi.data(),
+                    adj.cosp.data(),
+                    adj.sinp.data(),
+                    two_body_width,
+                    fourier_order,
+                    pmax,
+                    s_prefactor,
+                    true_distance_scale,
+                    true_angular_scale,
+                    n_atoms_A,
+                    dsij_dR,
+                    use_alchemy,
+                    pd_ptr,
+                    emax,
+                    idx_to_z_ptr
+                );
 
                 const double kij = std::exp(-(sii + sjj - 2.0 * sij) * inv_sigma2);
                 const double coeff = kij * inv_sigma2;
@@ -2392,7 +2703,8 @@ void kernel_gaussian_gradient(
     double sigma, double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
     double cut_distance, int fourier_order, bool use_atm,
-    double *grad_out  // (n_atoms_A, 3, nm2) row-major OUT
+    double *grad_out,  // (n_atoms_A, 3, nm2) row-major OUT
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     if (!grad_out) throw std::invalid_argument("grad_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -2422,7 +2734,10 @@ void kernel_gaussian_gradient(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 
     gradient_one_A_against_B(
@@ -2461,7 +2776,8 @@ static void kernel_gaussian_jacobian_impl(
     int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
     double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    JacStoreLayout layout, double *out
+    JacStoreLayout layout, double *out, bool use_alchemy = false,
+    double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 ) {
     if (!out) throw std::invalid_argument("jacobian output is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -2507,7 +2823,10 @@ static void kernel_gaussian_jacobian_impl(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 
     // One OpenMP level only. Prefer B-parallel when the partner set is large
@@ -2582,7 +2901,7 @@ void kernel_gaussian_jacobian(
     int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
     double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    double *J_out
+    double *J_out, bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_impl(
         coords_A_list,
@@ -2604,7 +2923,10 @@ void kernel_gaussian_jacobian(
         fourier_order,
         use_atm,
         JacStoreLayout::RowsAreCoords,
-        J_out
+        J_out,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 
@@ -2614,7 +2936,7 @@ void kernel_gaussian_jacobian_t(
     int nm2, int max_size2, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
     double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    double *K_jt_out
+    double *K_jt_out, bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     kernel_gaussian_jacobian_impl(
         coords_A_list,
@@ -2636,7 +2958,10 @@ void kernel_gaussian_jacobian_t(
         fourier_order,
         use_atm,
         JacStoreLayout::ColsAreCoords,
-        K_jt_out
+        K_jt_out,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 }
 
@@ -2645,10 +2970,11 @@ void kernel_gaussian_jacobian_t(
 //
 // Computes H[α*3+μ, β*3+ν] = d²s(i,j) / dR_A[α,μ] dR_B[β,ν]
 //
-// Restriction: cut_function == 1 everywhere (cut_distance=1e6 or cut_start>=1)
-// and use_atm == false.  Under these conditions V(p,q) = ksi_A[p]*ksi_B[q]*d_scale
-// + angular_A[p]*angular_B[q]*a_scale, so d²V/dR_A dR_B = 0 and only three
-// terms survive (see plan):
+// Restriction: cut_function == 1 everywhere (cut_distance=1e6 or cut_start>=1).
+// ATM is supported via AtomDataGrad (first derivatives of atm in three-body
+// Fourier). Under the inactive-cutoff factorization,
+// V(p,q) = ksi_A[p]*ksi_B[q]*d_scale + angular_A[p]*angular_B[q]*a_scale, so
+// d²V/dR_A dR_B = 0 and only three terms survive:
 //
 //   Term 1: dG/dr_p * d(r_p)/dR_A * dV/dR_B
 //   Term 2: dG/dr_q * d(r_q)/dR_B * dV/dR_A
@@ -2670,13 +2996,17 @@ static void scalar_noalchemy_cross_hessian(
     const AtomDataGrad &adi, const double *dri_i, const AtomDataGrad &adj, const double *dri_j,
     double d_width, int order, int pmax, const double *s_prefactor, double distance_scale,
     double angular_scale, int n_atoms_A, int n_atoms_B,
-    std::vector<double> &hess  // (n_atoms_A*3, n_atoms_B*3) accumulated
+    std::vector<double> &hess,  // (n_atoms_A*3, n_atoms_B*3) accumulated
+    bool use_alchemy = false, const double *pd = nullptr, int emax = 0,
+    const int *idx_to_z = nullptr
 ) {
-    // Early exit: central atoms must have the same nuclear charge (matches Fortran
-    // scalar_noalchemy)
+    // No-alchemy: central atoms must have the same nuclear charge (matches Fortran
+    // scalar_noalchemy). Alchemy: scale by pd(Zc1,Zc2) (R-independent).
     const int Z1 = static_cast<int>(x1_chan[1 * max_size1 + 0]);
     const int Z2 = static_cast<int>(x2_chan[1 * max_size2 + 0]);
-    if (Z1 != Z2) return;
+    const double pd_central =
+        use_alchemy ? pd_lookup(pd, emax, Z1, Z2) : (Z1 == Z2 ? 1.0 : 0.0);
+    if (pd_central == 0.0) return;
 
     const double inv_width = -1.0 / (4.0 * d_width * d_width);  // = γ
     const double maxgausdist2 = (8.0 * d_width) * (8.0 * d_width);
@@ -2772,6 +3102,50 @@ static void scalar_noalchemy_cross_hessian(
         }
     }
 
+    // Alchemy: cross element channels of the angular term with pd(Zp1,Zp2). The channel
+    // mixing is linear and acts only on the B side:
+    //   Bmix[(m,p1,t)] = sum_p2 pd(Zp1,Zp2) * B[(m,p2,t)]
+    // (wc depends only on m, so applying it before/after mixing is equivalent). Since
+    // V, dV/dR_A use Bvec_w and dV/dR_B, d2V use BrT, mixing those two arrays suffices.
+    if (use_alchemy && pmax > 1) {
+        thread_local std::vector<double> PP, tmp_bw, tmp_bt;
+        PP.assign(static_cast<std::size_t>(pmax) * pmax, 0.0);
+        for (int p1 = 0; p1 < pmax; ++p1)
+            for (int p2 = 0; p2 < pmax; ++p2)
+                PP[static_cast<std::size_t>(p1) * pmax + p2] =
+                    pd_lookup(pd, emax, idx_to_z[p1], idx_to_z[p2]);
+        tmp_bw.resize(static_cast<std::size_t>(C));
+        tmp_bt.resize(static_cast<std::size_t>(C) * na3B);
+        for (int q = 1; q < n2; ++q) {
+            double *bw = &Bvec_w[static_cast<std::size_t>(q) * C];
+            double *bt = &BrT[static_cast<std::size_t>(q) * C * na3B];
+            std::copy(bw, bw + C, tmp_bw.begin());
+            std::copy(bt, bt + static_cast<std::size_t>(C) * na3B, tmp_bt.begin());
+            for (int m = 0; m < order; ++m) {
+                for (int t = 0; t < 2; ++t) {
+                    for (int p1 = 0; p1 < pmax; ++p1) {
+                        const int k1 = 1 + 2 * (m * pmax + p1) + t;
+                        double s = 0.0;
+                        double *dst = bt + static_cast<std::size_t>(k1) * na3B;
+                        for (int bnu = 0; bnu < na3B; ++bnu)
+                            dst[bnu] = 0.0;
+                        for (int p2 = 0; p2 < pmax; ++p2) {
+                            const double w = PP[static_cast<std::size_t>(p1) * pmax + p2];
+                            if (w == 0.0) continue;
+                            const int k2 = 1 + 2 * (m * pmax + p2) + t;
+                            s += w * tmp_bw[static_cast<std::size_t>(k2)];
+                            const double *src = &tmp_bt[static_cast<std::size_t>(k2) * na3B];
+#pragma omp simd
+                            for (int bnu = 0; bnu < na3B; ++bnu)
+                                dst[bnu] += w * src[bnu];
+                        }
+                        bw[k1] = s;
+                    }
+                }
+            }
+        }
+    }
+
     dV_dRA.resize(na3A);
     dV_dRB.resize(na3B);
     double *const hess_p = hess.data();
@@ -2784,14 +3158,18 @@ static void scalar_noalchemy_cross_hessian(
 
         for (int q = 1; q < n2; ++q) {
             const int Zq = static_cast<int>(x2_chan[1 * max_size2 + q]);
-            if (Zp != Zq) continue;
+            const double pd_pq =
+                use_alchemy ? pd_lookup(pd, emax, Zp, Zq) : (Zp == Zq ? 1.0 : 0.0);
+            if (pd_pq == 0.0) continue;
 
             const double rq = x2_chan[q];
             const double dr = rp - rq;
             const double r2 = dr * dr;
             if (r2 >= maxgausdist2) continue;
 
-            const double G = std::exp(r2 * inv_width);
+            // Fold pd(Zp,Zq) and the central pd (both R-independent) into G; every hess
+            // term is linear in G, so this equals scaling the final result by pd_central.
+            const double G = std::exp(r2 * inv_width) * pd_pq * pd_central;
             const double dG_drp = G * 2.0 * dr * inv_width;   //  G * 2γδ
             const double dG_drq = -G * 2.0 * dr * inv_width;  // -G * 2γδ
             // d²G / drp drq = G * 2γ * (2γδ² - 1)
@@ -2880,6 +3258,11 @@ struct HessSharedParams {
     double inv_sigma2 = 0.0;
     double two_body_width = 0.0;
     int fourier_order = 0;
+    // Periodic-table alchemy (empty / unused when use_alchemy == false).
+    std::vector<double> pd;
+    std::vector<int> idx_to_z;
+    int emax = 0;
+    bool use_alchemy = false;
 };
 
 static void build_dri_from_ad(
@@ -3001,7 +3384,11 @@ static HessMolSide build_hess_mol_side(
             P.true_distance_scale,
             P.true_angular_scale,
             n_atoms,
-            ds_tmp
+            ds_tmp,
+            P.use_alchemy,
+            P.use_alchemy ? P.pd.data() : nullptr,
+            P.emax,
+            P.use_alchemy ? P.idx_to_z.data() : nullptr
         );
         S.dss[static_cast<std::size_t>(i)].resize(static_cast<std::size_t>(na3));
         for (int q = 0; q < na3; ++q)
@@ -3013,9 +3400,12 @@ static HessMolSide build_hess_mol_side(
 
 static HessSharedParams build_hess_shared(
     const std::vector<std::vector<int>> &z_lists, double sigma, double two_body_scaling,
-    double three_body_scaling, double three_body_width, double two_body_width, int fourier_order
+    double three_body_scaling, double three_body_width, double two_body_width, int fourier_order,
+    bool use_alchemy = false, double alchemy_period_width = 1.6, double alchemy_group_width = 1.6
 ) {
     HessSharedParams P;
+    P.use_alchemy = use_alchemy;
+    P.emax = kAlchemyEmaxDefault;
     P.true_distance_scale = two_body_scaling / 16.0;
     P.true_angular_scale = three_body_scaling / std::sqrt(8.0);
     P.inv_sigma2 = 0.5 / (sigma * sigma);
@@ -3034,6 +3424,10 @@ static HessSharedParams build_hess_shared(
         }
     }
     P.pmax = static_cast<int>(present.size());
+    P.idx_to_z = invert_z_to_idx(P.z_to_idx, P.pmax);
+    if (use_alchemy) {
+        P.pd = build_periodic_table_pd(P.emax, alchemy_period_width, alchemy_group_width);
+    }
 
     const double ang_norm2 = get_angular_norm2(three_body_width);
     const double pi = 4.0 * std::atan(1.0);
@@ -3068,6 +3462,8 @@ static void hessian_pair_from_sides(
     if (Hij.size() < hess_size) Hij.resize(hess_size);
 
     const bool phase = hess_phase_enabled();
+    const double *pd_ptr = P.use_alchemy ? P.pd.data() : nullptr;
+    const int *idx_to_z_ptr = P.use_alchemy ? P.idx_to_z.data() : nullptr;
 
     auto add_mismatched_outer = [&](int i, int j) {
         const double t0 = phase ? hess_now() : 0.0;
@@ -3122,7 +3518,11 @@ static void hessian_pair_from_sides(
             P.true_distance_scale,
             P.true_angular_scale,
             A.n_atoms,
-            dsij_dRA
+            dsij_dRA,
+            P.use_alchemy,
+            pd_ptr,
+            P.emax,
+            idx_to_z_ptr
         );
         scalar_noalchemy_and_grad_full(
             x2_chan,
@@ -3148,7 +3548,11 @@ static void hessian_pair_from_sides(
             P.true_distance_scale,
             P.true_angular_scale,
             B.n_atoms,
-            dsij_dRB
+            dsij_dRB,
+            P.use_alchemy,
+            pd_ptr,
+            P.emax,
+            idx_to_z_ptr
         );
         const double t_g1 = phase ? hess_now() : 0.0;
 
@@ -3178,7 +3582,11 @@ static void hessian_pair_from_sides(
             P.true_angular_scale,
             A.n_atoms,
             B.n_atoms,
-            Hij
+            Hij,
+            P.use_alchemy,
+            pd_ptr,
+            P.emax,
+            idx_to_z_ptr
         );
         const double t_x1 = phase ? hess_now() : 0.0;
 
@@ -3199,6 +3607,15 @@ static void hessian_pair_from_sides(
             g_hess_phase.n_matched.fetch_add(1, std::memory_order_relaxed);
         }
     };
+
+    if (P.use_alchemy) {
+        // Alchemy: every central pair (i,j) goes through the full cross-hessian
+        // (pd_central == 0 pairs reduce to the outer-product term internally).
+        for (int i = 0; i < A.n_atoms; ++i)
+            for (int j = 0; j < B.n_atoms; ++j)
+                add_matched_cross(i, j);
+        return;
+    }
 
     for (int za : A.present_z) {
         const std::vector<int> &atoms_A = A.atoms_by_z[static_cast<std::size_t>(za)];
@@ -3229,7 +3646,8 @@ void kernel_gaussian_hessian(
     int n_atoms_B, double sigma, double two_body_scaling, double two_body_width,
     double two_body_power, double three_body_scaling, double three_body_width,
     double three_body_power, double cut_start, double cut_distance, int fourier_order, bool use_atm,
-    double *hess_out  // (n_atoms_A*3, n_atoms_B*3) row-major OUT
+    double *hess_out,  // (n_atoms_A*3, n_atoms_B*3) row-major OUT
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     if (!hess_out) throw std::invalid_argument("hess_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3245,7 +3663,10 @@ void kernel_gaussian_hessian(
         three_body_scaling,
         three_body_width,
         two_body_width,
-        fourier_order
+        fourier_order,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 
     // Single-pair call: parallelise atom precompute on each side.
@@ -3292,7 +3713,8 @@ void kernel_gaussian_hessian_rect(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *H_out  // (D_A, D_B) row-major OUT
+    double *H_out,  // (D_A, D_B) row-major OUT
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     if (!H_out) throw std::invalid_argument("H_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3327,7 +3749,10 @@ void kernel_gaussian_hessian_rect(
         three_body_scaling,
         three_body_width,
         two_body_width,
-        fourier_order
+        fourier_order,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
     if (P.pmax == 0) return;
 
@@ -3407,7 +3832,8 @@ void kernel_gaussian_hessian_symm_blocks(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *H_out  // (D, D) row-major OUT
+    double *H_out,  // (D, D) row-major OUT
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     if (!H_out) throw std::invalid_argument("H_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3432,7 +3858,10 @@ void kernel_gaussian_hessian_symm_blocks(
         three_body_scaling,
         three_body_width,
         two_body_width,
-        fourier_order
+        fourier_order,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
     if (P.pmax == 0) return;
 
@@ -3514,7 +3943,8 @@ void kernel_gaussian_hessian_symm_rfp_blocks(
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
     int fourier_order, bool use_atm,
-    double *rfp_out  // D*(D+1)/2 OUT
+    double *rfp_out,  // D*(D+1)/2 OUT
+    bool use_alchemy, double alchemy_period_width, double alchemy_group_width
 ) {
     if (!rfp_out) throw std::invalid_argument("rfp_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3539,7 +3969,10 @@ void kernel_gaussian_hessian_symm_rfp_blocks(
         three_body_scaling,
         three_body_width,
         two_body_width,
-        fourier_order
+        fourier_order,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
     if (P.pmax == 0) return;
 
@@ -3630,7 +4063,8 @@ void kernel_gaussian_hessian_matvec(
     const std::vector<std::vector<int>> &z_B_list, const double *alpha_F, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *F_out
+    double cut_distance, int fourier_order, bool use_atm, double *F_out, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (!F_out) throw std::invalid_argument("F_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3665,7 +4099,10 @@ void kernel_gaussian_hessian_matvec(
         three_body_scaling,
         three_body_width,
         two_body_width,
-        fourier_order
+        fourier_order,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
     if (P.pmax == 0) return;
 
@@ -3743,7 +4180,8 @@ void kernel_gaussian_jacobian_matvec(
     int nm2, int max_size2, const double *alpha_E, double sigma, double two_body_scaling,
     double two_body_width, double two_body_power, double three_body_scaling,
     double three_body_width, double three_body_power, double cut_start, double cut_distance,
-    int fourier_order, bool use_atm, double *F_out
+    int fourier_order, bool use_atm, double *F_out, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (!F_out) throw std::invalid_argument("F_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3782,7 +4220,10 @@ void kernel_gaussian_jacobian_matvec(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
 
 #ifdef _OPENMP
@@ -3845,7 +4286,8 @@ void kernel_gaussian_jacobian_t_matvec(
     const int *nn_A, int nm_A, int max_size_A, const double *alpha_F, double sigma,
     double two_body_scaling, double two_body_width, double two_body_power,
     double three_body_scaling, double three_body_width, double three_body_power, double cut_start,
-    double cut_distance, int fourier_order, bool use_atm, double *E_out
+    double cut_distance, int fourier_order, bool use_atm, double *E_out, bool use_alchemy,
+    double alchemy_period_width, double alchemy_group_width
 ) {
     if (!E_out) throw std::invalid_argument("E_out is null");
     if (sigma <= 0.0) throw std::invalid_argument("sigma must be > 0");
@@ -3861,6 +4303,7 @@ void kernel_gaussian_jacobian_t_matvec(
         off_B[static_cast<std::size_t>(j) + 1] = off_B[static_cast<std::size_t>(j)] + nb * 3;
     }
     const int D_B = off_B[static_cast<std::size_t>(N_B)];
+    (void)D_B;
 
     for (int j = 0; j < N_B; ++j) {
         const int nb = static_cast<int>(z_B_list[static_cast<std::size_t>(j)].size());
@@ -3887,7 +4330,10 @@ void kernel_gaussian_jacobian_t_matvec(
             cut_distance,
             fourier_order,
             use_atm,
-            grad.data()
+            grad.data(),
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
 
         for (int i = 0; i < nm_A; ++i) {

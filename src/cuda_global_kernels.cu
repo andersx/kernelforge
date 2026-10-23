@@ -433,7 +433,8 @@ __global__ static void apply_gaussian_rfp_kernel(
 //           else     →  i*N + i
 //   Even N: i >= nk  →  (i-nk)*(N+2)
 //           else     →  i*(N+2) + 1
-__global__ static void add_l2_diag_rfp_kernel(float *K_rfp, float l2, int N)
+template <typename T>
+__global__ static void add_l2_diag_rfp_kernel(T *K_rfp, T l2, int N)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= N) return;
@@ -459,7 +460,8 @@ __global__ static void add_l2_diag_rfp_kernel(float *K_rfp, float l2, int N)
 
 // add_l2_diag_rfp_upper_kernel
 // TRANSR=N, UPLO=U diagonal indices (matches kf::rfp_index_upper_N / math.cpp).
-__global__ static void add_l2_diag_rfp_upper_kernel(float *K_rfp, float l2, int N)
+template <typename T>
+__global__ static void add_l2_diag_rfp_upper_kernel(T *K_rfp, T l2, int N)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     if (j >= N) return;
@@ -851,9 +853,9 @@ void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info, bool uplo_upper)
     /* Add l2 to diagonal */
     if (l2 != 0.0f) {
         if (uplo_upper)
-            add_l2_diag_rfp_upper_kernel<<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+            add_l2_diag_rfp_upper_kernel<float><<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
         else
-            add_l2_diag_rfp_kernel<<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+            add_l2_diag_rfp_kernel<float><<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
     }
 
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -863,6 +865,28 @@ void rfp_potrf_cu(float *d_K_rfp, int N, float l2, int *info, bool uplo_upper)
 
     /* Cholesky factorisation in-place */
     CURFP_CHECK(curfpSpftrf(s_curfp,
+        CURFP_OP_N, /* transr = N */
+        uplo,
+        N, d_K_rfp, info));
+}
+
+void rfp_potrf_cu(double *d_K_rfp, int N, double l2, int *info, bool uplo_upper)
+{
+    ensure_curfp();
+
+    if (l2 != 0.0) {
+        if (uplo_upper)
+            add_l2_diag_rfp_upper_kernel<double><<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+        else
+            add_l2_diag_rfp_kernel<double><<<(N + 255) / 256, 256>>>(d_K_rfp, l2, N);
+    }
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    const curfpFillMode_t uplo =
+        uplo_upper ? CURFP_FILL_MODE_UPPER : CURFP_FILL_MODE_LOWER;
+
+    CURFP_CHECK(curfpDpftrf(s_curfp,
         CURFP_OP_N, /* transr = N */
         uplo,
         N, d_K_rfp, info));
@@ -886,6 +910,19 @@ void rfp_potrs_cu(
     const curfpFillMode_t uplo =
         uplo_upper ? CURFP_FILL_MODE_UPPER : CURFP_FILL_MODE_LOWER;
     CURFP_CHECK(curfpSpftrs(s_curfp,
+        CURFP_OP_N, /* transr = N */
+        uplo,
+        N, nrhs, d_L_rfp, d_B, N));
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+void rfp_potrs_cu(
+    const double *d_L_rfp, double *d_B, int N, int nrhs, bool uplo_upper)
+{
+    ensure_curfp();
+    const curfpFillMode_t uplo =
+        uplo_upper ? CURFP_FILL_MODE_UPPER : CURFP_FILL_MODE_LOWER;
+    CURFP_CHECK(curfpDpftrs(s_curfp,
         CURFP_OP_N, /* transr = N */
         uplo,
         N, nrhs, d_L_rfp, d_B, N));

@@ -322,7 +322,8 @@ class CudaGlobalRFFModel(BaseModel):
         self,
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
-        compute_energy: bool = True,  # E+F computed together; param kept for API compat
+        compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         _require_cuda()
         import time as _time
@@ -343,19 +344,26 @@ class CudaGlobalRFFModel(BaseModel):
             )
             raise NotImplementedError(msg)
 
-        if self.training_mode_ in ("force_only", "energy_and_force"):
+        need_gradients = compute_forces and self.training_mode_ in (
+            "force_only",
+            "energy_and_force",
+        )
+        if need_gradients:
             X_cuda, dX_cuda = _compute_invdist_cuda(coords_list, self.eps, with_gradients=True)
             t0 = _tp("build invdist repr + jacobian (GPU)", t0)
         else:
             X_cuda = _compute_invdist_cuda(coords_list, self.eps)
             dX_cuda = None
             t0 = _tp("build invdist repr (GPU)", t0)
-        E_cuda = _rff_ext.rff_predict_energy(  # type: ignore[union-attr]
-            X_cuda, self._W_cuda, self._b_cuda, self._weights_cuda, int(self.chunk_size)
-        )
-        t0 = _tp("rff_predict_energy (GPU)", t0)
-        E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
-        if self.training_mode_ in ("force_only", "energy_and_force"):
+        if compute_energy:
+            E_cuda = _rff_ext.rff_predict_energy(  # type: ignore[union-attr]
+                X_cuda, self._W_cuda, self._b_cuda, self._weights_cuda, int(self.chunk_size)
+            )
+            t0 = _tp("rff_predict_energy (GPU)", t0)
+            E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
+        else:
+            E_pred = np.zeros(len(coords_list), dtype=np.float64)
+        if need_gradients:
             F_cuda = _rff_ext.rff_predict_force(  # type: ignore[union-attr]
                 X_cuda,
                 dX_cuda,
@@ -367,7 +375,7 @@ class CudaGlobalRFFModel(BaseModel):
             t0 = _tp("rff_predict_force (GPU)", t0)
             F_pred = F_cuda.cpu().numpy().astype(np.float64)
         else:
-            F_pred = np.zeros(0, dtype=np.float64)
+            F_pred = np.empty(0, dtype=np.float64)
         t0 = _tp("D2H predictions", t0)
         return E_pred, F_pred
 

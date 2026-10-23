@@ -144,4 +144,11 @@ ignore = [
 # Optional deps not present in CI / non-CUDA environments.
 # Treat them as Any so unresolved-import errors are suppressed unconditionally,
 # without needing per-line suppression comments.
-replace-imports-with-any = ["torch", "torch.**", "ase", "ase.**"]
+replace-imports-with-any = [
+    "torch",
+    "torch.**",
+    "ase",
+    "ase.**",
+    "qmllib",
+    "qmllib.**",
+]

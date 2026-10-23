@@ -772,6 +772,7 @@ class CudaLocalRFFModel(BaseModel):
         coords_list: list[NDArray[np.float64]],
         z_list: list[NDArray[np.int32]],
         compute_energy: bool = True,
+        compute_forces: bool = True,
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         _require_cuda()
         import time as _time
@@ -785,7 +786,10 @@ class CudaLocalRFFModel(BaseModel):
             return _time.perf_counter()
 
         t0 = _time.perf_counter()
-        need_gradients = self.training_mode_ in ("force_only", "energy_and_force")
+        need_gradients = compute_forces and self.training_mode_ in (
+            "force_only",
+            "energy_and_force",
+        )
         X_cuda, dX_cuda, Q_idx_cuda, _Q_idx_np, N_np = _compute_fchl19_cuda_rff(
             coords_list,
             z_list,
@@ -815,7 +819,7 @@ class CudaLocalRFFModel(BaseModel):
             E_pred: NDArray[np.float64] = E_cuda.cpu().numpy().astype(np.float64)
         else:
             E_pred = np.zeros(len(coords_list), dtype=np.float64)
-        if self.training_mode_ in ("force_only", "energy_and_force"):
+        if need_gradients:
             if dX_cuda is None:
                 msg = "dX_cuda is None in force-capable predict — internal error"
                 raise RuntimeError(msg)
@@ -842,8 +846,11 @@ class CudaLocalRFFModel(BaseModel):
             )
             t0 = _tp("rff_predict_force_elemental (GPU)", t0)
             F_pred = F_cuda.cpu().numpy().astype(np.float64)
-        else:
+        elif compute_forces:
+            # Energy-only: zero placeholder for default callers (legacy shape contract).
             F_pred = np.zeros(int(np.sum(N_np) * 3), dtype=np.float64)
+        else:
+            F_pred = np.empty(0, dtype=np.float64)
         t0 = _tp("D2H predictions", t0)
         return E_pred, F_pred
 

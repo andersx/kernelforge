@@ -20,6 +20,24 @@ namespace {
 
 constexpr int kFullScatterBlock = 256;
 
+template <typename T>
+struct FullScratch {
+    T *EE = nullptr;
+    T *FE = nullptr;
+    T *EF = nullptr;
+    T *FF = nullptr;
+    size_t EE_cap = 0;
+    size_t FE_cap = 0;
+    size_t EF_cap = 0;
+    size_t FF_cap = 0;
+};
+
+template <typename T>
+FullScratch<T> &full_scratch() {
+    static FullScratch<T> s;
+    return s;
+}
+
 // Device RFP index — matches kf::rfp_index_upper_N (TRANSR='N', UPLO='U').
 __device__ inline long long full_rfp_index_upper_N(int n, int i, int j) {
     const int k = n / 2;
@@ -180,6 +198,9 @@ struct FullParams {
     double cut_distance;
     int fourier_order;
     bool use_atm;
+    bool use_alchemy;
+    double alchemy_period_width;
+    double alchemy_group_width;
 };
 
 template <typename T>
@@ -212,14 +233,11 @@ void kernel_gaussian_full_cu_impl(
     const size_t full_n = static_cast<size_t>(full_rows) * static_cast<size_t>(full_cols);
     CUDA_CHECK(cudaMemset(d_K_out, 0, full_n * sizeof(T)));
 
-    T *d_EE = nullptr;
-    T *d_FE = nullptr;
-    T *d_EF = nullptr;
-    T *d_FF = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_EE, static_cast<size_t>(nm1) * nm2 * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_FE, static_cast<size_t>(d_a_rows) * nm2 * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_EF, static_cast<size_t>(nm1) * d_b_cols * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_FF, static_cast<size_t>(d_a_rows) * d_b_cols * sizeof(T)));
+    FullScratch<T> &sc = full_scratch<T>();
+    ensure_capacity(&sc.EE, &sc.EE_cap, static_cast<size_t>(nm1) * nm2);
+    ensure_capacity(&sc.FE, &sc.FE_cap, static_cast<size_t>(d_a_rows) * nm2);
+    ensure_capacity(&sc.EF, &sc.EF_cap, static_cast<size_t>(nm1) * d_b_cols);
+    ensure_capacity(&sc.FF, &sc.FF_cap, static_cast<size_t>(d_a_rows) * d_b_cols);
 
     const T sigma = static_cast<T>(P.sigma);
     const T tbs = static_cast<T>(P.two_body_scaling);
@@ -232,34 +250,29 @@ void kernel_gaussian_full_cu_impl(
     const T cd = static_cast<T>(P.cut_distance);
 
     kernel_gaussian_rect_cu(
-        d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, d_EE, sigma, nm1, nm2, max_size1, max_size2, tbs, tbw,
-        tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, sc.EE, sigma, nm1, nm2, max_size1, max_size2, tbs, tbw,
+        tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_jacobian_cu(
-        d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, d_coords1, d_z1, d_FE, sigma, nm1, nm2, max_size1,
-        max_size2, d_a_rows, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, d_coords1, d_z1, sc.FE, sigma, nm1, nm2, max_size1,
+        max_size2, d_a_rows, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     // EF: differentiate B against fixed repr A → jac_t(query=B, fixed=A).
     kernel_gaussian_jacobian_t_cu(
-        d_x2, d_x1, d_n2, d_n1, d_nn2, d_nn1, d_coords2, d_z2, d_EF, sigma, nm2, nm1, max_size2,
-        max_size1, d_b_cols, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        d_x2, d_x1, d_n2, d_n1, d_nn2, d_nn1, d_coords2, d_z2, sc.EF, sigma, nm2, nm1, max_size2,
+        max_size1, d_b_cols, tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_hessian_cu(
-        d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, d_coords1, d_z1, d_coords2, d_z2, d_FF, sigma, nm1,
+        d_x1, d_x2, d_n1, d_n2, d_nn1, d_nn2, d_coords1, d_z1, d_coords2, d_z2, sc.FF, sigma, nm1,
         nm2, max_size1, max_size2, d_a_rows, d_b_cols, tbs, tbw, tbp, ths, thw, thp, cs, cd,
-        P.fourier_order, P.use_atm
+        P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
 
-    launch_scatter(d_EE, d_K_out, nm1, nm2, full_cols, 0, 0);
+    launch_scatter(sc.EE, d_K_out, nm1, nm2, full_cols, 0, 0);
     // EF from jac_t: shape (nm1, d_b_cols) — rows are fixed molecules, cols are B coords.
-    launch_scatter(d_EF, d_K_out, nm1, d_b_cols, full_cols, 0, nm2);
-    launch_scatter(d_FE, d_K_out, d_a_rows, nm2, full_cols, nm1, 0);
-    launch_scatter(d_FF, d_K_out, d_a_rows, d_b_cols, full_cols, nm1, nm2);
-
-    CUDA_CHECK(cudaFree(d_EE));
-    CUDA_CHECK(cudaFree(d_FE));
-    CUDA_CHECK(cudaFree(d_EF));
-    CUDA_CHECK(cudaFree(d_FF));
+    launch_scatter(sc.EF, d_K_out, nm1, d_b_cols, full_cols, 0, nm2);
+    launch_scatter(sc.FE, d_K_out, d_a_rows, nm2, full_cols, nm1, 0);
+    launch_scatter(sc.FF, d_K_out, d_a_rows, d_b_cols, full_cols, nm1, nm2);
 }
 
 template <typename T>
@@ -282,12 +295,10 @@ void kernel_gaussian_full_symm_cu_impl(
     const int BIG = nm + D;
     CUDA_CHECK(cudaMemset(d_K_out, 0, static_cast<size_t>(BIG) * BIG * sizeof(T)));
 
-    T *d_EE = nullptr;
-    T *d_FE = nullptr;
-    T *d_FF = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_EE, static_cast<size_t>(nm) * nm * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_FE, static_cast<size_t>(D) * nm * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_FF, static_cast<size_t>(D) * D * sizeof(T)));
+    FullScratch<T> &sc = full_scratch<T>();
+    ensure_capacity(&sc.EE, &sc.EE_cap, static_cast<size_t>(nm) * nm);
+    ensure_capacity(&sc.FE, &sc.FE_cap, static_cast<size_t>(D) * nm);
+    ensure_capacity(&sc.FF, &sc.FF_cap, static_cast<size_t>(D) * D);
 
     const T sigma = static_cast<T>(P.sigma);
     const T tbs = static_cast<T>(P.two_body_scaling);
@@ -300,32 +311,28 @@ void kernel_gaussian_full_symm_cu_impl(
     const T cd = static_cast<T>(P.cut_distance);
 
     kernel_gaussian_symm_cu(
-        d_x, d_n, d_nn, d_EE, sigma, nm, max_size, tbs, tbw, tbp, ths, thw, thp, cs, cd,
-        P.fourier_order, P.use_atm
+        d_x, d_n, d_nn, sc.EE, sigma, nm, max_size, tbs, tbw, tbp, ths, thw, thp, cs, cd,
+        P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_jacobian_cu(
-        d_x, d_x, d_n, d_n, d_nn, d_nn, d_coords, d_z, d_FE, sigma, nm, nm, max_size, max_size, D,
-        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        d_x, d_x, d_n, d_n, d_nn, d_nn, d_coords, d_z, sc.FE, sigma, nm, nm, max_size, max_size, D,
+        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_hessian_symm_cu(
-        d_x, d_n, d_nn, d_coords, d_z, d_FF, sigma, nm, max_size, D, tbs, tbw, tbp, ths, thw, thp,
-        cs, cd, P.fourier_order, P.use_atm
+        d_x, d_n, d_nn, d_coords, d_z, sc.FF, sigma, nm, max_size, D, tbs, tbw, tbp, ths, thw, thp,
+        cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
 
-    launch_scatter(d_EE, d_K_out, nm, nm, BIG, 0, 0);
+    launch_scatter(sc.EE, d_K_out, nm, nm, BIG, 0, 0);
 
     {
         const long long n = static_cast<long long>(D) * nm;
         const int grid = static_cast<int>((n + kFullScatterBlock - 1) / kFullScatterBlock);
-        full_scatter_jac_and_mirror_kernel<<<grid, kFullScatterBlock>>>(d_FE, d_K_out, D, nm, BIG);
+        full_scatter_jac_and_mirror_kernel<<<grid, kFullScatterBlock>>>(sc.FE, d_K_out, D, nm, BIG);
         CUDA_CHECK(cudaGetLastError());
     }
 
-    launch_scatter(d_FF, d_K_out, D, D, BIG, nm, nm);
-
-    CUDA_CHECK(cudaFree(d_EE));
-    CUDA_CHECK(cudaFree(d_FE));
-    CUDA_CHECK(cudaFree(d_FF));
+    launch_scatter(sc.FF, d_K_out, D, D, BIG, nm, nm);
 }
 
 template <typename T>
@@ -349,12 +356,10 @@ void kernel_gaussian_full_symm_rfp_cu_impl(
     const size_t rfp_len = static_cast<size_t>(BIG) * (BIG + 1) / 2;
     CUDA_CHECK(cudaMemset(d_rfp_out, 0, rfp_len * sizeof(T)));
 
-    T *d_EE = nullptr;
-    T *d_FE = nullptr;
-    T *d_FF = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_EE, static_cast<size_t>(nm) * nm * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_FE, static_cast<size_t>(D) * nm * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_FF, static_cast<size_t>(D) * D * sizeof(T)));
+    FullScratch<T> &sc = full_scratch<T>();
+    ensure_capacity(&sc.EE, &sc.EE_cap, static_cast<size_t>(nm) * nm);
+    ensure_capacity(&sc.FE, &sc.FE_cap, static_cast<size_t>(D) * nm);
+    ensure_capacity(&sc.FF, &sc.FF_cap, static_cast<size_t>(D) * D);
 
     const T sigma = static_cast<T>(P.sigma);
     const T tbs = static_cast<T>(P.two_body_scaling);
@@ -367,40 +372,36 @@ void kernel_gaussian_full_symm_rfp_cu_impl(
     const T cd = static_cast<T>(P.cut_distance);
 
     kernel_gaussian_symm_cu(
-        d_x, d_n, d_nn, d_EE, sigma, nm, max_size, tbs, tbw, tbp, ths, thw, thp, cs, cd,
-        P.fourier_order, P.use_atm
+        d_x, d_n, d_nn, sc.EE, sigma, nm, max_size, tbs, tbw, tbp, ths, thw, thp, cs, cd,
+        P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_jacobian_cu(
-        d_x, d_x, d_n, d_n, d_nn, d_nn, d_coords, d_z, d_FE, sigma, nm, nm, max_size, max_size, D,
-        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm
+        d_x, d_x, d_n, d_n, d_nn, d_nn, d_coords, d_z, sc.FE, sigma, nm, nm, max_size, max_size, D,
+        tbs, tbw, tbp, ths, thw, thp, cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
     kernel_gaussian_hessian_symm_cu(
-        d_x, d_n, d_nn, d_coords, d_z, d_FF, sigma, nm, max_size, D, tbs, tbw, tbp, ths, thw, thp,
-        cs, cd, P.fourier_order, P.use_atm
+        d_x, d_n, d_nn, d_coords, d_z, sc.FF, sigma, nm, max_size, D, tbs, tbw, tbp, ths, thw, thp,
+        cs, cd, P.fourier_order, P.use_atm, P.use_alchemy, P.alchemy_period_width, P.alchemy_group_width
     );
 
     {
         const long long n = static_cast<long long>(nm) * (nm + 1) / 2;
         const int grid = static_cast<int>((n + kFullScatterBlock - 1) / kFullScatterBlock);
-        full_pack_scalar_rfp_kernel<<<grid, kFullScatterBlock>>>(d_EE, d_rfp_out, nm, BIG);
+        full_pack_scalar_rfp_kernel<<<grid, kFullScatterBlock>>>(sc.EE, d_rfp_out, nm, BIG);
         CUDA_CHECK(cudaGetLastError());
     }
     {
         const long long n = static_cast<long long>(D) * nm;
         const int grid = static_cast<int>((n + kFullScatterBlock - 1) / kFullScatterBlock);
-        full_pack_jac_rfp_kernel<<<grid, kFullScatterBlock>>>(d_FE, d_rfp_out, D, nm, BIG);
+        full_pack_jac_rfp_kernel<<<grid, kFullScatterBlock>>>(sc.FE, d_rfp_out, D, nm, BIG);
         CUDA_CHECK(cudaGetLastError());
     }
     {
         const long long n = static_cast<long long>(D) * (D + 1) / 2;
         const int grid = static_cast<int>((n + kFullScatterBlock - 1) / kFullScatterBlock);
-        full_pack_hess_rfp_kernel<<<grid, kFullScatterBlock>>>(d_FF, d_rfp_out, D, nm, BIG);
+        full_pack_hess_rfp_kernel<<<grid, kFullScatterBlock>>>(sc.FF, d_rfp_out, D, nm, BIG);
         CUDA_CHECK(cudaGetLastError());
     }
-
-    CUDA_CHECK(cudaFree(d_EE));
-    CUDA_CHECK(cudaFree(d_FE));
-    CUDA_CHECK(cudaFree(d_FF));
 }
 
 FullParams make_params(
@@ -414,7 +415,10 @@ FullParams make_params(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     return FullParams{
         sigma,
@@ -427,7 +431,10 @@ FullParams make_params(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     };
 }
 
@@ -461,7 +468,10 @@ void kernel_gaussian_full_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_cu_impl(
         d_x1,
@@ -492,7 +502,10 @@ void kernel_gaussian_full_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -525,7 +538,10 @@ void kernel_gaussian_full_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_cu_impl(
         d_x1,
@@ -556,7 +572,10 @@ void kernel_gaussian_full_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -581,7 +600,10 @@ void kernel_gaussian_full_symm_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_cu_impl(
         d_x,
@@ -604,7 +626,10 @@ void kernel_gaussian_full_symm_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -629,7 +654,10 @@ void kernel_gaussian_full_symm_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_cu_impl(
         d_x,
@@ -652,7 +680,10 @@ void kernel_gaussian_full_symm_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -677,7 +708,10 @@ void kernel_gaussian_full_symm_rfp_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_rfp_cu_impl(
         d_x,
@@ -700,7 +734,10 @@ void kernel_gaussian_full_symm_rfp_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }
@@ -725,7 +762,10 @@ void kernel_gaussian_full_symm_rfp_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     kernel_gaussian_full_symm_rfp_cu_impl(
         d_x,
@@ -748,7 +788,10 @@ void kernel_gaussian_full_symm_rfp_cu(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         )
     );
 }

@@ -95,15 +95,27 @@ class TestFCHL18KRRModelForceOnly:
         assert model.training_mode_ == "force_only"
 
     def test_hessian_kernel_constraints_applied(self, dataset: tuple) -> None:
-        """Force-only mode must disable use_atm and enforce cut_start >= 1.0."""
+        """Force-only mode keeps use_atm and enforces cut_start >= 1.0."""
         coords_list, z_list, _, forces = dataset
-        # Pass kernel_params that would be invalid for Hessian if not overridden
+        # cut_start < 1 would be invalid for Hessian if not overridden
         kp = {"use_atm": True, "cut_start": 0.5, "cut_distance": 5.0, "fourier_order": 1}
         model = FCHL18KRRModel(sigma=5.0, l2=1e-3, max_size=MAX_SIZE, kernel_params=kp)
-        # This should not raise — constraints are applied internally
+        # This should not raise — cut_start is clamped internally
         model.fit(coords_list[:8], z_list[:8], forces=forces[:8])
-        assert model._kp_fit["use_atm"] is False
+        assert model._kp_fit["use_atm"] is True
         assert model._kp_fit["cut_start"] >= 1.0
+
+    def test_partial_kernel_params_resolves_use_atm_default(self, dataset: tuple) -> None:
+        """Partial kernel_params must still resolve documented use_atm=True."""
+        coords_list, z_list, _, forces = dataset
+        model = FCHL18KRRModel(
+            sigma=5.0,
+            l2=1e-3,
+            max_size=MAX_SIZE,
+            kernel_params={"fourier_order": 1, "cut_distance": 5.0},
+        )
+        model.fit(coords_list[:8], z_list[:8], forces=forces[:8])
+        assert model._kp_fit["use_atm"] is True
 
     def test_save_load_roundtrip(self, dataset: tuple, tmp_path) -> None:
         coords_list, z_list, _, forces = dataset
@@ -161,6 +173,20 @@ class TestFCHL18KRRModelEnergyAndForce:
 
         np.testing.assert_allclose(E_load, E_orig, rtol=1e-10)
         np.testing.assert_allclose(F_load, F_orig, rtol=1e-10)
+
+    def test_compute_forces_false_preserves_energy(self, dataset: tuple) -> None:
+        """EF energy with compute_forces=False must match the full predict energy."""
+        coords_list, z_list, energies, forces = dataset
+        tr, te = coords_list[:12], coords_list[12:]
+        ztr, zte = z_list[:12], z_list[12:]
+
+        model = FCHL18KRRModel(sigma=5.0, l2=1e-6, max_size=MAX_SIZE)
+        model.fit(tr, ztr, energies=energies[:12], forces=forces[:12])
+        E_full, F_full = model.predict(te, zte)
+        E_only, F_empty = model.predict(te, zte, compute_forces=False)
+        np.testing.assert_allclose(E_only, E_full, rtol=1e-7, atol=1e-9)
+        assert F_empty.size == 0
+        assert F_full.size == 8 * N_ATOMS * 3
 
 
 # ---------------------------------------------------------------------------

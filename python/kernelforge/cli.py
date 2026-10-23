@@ -2303,12 +2303,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_gradient_qm7b() -> tuple[float, str]:
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_jacobian_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_jacobian on QM7b (N=100)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_jacobian on QM7b (N=700)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 100
+    n = 700
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_jacobian(
         t["x"],
@@ -2344,12 +2344,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_jacobian_qm7b() -> tuple[float, str]:
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_jacobian_t on QM7b (N=100)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_jacobian_t on QM7b (N=700)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 100
+    n = 700
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_jacobian_t(
         t["x"],
@@ -2385,12 +2385,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_qm7b() -> tuple[float, str]
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_hessian_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_hessian on QM7b (N=40)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian on QM7b (N=220)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 40
+    n = 220
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_hessian(
         t["x"],
@@ -2430,12 +2430,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_hessian_qm7b() -> tuple[float, str]:
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_hessian_symm on QM7b (N=40)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian_symm on QM7b (N=250)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 40
+    n = 250
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_hessian_symm(
         t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_KERNEL_ARGS
@@ -2453,12 +2453,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_qm7b() -> tuple[float, st
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_hessian_symm_rfp on QM7b (N=40)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian_symm_rfp on QM7b (N=250)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 40
+    n = 250
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_hessian_symm_rfp(
         t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_KERNEL_ARGS
@@ -2476,12 +2476,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_hessian_symm_rfp_qm7b() -> tuple[float
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_full_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_full on QM7b (N=25)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_full on QM7b (N=220)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 25
+    n = 220
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_full(
         t["x"],
@@ -2521,12 +2521,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_full_qm7b() -> tuple[float, str]:
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_full_symm_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_full_symm on QM7b (N=25)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_full_symm on QM7b (N=240)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 25
+    n = 240
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_full_symm(
         t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_KERNEL_ARGS
@@ -2544,12 +2544,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_full_symm_qm7b() -> tuple[float, str]:
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_full_symm_rfp_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_full_symm_rfp on QM7b (N=25)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_full_symm_rfp on QM7b (N=240)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 25
+    n = 240
     t = _cuda_fchl18_tensors(n)
     _ = _cf.kernel_gaussian_full_symm_rfp(
         t["x"], t["na"], t["nn"], t["coords"], t["z"], sigma=2.5, **_FCHL18_KERNEL_ARGS
@@ -2567,12 +2567,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_full_symm_rfp_qm7b() -> tuple[float, s
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_hessian_matvec_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_hessian_matvec on QM7b (N=100)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_hessian_matvec on QM7b (N=210)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 100
+    n = 210
     t = _cuda_fchl18_tensors(n)
     d_total = t["n_atoms_total"] * 3
     alpha_F = torch.from_numpy(
@@ -2619,12 +2619,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_hessian_matvec_qm7b() -> tuple[float, 
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_jacobian_t_matvec on QM7b (N=100)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_jacobian_t_matvec on QM7b (N=450)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 100
+    n = 450
     t = _cuda_fchl18_tensors(n)
     d_total = t["n_atoms_total"] * 3
     alpha_F = torch.from_numpy(
@@ -2667,12 +2667,12 @@ def benchmark_cuda_fchl18_kernel_gaussian_jacobian_t_matvec_qm7b() -> tuple[floa
 
 
 def benchmark_cuda_fchl18_kernel_gaussian_full_matvec_qm7b() -> tuple[float, str]:
-    """Benchmark cuda_fchl18::kernel_gaussian_full_matvec on QM7b (N=100)."""
+    """Benchmark cuda_fchl18::kernel_gaussian_full_matvec on QM7b (N=210)."""
     import torch
 
     from kernelforge import cuda_fchl18_kernel as _cf
 
-    n = 100
+    n = 210
     t = _cuda_fchl18_tensors(n)
     d_total = t["n_atoms_total"] * 3
     rng = np.random.default_rng(42)

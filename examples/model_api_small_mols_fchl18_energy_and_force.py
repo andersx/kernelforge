@@ -11,8 +11,8 @@ with pre-split train/test sets:
 
 Units: atomization energies in kcal/mol, forces in kcal/mol/Å.
 
-Note: FCHL18 energy+force mode requires use_atm=False (ATM three-body
-Hessian is not implemented) and a higher l2 (~1e-4) for Cholesky stability.
+Note: FCHL18 energy+force mode requires cut_start >= 1.0 and typically a
+higher l2 (~1e-4) for Cholesky stability. use_atm defaults to True.
 
 Usage:
     uv run python examples/model_api_small_mols_fchl18_energy_and_force.py

@@ -6,11 +6,16 @@
 // cuda_fchl18_jacobian.cu (dK/dR_A). Only small inline/template helpers live
 // here; __global__ entry points stay in their translation unit.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #include <cuda_runtime.h>
+
+#include "fchl18_alchemy.hpp"
 
 #ifndef CUDA_CHECK
 #define CUDA_CHECK(call)                                                                  \
@@ -228,6 +233,15 @@ void ensure_capacity(T **ptr, size_t *cap, size_t need) {
 }
 
 inline double get_angular_norm2(double t_width) {
+    // Cache by width — the 20k-term sum is identical across FCHL18 calls with fixed hypers.
+    struct Cache {
+        double width = -1.0;
+        double value = 0.0;
+    };
+    static Cache cache;
+    if (cache.width == t_width) {
+        return cache.value;
+    }
     constexpr int limit = 10000;
     constexpr double pi = 3.14159265358979323846;
     double ang_norm2 = 0.0;
@@ -235,7 +249,9 @@ inline double get_angular_norm2(double t_width) {
         const double tn = t_width * n;
         ang_norm2 += std::exp(-(tn * tn)) * (2.0 - 2.0 * std::cos(n * pi));
     }
-    return std::sqrt(ang_norm2 * pi) * 2.0;
+    cache.width = t_width;
+    cache.value = std::sqrt(ang_norm2 * pi) * 2.0;
+    return cache.value;
 }
 
 inline int build_element_map_from_flags(const int *z_present, int *z_to_idx) {
@@ -249,6 +265,304 @@ inline int build_element_map_from_flags(const int *z_present, int *z_to_idx) {
         }
     }
     return pmax;
+}
+
+// Host helper (defined in cuda_fchl18_kernel.cu): device exclusive scan
+// offset[0]=0, offset[a+1]=offset[a]+3*n[a].
+// If expected_dim >= 0, throws if offset[nm] != expected_dim.
+void fill_coord_offsets_device(
+    const int *d_n, int **d_offset, size_t *offset_cap, int nm, int expected_dim, const char *what
+);
+
+// Device-buffer fingerprint for train-side workspace caches.
+// Full-buffer XOR mix on GPU (transfer only the hash). Detects in-place edits of
+// any molecule, including those missed by sparse host sampling.
+namespace {
+
+template <typename T>
+__global__ void buffer_fingerprint_partial_kernel(
+    const T *ptr, size_t n_elem, unsigned long long *partials
+) {
+    unsigned long long local = 0;
+    const size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
+    for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x; i < n_elem;
+         i += stride) {
+        const T v = ptr[i];
+        unsigned long long w = 0;
+#pragma unroll
+        for (int b = 0; b < static_cast<int>(sizeof(T)); ++b) {
+            w |= static_cast<unsigned long long>(reinterpret_cast<const unsigned char *>(&v)[b])
+                 << (8 * b);
+        }
+        local ^= w + 0x9e3779b97f4a7c15ULL + (i << 6) + (i >> 2);
+    }
+    __shared__ unsigned long long sh[256];
+    const int tid = static_cast<int>(threadIdx.x);
+    sh[tid] = local;
+    __syncthreads();
+    for (int s = static_cast<int>(blockDim.x) / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sh[tid] ^= sh[tid + s];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        partials[blockIdx.x] = sh[0];
+    }
+}
+
+}  // namespace
+
+template <typename T>
+inline unsigned long long buffer_fingerprint(const T *d_ptr, size_t n_elem) {
+    if (d_ptr == nullptr || n_elem == 0) {
+        return 0;
+    }
+    static_assert(sizeof(T) <= sizeof(unsigned long long), "fingerprint word");
+    constexpr int kThreads = 256;
+    constexpr int kMaxBlocks = 128;
+    const int blocks = static_cast<int>(std::min(
+        static_cast<size_t>(kMaxBlocks), (n_elem + static_cast<size_t>(kThreads) - 1) /
+                                             static_cast<size_t>(kThreads)
+    ));
+    // Durable scratch for partials (one ull per block); sized for kMaxBlocks.
+    static unsigned long long *d_partials = nullptr;
+    if (d_partials == nullptr) {
+        CUDA_CHECK(cudaMalloc(&d_partials, static_cast<size_t>(kMaxBlocks) * sizeof(unsigned long long)));
+    }
+    buffer_fingerprint_partial_kernel<T>
+        <<<blocks, kThreads>>>(d_ptr, n_elem, d_partials);
+    CUDA_CHECK(cudaGetLastError());
+    unsigned long long host[kMaxBlocks];
+    CUDA_CHECK(cudaMemcpy(
+        host, d_partials, static_cast<size_t>(blocks) * sizeof(unsigned long long),
+        cudaMemcpyDeviceToHost
+    ));
+    unsigned long long fp = static_cast<unsigned long long>(n_elem);
+    for (int b = 0; b < blocks; ++b) {
+        fp ^= host[b];
+    }
+    return fp;
+}
+
+// ---------------------------------------------------------------------------
+// Periodic-table alchemy (qml / CPU parity, see fchl18_alchemy.hpp)
+//
+// The scalar product with alchemy is
+//   s_ij = pd(Zc_i, Zc_j) * [ 1 + sum_{p,q} pd(Z_p, Z_q) G(r_p - r_q)
+//                                 * ( ksi_p ksi_q d_scale + a_scale * sum_m s_m
+//                                     sum_{e1,e2} pd(Z_e1, Z_e2) (c_p[e1] c_q[e2] + s_p[e1] s_q[e2]) ) ]
+// The element-channel mixing is linear and acts on one side only:
+//   F_eff[e1] = sum_e2 PD[e1, e2] F[e2]    (PD symmetric, compact pmax x pmax)
+// so the kernels keep the plain per-element dot product and are handed
+// "effective" (PD-mixed) Fourier / dFourier buffers for the second side.
+// What remains in-kernel is the neighbour weight pd(Zp, Zq) and pd(Zc, Zc').
+// ---------------------------------------------------------------------------
+
+// pd lookup by nuclear charge (0 outside 1..emax); mirrors kf::fchl18::pd_lookup.
+template <typename T>
+__device__ inline T alch_pd(const T *pd, int emax, int za, int zb) {
+    if (za < 1 || zb < 1 || za > emax || zb > emax) {
+        return Math<T>::zero();
+    }
+    return pd[static_cast<long long>(za - 1) * emax + (zb - 1)];
+}
+
+template <typename T>
+struct AlchemyTables {
+    T *d_pd = nullptr;   // emax x emax, Z-indexed
+    T *d_pdc = nullptr;  // pmax x pmax compact (element-channel mixing)
+    size_t pd_cap = 0;
+    size_t pdc_cap = 0;
+    double period_w = -1.0;
+    double group_w = -1.0;
+    std::vector<double> h_pd;  // host copy (double), emax x emax
+};
+
+template <typename T>
+inline AlchemyTables<T> &alchemy_tables() {
+    static AlchemyTables<T> t;
+    return t;
+}
+
+// Ensure the device Z-indexed pd table matches the widths; returns the device pointer.
+template <typename T>
+inline const T *alchemy_upload_pd(double period_w, double group_w) {
+    AlchemyTables<T> &t = alchemy_tables<T>();
+    const int emax = kf::fchl18::kAlchemyEmaxDefault;
+    if (t.d_pd == nullptr || t.period_w != period_w || t.group_w != group_w) {
+        t.h_pd = kf::fchl18::build_periodic_table_pd(emax, period_w, group_w);
+        std::vector<T> tmp(t.h_pd.size());
+        for (size_t k = 0; k < tmp.size(); ++k) {
+            tmp[k] = static_cast<T>(t.h_pd[k]);
+        }
+        ensure_capacity(&t.d_pd, &t.pd_cap, tmp.size());
+        CUDA_CHECK(cudaMemcpy(t.d_pd, tmp.data(), tmp.size() * sizeof(T), cudaMemcpyHostToDevice));
+        t.period_w = period_w;
+        t.group_w = group_w;
+    }
+    return t.d_pd;
+}
+
+// Compact element-channel matrix PDc[p1*pmax+p2] = pd(Z(p1), Z(p2)); requires a prior
+// alchemy_upload_pd for the same widths. Returns the device pointer.
+template <typename T>
+inline const T *alchemy_upload_pdc(const int *z_to_idx, int pmax) {
+    AlchemyTables<T> &t = alchemy_tables<T>();
+    const int emax = kf::fchl18::kAlchemyEmaxDefault;
+    std::vector<int> idx_to_z(static_cast<size_t>(pmax), 0);
+    for (int z = 1; z < 256; ++z) {
+        const int p = z_to_idx[z];
+        if (p >= 0 && p < pmax) {
+            idx_to_z[static_cast<size_t>(p)] = z;
+        }
+    }
+    std::vector<T> pdc(static_cast<size_t>(pmax) * pmax);
+    for (int p1 = 0; p1 < pmax; ++p1) {
+        for (int p2 = 0; p2 < pmax; ++p2) {
+            pdc[static_cast<size_t>(p1) * pmax + p2] = static_cast<T>(kf::fchl18::pd_lookup(
+                t.h_pd.data(), emax, idx_to_z[static_cast<size_t>(p1)],
+                idx_to_z[static_cast<size_t>(p2)]
+            ));
+        }
+    }
+    ensure_capacity(&t.d_pdc, &t.pdc_cap, pdc.size());
+    CUDA_CHECK(cudaMemcpy(t.d_pdc, pdc.data(), pdc.size() * sizeof(T), cudaMemcpyHostToDevice));
+    return t.d_pdc;
+}
+
+// Mix the element-channel index p of per-atom Fourier-like buffers:
+//   out[a, i][..p1..] = sum_p2 PDc[p1, p2] * in[a, i][..p2..]
+// Per valid atom (flat = a*max_size + i, i < n[a]) the buffer starts at flat*atom_stride and
+// is addressed as  o*outer_stride + c + p*pstride,  o < n_outer,  c < n_inner.
+// n_inner = n_inner_base * (scale_by_na3 ? 3*n[a] : 1); pstride = pstride_is_inner ? n_inner
+// : pstride_fixed.  Covers both the CPU layout [p][m][neigh][(na3)] (n_outer = 1) and the
+// atom-major layout [neigh][p][m] (n_outer = max_size).
+template <typename T>
+__global__ void alchemy_mix_fourier_kernel(
+    const T *in,
+    T *out,
+    const T *pdc,
+    const int *n,
+    int nm,
+    int max_size,
+    int pmax,
+    long long atom_stride,
+    int n_outer,
+    long long outer_stride,
+    long long n_inner_base,
+    int scale_by_na3,
+    int pstride_is_inner,
+    long long pstride_fixed,
+    long long n_inner_cap
+) {
+    const long long per_atom = static_cast<long long>(n_outer) * n_inner_cap;
+    const long long total = static_cast<long long>(nm) * max_size * per_atom;
+    for (long long t = static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x; t < total;
+         t += static_cast<long long>(gridDim.x) * blockDim.x) {
+        const long long flat = t / per_atom;
+        const long long rem = t - flat * per_atom;
+        const int o = static_cast<int>(rem / n_inner_cap);
+        const long long c = rem - static_cast<long long>(o) * n_inner_cap;
+        const int a = static_cast<int>(flat / max_size);
+        const int i = static_cast<int>(flat - static_cast<long long>(a) * max_size);
+        if (i >= n[a]) {
+            continue;
+        }
+        const long long n_inner = n_inner_base * (scale_by_na3 ? 3LL * n[a] : 1LL);
+        if (c >= n_inner) {
+            continue;
+        }
+        const long long pstride = pstride_is_inner ? n_inner : pstride_fixed;
+        const long long base = flat * atom_stride + o * outer_stride + c;
+        T v[kMaxElements];
+        for (int p = 0; p < pmax; ++p) {
+            v[p] = in[base + p * pstride];
+        }
+        for (int p1 = 0; p1 < pmax; ++p1) {
+            T acc = Math<T>::zero();
+            for (int p2 = 0; p2 < pmax; ++p2) {
+                acc += pdc[p1 * pmax + p2] * v[p2];
+            }
+            out[base + p1 * pstride] = acc;
+        }
+    }
+}
+
+// Launch helper for alchemy_mix_fourier_kernel.
+template <typename T>
+inline void alchemy_mix_fourier(
+    const T *in,
+    T *out,
+    const T *pdc,
+    const int *n,
+    int nm,
+    int max_size,
+    int pmax,
+    long long atom_stride,
+    int n_outer,
+    long long outer_stride,
+    long long n_inner_base,
+    bool scale_by_na3,
+    bool pstride_is_inner,
+    long long pstride_fixed
+) {
+    // Capacity of n_inner over atoms: na3 <= 3*max_size.
+    const long long n_inner_cap = n_inner_base * (scale_by_na3 ? 3LL * max_size : 1LL);
+    const long long total =
+        static_cast<long long>(nm) * max_size * static_cast<long long>(n_outer) * n_inner_cap;
+    if (total <= 0) {
+        return;
+    }
+    const int block = 256;
+    long long grid = (total + block - 1) / block;
+    if (grid > 65535LL * 16) {
+        grid = 65535LL * 16;
+    }
+    alchemy_mix_fourier_kernel<<<static_cast<unsigned>(grid), block>>>(
+        in,
+        out,
+        pdc,
+        n,
+        nm,
+        max_size,
+        pmax,
+        atom_stride,
+        n_outer,
+        outer_stride,
+        n_inner_base,
+        scale_by_na3 ? 1 : 0,
+        pstride_is_inner ? 1 : 0,
+        pstride_fixed,
+        n_inner_cap
+    );
+    CUDA_CHECK(cudaGetLastError());
+}
+
+// Warp-shuffle block reduction (blockDim.x must be a multiple of 32, <= 1024).
+template <typename T>
+__device__ inline T block_reduce_sum(T val) {
+    constexpr unsigned mask = 0xffffffffu;
+#pragma unroll
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(mask, val, offset);
+    }
+    __shared__ T warp_sums[32];
+    const int lane = static_cast<int>(threadIdx.x) & 31;
+    const int wid = static_cast<int>(threadIdx.x) >> 5;
+    if (lane == 0) {
+        warp_sums[wid] = val;
+    }
+    __syncthreads();
+    const int nwarps = static_cast<int>(blockDim.x) >> 5;
+    val = (static_cast<int>(threadIdx.x) < nwarps) ? warp_sums[lane] : Math<T>::zero();
+    if (wid == 0) {
+#pragma unroll
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            val += __shfl_down_sync(mask, val, offset);
+        }
+    }
+    return val;
 }
 
 }  // namespace fchl18

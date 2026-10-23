@@ -39,7 +39,10 @@ torch::Tensor kernel_gaussian(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x1, "X1");
     check_cuda_floating(x2, "X2");
@@ -96,7 +99,10 @@ torch::Tensor kernel_gaussian(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_rect_cu(
@@ -121,10 +127,134 @@ torch::Tensor kernel_gaussian(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return K;
+}
+
+torch::Tensor kernel_gaussian_matvec(
+    torch::Tensor x1,
+    torch::Tensor x2,
+    torch::Tensor n1,
+    torch::Tensor n2,
+    torch::Tensor nn1,
+    torch::Tensor nn2,
+    torch::Tensor alpha,
+    double sigma,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
+) {
+    check_cuda_floating(x1, "X1");
+    check_cuda_floating(x2, "X2");
+    check_cuda_floating(alpha, "alpha");
+    check_cuda_int32(n1, "N1");
+    check_cuda_int32(n2, "N2");
+    check_cuda_int32(nn1, "NN1");
+    check_cuda_int32(nn2, "NN2");
+
+    TORCH_CHECK(x1.scalar_type() == x2.scalar_type(), "X1 and X2 dtype must match");
+    TORCH_CHECK(x1.scalar_type() == alpha.scalar_type(), "alpha dtype must match X1");
+    TORCH_CHECK(x1.dim() == 4, "X1 must be 4-D");
+    TORCH_CHECK(x2.dim() == 4, "X2 must be 4-D");
+    TORCH_CHECK(x1.size(2) == 5, "X1.size(2) must equal 5");
+    TORCH_CHECK(x2.size(2) == 5, "X2.size(2) must equal 5");
+    TORCH_CHECK(n1.dim() == 1, "N1 must be 1-D");
+    TORCH_CHECK(n2.dim() == 1, "N2 must be 1-D");
+    TORCH_CHECK(nn1.dim() == 2, "NN1 must be 2-D");
+    TORCH_CHECK(nn2.dim() == 2, "NN2 must be 2-D");
+    TORCH_CHECK(alpha.dim() == 1, "alpha must be 1-D");
+    TORCH_CHECK(sigma > 0.0, "sigma must be positive");
+    TORCH_CHECK(cut_distance > 0.0, "cut_distance must be positive");
+
+    const int nm1 = static_cast<int>(x1.size(0));
+    const int max_size1 = static_cast<int>(x1.size(1));
+    const int nm2 = static_cast<int>(x2.size(0));
+    const int max_size2 = static_cast<int>(x2.size(1));
+
+    TORCH_CHECK(x1.size(3) == max_size1, "X1 shape must be (nm1, max_size1, 5, max_size1)");
+    TORCH_CHECK(x2.size(3) == max_size2, "X2 shape must be (nm2, max_size2, 5, max_size2)");
+    TORCH_CHECK(n1.size(0) == nm1, "N1.size(0) must equal X1.size(0)");
+    TORCH_CHECK(n2.size(0) == nm2, "N2.size(0) must equal X2.size(0)");
+    TORCH_CHECK(nn1.size(0) == nm1 && nn1.size(1) == max_size1, "NN1 shape mismatch");
+    TORCH_CHECK(nn2.size(0) == nm2 && nn2.size(1) == max_size2, "NN2 shape mismatch");
+    TORCH_CHECK(alpha.size(0) == nm2, "alpha.size(0) must equal X2.size(0)");
+
+    auto E = torch::empty({nm1}, x1.options());
+    if (x1.scalar_type() == torch::kFloat32) {
+        kf::fchl18::kernel_gaussian_rect_matvec_cu(
+            x1.data_ptr<float>(),
+            x2.data_ptr<float>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            alpha.data_ptr<float>(),
+            E.data_ptr<float>(),
+            static_cast<float>(sigma),
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            static_cast<float>(two_body_scaling),
+            static_cast<float>(two_body_width),
+            static_cast<float>(two_body_power),
+            static_cast<float>(three_body_scaling),
+            static_cast<float>(three_body_width),
+            static_cast<float>(three_body_power),
+            static_cast<float>(cut_start),
+            static_cast<float>(cut_distance),
+            fourier_order,
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
+        );
+    } else {
+        kf::fchl18::kernel_gaussian_rect_matvec_cu(
+            x1.data_ptr<double>(),
+            x2.data_ptr<double>(),
+            n1.data_ptr<int>(),
+            n2.data_ptr<int>(),
+            nn1.data_ptr<int>(),
+            nn2.data_ptr<int>(),
+            alpha.data_ptr<double>(),
+            E.data_ptr<double>(),
+            sigma,
+            nm1,
+            nm2,
+            max_size1,
+            max_size2,
+            two_body_scaling,
+            two_body_width,
+            two_body_power,
+            three_body_scaling,
+            three_body_width,
+            three_body_power,
+            cut_start,
+            cut_distance,
+            fourier_order,
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
+        );
+    }
+    return E;
 }
 
 torch::Tensor kernel_gaussian_symm(
@@ -141,7 +271,10 @@ torch::Tensor kernel_gaussian_symm(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x, "X");
     check_cuda_int32(n, "N");
@@ -180,7 +313,10 @@ torch::Tensor kernel_gaussian_symm(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_symm_cu(
@@ -200,7 +336,10 @@ torch::Tensor kernel_gaussian_symm(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return K;
@@ -220,7 +359,10 @@ torch::Tensor kernel_gaussian_symm_rfp(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x, "X");
     check_cuda_int32(n, "N");
@@ -260,7 +402,10 @@ torch::Tensor kernel_gaussian_symm_rfp(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_symm_rfp_cu(
@@ -280,7 +425,10 @@ torch::Tensor kernel_gaussian_symm_rfp(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return K_rfp;
@@ -305,7 +453,10 @@ torch::Tensor kernel_gaussian_jacobian(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x1, "X1");
     check_cuda_floating(x2, "X2");
@@ -386,7 +537,10 @@ torch::Tensor kernel_gaussian_jacobian(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_jacobian_cu(
@@ -414,7 +568,10 @@ torch::Tensor kernel_gaussian_jacobian(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return J;
@@ -439,7 +596,10 @@ torch::Tensor kernel_gaussian_jacobian_t(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x1, "X1");
     check_cuda_floating(x2, "X2");
@@ -520,7 +680,10 @@ torch::Tensor kernel_gaussian_jacobian_t(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_jacobian_t_cu(
@@ -548,7 +711,10 @@ torch::Tensor kernel_gaussian_jacobian_t(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return Jt;
@@ -575,7 +741,10 @@ torch::Tensor kernel_gaussian_hessian(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x1, "X1");
     check_cuda_floating(x2, "X2");
@@ -678,7 +847,10 @@ torch::Tensor kernel_gaussian_hessian(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_hessian_cu(
@@ -709,7 +881,10 @@ torch::Tensor kernel_gaussian_hessian(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return H;
@@ -736,7 +911,10 @@ torch::Tensor kernel_gaussian_full(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x1, "X1");
     check_cuda_floating(x2, "X2");
@@ -823,7 +1001,10 @@ torch::Tensor kernel_gaussian_full(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_full_cu(
@@ -854,7 +1035,10 @@ torch::Tensor kernel_gaussian_full(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return K;
@@ -897,7 +1081,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
     double cut_distance,
     int fourier_order,
     bool use_atm,
-    bool compute_energy
+    bool compute_energy,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     const int nm1 = static_cast<int>(x1.size(0));
     const int nm2 = static_cast<int>(x2.size(0));
@@ -915,6 +1102,7 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
     auto F = torch::zeros({d_a_rows}, x1.options());
     const bool fp32 = x1.scalar_type() == torch::kFloat32;
 
+    // Fused matvec (alchemy-aware) whenever the train set is larger than the query set.
     if (nm2 > nm1) {
         if (fp32) {
             kf::fchl18::kernel_gaussian_full_matvec_fused_cu(
@@ -949,6 +1137,9 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
                 static_cast<float>(cut_distance),
                 fourier_order,
                 use_atm,
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width,
                 compute_energy
             );
         } else {
@@ -984,6 +1175,9 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
                 cut_distance,
                 fourier_order,
                 use_atm,
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width,
                 compute_energy
             );
         }
@@ -1018,7 +1212,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
                 static_cast<float>(cut_start),
                 static_cast<float>(cut_distance),
                 fourier_order,
-                use_atm
+                use_atm,
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
         } else {
             kf::fchl18::kernel_gaussian_jacobian_t_matvec_cu(
@@ -1047,7 +1244,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
                 cut_start,
                 cut_distance,
                 fourier_order,
-                use_atm
+                use_atm,
+                use_alchemy,
+                alchemy_period_width,
+                alchemy_group_width
             );
         }
     }
@@ -1080,7 +1280,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
         kf::fchl18::kernel_gaussian_hessian_matvec_cu(
             x1.data_ptr<float>(),
@@ -1111,7 +1314,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_jacobian_matvec_cu(
@@ -1141,7 +1347,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
         kf::fchl18::kernel_gaussian_hessian_matvec_cu(
             x1.data_ptr<double>(),
@@ -1172,7 +1381,10 @@ std::pair<torch::Tensor, torch::Tensor> kernel_gaussian_full_matvec(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
 
@@ -1201,7 +1413,10 @@ torch::Tensor kernel_gaussian_hessian_matvec(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     const int nm1 = static_cast<int>(x1.size(0));
     const int nm2 = static_cast<int>(x2.size(0));
@@ -1245,7 +1460,10 @@ torch::Tensor kernel_gaussian_hessian_matvec(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_hessian_matvec_cu(
@@ -1277,7 +1495,10 @@ torch::Tensor kernel_gaussian_hessian_matvec(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return F;
@@ -1303,7 +1524,10 @@ torch::Tensor kernel_gaussian_jacobian_t_matvec(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     const int nm_train = static_cast<int>(x_train.size(0));
     const int nm_test = static_cast<int>(x_test.size(0));
@@ -1343,7 +1567,10 @@ torch::Tensor kernel_gaussian_jacobian_t_matvec(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_jacobian_t_matvec_cu(
@@ -1372,7 +1599,10 @@ torch::Tensor kernel_gaussian_jacobian_t_matvec(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return E;
@@ -1394,7 +1624,10 @@ torch::Tensor kernel_gaussian_full_symm(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
@@ -1447,7 +1680,10 @@ torch::Tensor kernel_gaussian_full_symm(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_full_symm_cu(
@@ -1470,7 +1706,10 @@ torch::Tensor kernel_gaussian_full_symm(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return K;
@@ -1492,7 +1731,10 @@ torch::Tensor kernel_gaussian_full_symm_rfp(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
@@ -1547,7 +1789,10 @@ torch::Tensor kernel_gaussian_full_symm_rfp(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_full_symm_rfp_cu(
@@ -1570,7 +1815,10 @@ torch::Tensor kernel_gaussian_full_symm_rfp(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return K_rfp;
@@ -1595,7 +1843,10 @@ torch::Tensor kernel_gaussian_gradient(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     // Single-query convenience wrapper around jacobian with CPU gradient layout
     // G[alpha, mu, b] = dK[A,b]/dR_A[alpha, mu].
@@ -1625,7 +1876,10 @@ torch::Tensor kernel_gaussian_gradient(
         cut_start,
         cut_distance,
         fourier_order,
-        use_atm
+        use_atm,
+        use_alchemy,
+        alchemy_period_width,
+        alchemy_group_width
     );
     // J is (3*n_atoms, nm2) with row = alpha*3 + mu → (n_atoms, 3, nm2).
     return J.view({n_atoms, 3, J.size(1)});
@@ -1647,7 +1901,10 @@ torch::Tensor kernel_gaussian_hessian_symm(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
@@ -1700,7 +1957,10 @@ torch::Tensor kernel_gaussian_hessian_symm(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_hessian_symm_cu(
@@ -1723,7 +1983,10 @@ torch::Tensor kernel_gaussian_hessian_symm(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return H;
@@ -1745,7 +2008,10 @@ torch::Tensor kernel_gaussian_hessian_symm_rfp(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy,
+    double alchemy_period_width,
+    double alchemy_group_width
 ) {
     check_cuda_floating(x, "X");
     check_cuda_floating(coords, "coords");
@@ -1799,7 +2065,10 @@ torch::Tensor kernel_gaussian_hessian_symm_rfp(
             static_cast<float>(cut_start),
             static_cast<float>(cut_distance),
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     } else {
         kf::fchl18::kernel_gaussian_hessian_symm_rfp_cu(
@@ -1822,7 +2091,10 @@ torch::Tensor kernel_gaussian_hessian_symm_rfp(
             cut_start,
             cut_distance,
             fourier_order,
-            use_atm
+            use_atm,
+            use_alchemy,
+            alchemy_period_width,
+            alchemy_group_width
         );
     }
     return H_rfp;
@@ -1889,8 +2161,11 @@ Applies to subsequent CUDA FCHL18 kernel / Jacobian / Hessian / full calls.
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the rectangular FCHL18 Gaussian kernel matrix on GPU.
 
@@ -1913,6 +2188,51 @@ torch.Tensor, shape (nm1, nm2), same dtype as X1, CUDA
     );
 
     m.def(
+        "kernel_gaussian_matvec",
+        &kernel_gaussian_matvec,
+        py::arg("X1"),
+        py::arg("X2"),
+        py::arg("N1"),
+        py::arg("N2"),
+        py::arg("NN1"),
+        py::arg("NN2"),
+        py::arg("alpha"),
+        py::arg("sigma"),
+        py::arg("two_body_scaling") = 2.0,
+        py::arg("two_body_width") = 0.1,
+        py::arg("two_body_power") = 6.0,
+        py::arg("three_body_scaling") = 2.0,
+        py::arg("three_body_width") = 3.0,
+        py::arg("three_body_power") = 3.0,
+        py::arg("cut_start") = 0.5,
+        py::arg("cut_distance") = 1e6,
+        py::arg("fourier_order") = 1,
+        py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
+        R"doc(
+Fused energy-only matvec: E = K(X1, X2) @ alpha without forming K.
+
+Parameters
+----------
+X1, X2 : torch.Tensor, shape (nm, max_size, 5, max_size), float32 or float64, CUDA
+    Query and train FCHL18 representations.
+N1, N2, NN1, NN2 : int32 CUDA tensors
+    Atom / neighbor counts matching X1 / X2.
+alpha : torch.Tensor, shape (nm2,), same dtype as X1, CUDA
+    Dual coefficients for the train set.
+sigma : float
+    Gaussian kernel length-scale.
+
+Returns
+-------
+torch.Tensor, shape (nm1,), same dtype as X1, CUDA
+    Predicted energies E[a] = sum_b K[a,b] * alpha[b].
+)doc"
+    );
+
+    m.def(
         "kernel_gaussian_symm",
         &kernel_gaussian_symm,
         py::arg("X"),
@@ -1927,8 +2247,11 @@ torch.Tensor, shape (nm1, nm2), same dtype as X1, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the symmetric FCHL18 Gaussian kernel matrix on GPU.
 
@@ -1967,8 +2290,11 @@ torch.Tensor, shape (nm, nm), same dtype as X, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the symmetric FCHL18 Gaussian kernel in RFP packed format on GPU.
 
@@ -2017,8 +2343,11 @@ torch.Tensor, shape (nm*(nm+1)//2,), same dtype as X, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the FCHL18 Jacobian kernel dK/dR_A on GPU.
 
@@ -2074,8 +2403,11 @@ torch.Tensor, shape (3 * sum(N1), nm2), same dtype as X1, CUDA
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the FCHL18 Jacobian-T kernel on GPU.
 
@@ -2108,8 +2440,11 @@ rather than the CPU train/test list API.
         py::arg("three_body_power") = 3.0,
         py::arg("cut_start") = 0.5,
         py::arg("cut_distance") = 1e6,
-        py::arg("fourier_order") = 2,
+        py::arg("fourier_order") = 1,
         py::arg("use_atm") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the FCHL18 gradient kernel for a single query molecule on GPU.
 
@@ -2143,6 +2478,9 @@ kernel_gaussian_jacobian.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the FCHL18 Hessian kernel d2K/dR_A dR_B on GPU.
 
@@ -2200,6 +2538,9 @@ torch.Tensor, shape (3 * sum(N1), 3 * sum(N2)), same dtype as X1, CUDA
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the symmetric FCHL18 Hessian kernel on GPU.
 
@@ -2228,6 +2569,9 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the symmetric FCHL18 Hessian kernel in RFP format on GPU.
 
@@ -2261,6 +2605,9 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_hessian_symm_rfp.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the full FCHL18 energy+force kernel matrix on GPU.
 
@@ -2292,6 +2639,9 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the symmetric full FCHL18 energy+force kernel on GPU.
 
@@ -2319,6 +2669,9 @@ only. Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full_symm.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute the symmetric full FCHL18 kernel in RFP packed format on GPU.
 
@@ -2354,10 +2707,14 @@ Matches CPU kernelforge.fchl18_kernel.kernel_gaussian_full_symm_rfp.
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
         py::arg("compute_energy") = true,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Contracted EF inference on GPU without materialising the full kernel matrix.
 
 Returns (E, F_block) with the same layout as CPU kernel_gaussian_full_matvec.
+``compute_energy`` precedes alchemy kwargs (CPU binding order) for positional compat.
 )doc"
     );
 
@@ -2386,6 +2743,9 @@ Returns (E, F_block) with the same layout as CPU kernel_gaussian_full_matvec.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute F = H @ alpha_F on GPU without materialising the full combined kernel.
 )doc"
@@ -2414,6 +2774,9 @@ Compute F = H @ alpha_F on GPU without materialising the full combined kernel.
         py::arg("cut_distance") = 1e6,
         py::arg("fourier_order") = 1,
         py::arg("use_atm") = false,
+        py::arg("use_alchemy") = false,
+        py::arg("alchemy_period_width") = 1.6,
+        py::arg("alchemy_group_width") = 1.6,
         R"doc(
 Compute E = J^T @ alpha_F on GPU without materialising the full combined kernel.
 )doc"

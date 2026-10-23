@@ -197,6 +197,129 @@ def test_jacobian_matches_cpu_f64_batch() -> None:
     np.testing.assert_allclose(J_gpu, J_cpu, rtol=1e-9, atol=1e-11)
 
 
+def test_jacobian_inplace_geometry_cache_invalidation() -> None:
+    """In-place X edits in a non-edge molecule must miss the train-side cache.
+
+    Sparse edge-word fingerprints miss molecule 2 of a large padded batch; a
+    full-buffer checksum must invalidate when that molecule's geometry changes.
+    """
+    coords1 = [WATER_COORDS]
+    z1 = [WATER_Z]
+    n_train = 100
+    coords2 = [WATER_COORDS.copy() for _ in range(n_train)]
+    z2 = [WATER_Z] * n_train
+    max_size = 4
+    x1, n1, nn1 = repr_mod.generate(coords1, z1, max_size=max_size, cut_distance=1e6)
+    x2, n2, nn2 = repr_mod.generate(coords2, z2, max_size=max_size, cut_distance=1e6)
+    coords1_pad, z1_pad = _pad_coords_z(coords1, z1, max_size)
+
+    x1_c = _to_cuda(x1, torch.float64)
+    n1_c = _to_cuda_i32(n1)
+    n2_c = _to_cuda_i32(n2)
+    nn1_c = _to_cuda_i32(nn1)
+    nn2_c = _to_cuda_i32(nn2)
+    coords1_c = _to_cuda(coords1_pad, torch.float64)
+    z1_c = _to_cuda_i32(z1_pad)
+    # Retain N/NN CUDA tensors across calls so a broken fingerprint cannot hide
+    # behind a fresh allocation address (those pointers are part of the cache key).
+    x2_c = _to_cuda(x2, torch.float64)
+    J0 = (
+        cuda_fchl18_kernel.kernel_gaussian_jacobian(
+            x1_c,
+            x2_c,
+            n1_c,
+            n2_c,
+            nn1_c,
+            nn2_c,
+            coords1_c,
+            z1_c,
+            sigma=SIGMA,
+            **KERNEL_ARGS,
+        )
+        .cpu()
+        .numpy()
+    )
+
+    # Mutate molecule index 2 only — outside the old 32-sample edge lattice.
+    coords2_mut = [c.copy() for c in coords2]
+    coords2_mut[2] = coords2_mut[2].copy()
+    coords2_mut[2][0, 0] += 0.15
+    x2_mut, _, _ = repr_mod.generate(coords2_mut, z2, max_size=max_size, cut_distance=1e6)
+    x2_c.copy_(torch.from_numpy(np.ascontiguousarray(x2_mut)).cuda())
+
+    J1 = (
+        cuda_fchl18_kernel.kernel_gaussian_jacobian(
+            x1_c,
+            x2_c,
+            n1_c,
+            n2_c,
+            nn1_c,
+            nn2_c,
+            coords1_c,
+            z1_c,
+            sigma=SIGMA,
+            **KERNEL_ARGS,
+        )
+        .cpu()
+        .numpy()
+    )
+    assert not np.allclose(J0, J1, rtol=1e-12, atol=1e-12)
+    J1_cpu = cpu_kernel.kernel_gaussian_jacobian(
+        coords1, z1, x2_mut, n2, nn2, sigma=SIGMA, **KERNEL_ARGS
+    )
+    np.testing.assert_allclose(J1, J1_cpu, rtol=1e-9, atol=1e-11)
+
+
+def test_jacobian_fourier_order_cache_invalidation() -> None:
+    """Changing fourier_order must not reuse stale Fourier workspace caches.
+
+    Regression: JacWorkspace keyed only on X pointers/fingerprint, so fo=1→2
+    with the same train tensors caused CUDA illegal-memory access.
+    """
+    coords1 = [WATER_COORDS]
+    z1 = [WATER_Z]
+    # nm2 > nm1 so the train-as-B cache is armed.
+    coords2 = [AMMONIA_COORDS, METHANE_COORDS, WATER_COORDS, HF_COORDS]
+    z2 = [AMMONIA_Z, METHANE_Z, WATER_Z, HF_Z]
+
+    max_size1 = len(z1[0])
+    max_size2 = max(len(z) for z in z2)
+    x1, n1, nn1 = repr_mod.generate(coords1, z1, max_size=max_size1, cut_distance=1e6)
+    x2, n2, nn2 = repr_mod.generate(coords2, z2, max_size=max_size2, cut_distance=1e6)
+    coords1_pad, z1_pad = _pad_coords_z(coords1, z1, max_size1)
+
+    x1_c = _to_cuda(x1, torch.float64)
+    x2_c = _to_cuda(x2, torch.float64)
+    n1_c = _to_cuda_i32(n1)
+    n2_c = _to_cuda_i32(n2)
+    nn1_c = _to_cuda_i32(nn1)
+    nn2_c = _to_cuda_i32(nn2)
+    coords_c = _to_cuda(coords1_pad, torch.float64)
+    z_c = _to_cuda_i32(z1_pad)
+
+    for fo in (1, 2, 1, 2):
+        args = KERNEL_ARGS.copy()
+        args["fourier_order"] = fo
+        J_gpu = (
+            cuda_fchl18_kernel.kernel_gaussian_jacobian(
+                x1_c,
+                x2_c,
+                n1_c,
+                n2_c,
+                nn1_c,
+                nn2_c,
+                coords_c,
+                z_c,
+                sigma=SIGMA,
+                **args,
+            )
+            .cpu()
+            .numpy()
+        )
+        J_cpu = cpu_kernel.kernel_gaussian_jacobian(coords1, z1, x2, n2, nn2, sigma=SIGMA, **args)
+        np.testing.assert_allclose(J_gpu, J_cpu, rtol=1e-9, atol=1e-11)
+
+
 def test_jacobian_matches_cpu_f64_no_atm() -> None:
     coords1 = [METHANE_COORDS]
     z1 = [METHANE_Z]

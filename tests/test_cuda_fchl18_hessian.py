@@ -135,8 +135,8 @@ def _pad_coords_z(coords_list, z_list, max_size):
     return coords, z
 
 
-def _gpu_hessian(coords1, z1, coords2, z2, dtype, kernel_args=None):
-    args = KERNEL_ARGS if kernel_args is None else kernel_args
+def _gpu_hessian(coords1, z1, coords2, z2, dtype, kernel_args: _KernelArgs | None = None):
+    args: _KernelArgs = KERNEL_ARGS if kernel_args is None else kernel_args
     max_size1 = max(len(z) for z in z1)
     max_size2 = max(len(z) for z in z2)
     x1, n1, nn1 = repr_mod.generate(
@@ -164,8 +164,8 @@ def _gpu_hessian(coords1, z1, coords2, z2, dtype, kernel_args=None):
     )
 
 
-def _cpu_hessian(coords1, z1, coords2, z2, kernel_args=None):
-    args = KERNEL_ARGS if kernel_args is None else kernel_args
+def _cpu_hessian(coords1, z1, coords2, z2, kernel_args: _KernelArgs | None = None):
+    args: _KernelArgs = KERNEL_ARGS if kernel_args is None else kernel_args
     return cpu_kernel.kernel_gaussian_hessian(coords1, z1, coords2, z2, sigma=SIGMA, **args)
 
 
@@ -256,6 +256,76 @@ def test_hessian_matches_cpu_f64_fourier_order_2() -> None:
     H_cpu = _cpu_hessian(coords1, z1, coords2, z2, args)
 
     np.testing.assert_allclose(H_gpu, H_cpu, rtol=1e-9, atol=1e-11)
+
+
+def test_hessian_matches_cpu_f64_atm() -> None:
+    coords1 = [WATER_COORDS, AMMONIA_COORDS]
+    z1 = [WATER_Z, AMMONIA_Z]
+    coords2 = [METHANE_COORDS, WATER_COORDS]
+    z2 = [METHANE_Z, WATER_Z]
+
+    args = KERNEL_ARGS.copy()
+    args["use_atm"] = True
+
+    H_gpu = _gpu_hessian(coords1, z1, coords2, z2, torch.float64, args).cpu().numpy()
+    H_cpu = _cpu_hessian(coords1, z1, coords2, z2, args)
+
+    np.testing.assert_allclose(H_gpu, H_cpu, rtol=1e-9, atol=1e-11)
+
+
+def test_hessian_fourier_order_cache_invalidation() -> None:
+    """fo=1→2 with the same train tensors must rebuild Fourier caches."""
+    coords1 = [WATER_COORDS]
+    z1 = [WATER_Z]
+    coords2 = [AMMONIA_COORDS, METHANE_COORDS, WATER_COORDS, HF_COORDS]
+    z2 = [AMMONIA_Z, METHANE_Z, WATER_Z, HF_Z]
+
+    args_base = KERNEL_ARGS.copy()
+    max_size1 = len(z1[0])
+    max_size2 = max(len(z) for z in z2)
+    x1, n1, nn1 = repr_mod.generate(
+        coords1, z1, max_size=max_size1, cut_distance=args_base["cut_distance"]
+    )
+    x2, n2, nn2 = repr_mod.generate(
+        coords2, z2, max_size=max_size2, cut_distance=args_base["cut_distance"]
+    )
+    coords1_pad, z1_pad = _pad_coords_z(coords1, z1, max_size1)
+    coords2_pad, z2_pad = _pad_coords_z(coords2, z2, max_size2)
+
+    x1_c = _to_cuda(x1, torch.float64)
+    x2_c = _to_cuda(x2, torch.float64)
+    n1_c = _to_cuda_i32(n1)
+    n2_c = _to_cuda_i32(n2)
+    nn1_c = _to_cuda_i32(nn1)
+    nn2_c = _to_cuda_i32(nn2)
+    c1_c = _to_cuda(coords1_pad, torch.float64)
+    z1_c = _to_cuda_i32(z1_pad)
+    c2_c = _to_cuda(coords2_pad, torch.float64)
+    z2_c = _to_cuda_i32(z2_pad)
+
+    for fo in (1, 2, 1, 2):
+        args = args_base.copy()
+        args["fourier_order"] = fo
+        H_gpu = (
+            cuda_fchl18_kernel.kernel_gaussian_hessian(
+                x1_c,
+                x2_c,
+                n1_c,
+                n2_c,
+                nn1_c,
+                nn2_c,
+                c1_c,
+                z1_c,
+                c2_c,
+                z2_c,
+                sigma=SIGMA,
+                **args,
+            )
+            .cpu()
+            .numpy()
+        )
+        H_cpu = _cpu_hessian(coords1, z1, coords2, z2, args)
+        np.testing.assert_allclose(H_gpu, H_cpu, rtol=1e-9, atol=1e-11)
 
 
 def test_hessian_matches_cpu_f32() -> None:

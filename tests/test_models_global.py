@@ -202,6 +202,20 @@ class TestGlobalKRRModel:
         np.testing.assert_allclose(E_fast, E_slow, rtol=1e-7, atol=1e-9)
         np.testing.assert_allclose(F_fast, F_slow, rtol=1e-7, atol=1e-9)
 
+    def test_compute_forces_false_preserves_energy(self) -> None:
+        """Energy from E+F predict must match compute_forces=False (jacᵀ sign)."""
+        coords, z_list, energies, forces = _load_ethanol(25)
+        tr, te = coords[:20], coords[20:]
+        ztr, zte = z_list[:20], z_list[20:]
+
+        model = GlobalKRRModel(sigma=3.0, l2=1e-6)
+        model.fit(tr, ztr, energies=energies[:20], forces=forces[:20])
+        E_full, F_full = model.predict(te, zte)
+        E_only, F_empty = model.predict(te, zte, compute_forces=False)
+        np.testing.assert_allclose(E_only, E_full, rtol=1e-7, atol=1e-9)
+        assert F_empty.size == 0
+        assert F_full.size == 5 * 9 * 3
+
 
 # ---------------------------------------------------------------------------
 # GlobalRFFModel tests
@@ -267,6 +281,20 @@ class TestGlobalRFFModel:
         E_load, F_load = loaded.predict(te, zte)
         np.testing.assert_allclose(E_load, E_orig, rtol=1e-10)
         np.testing.assert_allclose(F_load, F_orig, rtol=1e-10)
+
+    def test_compute_forces_false_preserves_energy(self) -> None:
+        """Energy from E+F predict must match compute_forces=False (RFF sign)."""
+        coords, z_list, energies, forces = _load_ethanol(25)
+        tr, te = coords[:20], coords[20:]
+        ztr, zte = z_list[:20], z_list[20:]
+
+        model = GlobalRFFModel(sigma=3.0, l2=1e-6, d_rff=256, seed=42)
+        model.fit(tr, ztr, energies=energies[:20], forces=forces[:20])
+        E_full, F_full = model.predict(te, zte)
+        E_only, F_empty = model.predict(te, zte, compute_forces=False)
+        np.testing.assert_allclose(E_only, E_full, rtol=1e-7, atol=1e-9)
+        assert F_empty.size == 0
+        assert F_full.size == 5 * 9 * 3
 
     def test_variable_atom_count_raises(self) -> None:
         rng = np.random.default_rng(0)

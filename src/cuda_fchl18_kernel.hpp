@@ -25,7 +25,10 @@ void kernel_gaussian_rect_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_rect_cu(
@@ -50,7 +53,69 @@ void kernel_gaussian_rect_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
+);
+
+// E[a] = sum_b K[a,b] * alpha[b] without forming the rectangular kernel matrix.
+void kernel_gaussian_rect_matvec_cu(
+    const float *d_x1,
+    const float *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const float *d_alpha,
+    float *d_E_out,
+    float sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    float two_body_scaling,
+    float two_body_width,
+    float two_body_power,
+    float three_body_scaling,
+    float three_body_width,
+    float three_body_power,
+    float cut_start,
+    float cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
+);
+
+void kernel_gaussian_rect_matvec_cu(
+    const double *d_x1,
+    const double *d_x2,
+    const int *d_n1,
+    const int *d_n2,
+    const int *d_nn1,
+    const int *d_nn2,
+    const double *d_alpha,
+    double *d_E_out,
+    double sigma,
+    int nm1,
+    int nm2,
+    int max_size1,
+    int max_size2,
+    double two_body_scaling,
+    double two_body_width,
+    double two_body_power,
+    double three_body_scaling,
+    double three_body_width,
+    double three_body_power,
+    double cut_start,
+    double cut_distance,
+    int fourier_order,
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_symm_cu(
@@ -70,7 +135,10 @@ void kernel_gaussian_symm_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_symm_cu(
@@ -90,7 +158,10 @@ void kernel_gaussian_symm_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric energy-only kernel in RFP packed format (TRANSR='N', UPLO='U').
@@ -114,7 +185,10 @@ void kernel_gaussian_symm_rfp_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_symm_rfp_cu(
@@ -134,7 +208,10 @@ void kernel_gaussian_symm_rfp_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Jacobian kernel: J[row, b] = dK(A_a, B_b) / dR_{A_a}[alpha, mu],
@@ -169,7 +246,10 @@ void kernel_gaussian_jacobian_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_jacobian_cu(
@@ -197,7 +277,10 @@ void kernel_gaussian_jacobian_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Jacobian-T: K_jt[b, row] = dK(A_a, B_b) / dR_{A_a}[...], shape (nm2, d_a_rows).
@@ -227,7 +310,10 @@ void kernel_gaussian_jacobian_t_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_jacobian_t_cu(
@@ -255,7 +341,10 @@ void kernel_gaussian_jacobian_t_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Hessian kernel: H[row, col] = d^2 K(A_a, B_b) / dR_{A_a}[alpha, mu] dR_{B_b}[beta, nu],
@@ -296,7 +385,10 @@ void kernel_gaussian_hessian_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_hessian_cu(
@@ -327,7 +419,10 @@ void kernel_gaussian_hessian_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric Hessian: evaluates lower-triangle molecule pairs (b <= a) once,
@@ -353,7 +448,10 @@ void kernel_gaussian_hessian_symm_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_hessian_symm_cu(
@@ -376,7 +474,10 @@ void kernel_gaussian_hessian_symm_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric Hessian in RFP (TRANSR='N', UPLO='U'). Length d_rows*(d_rows+1)/2.
@@ -400,7 +501,10 @@ void kernel_gaussian_hessian_symm_rfp_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_hessian_symm_rfp_cu(
@@ -423,7 +527,10 @@ void kernel_gaussian_hessian_symm_rfp_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Full combined kernel (asymmetric): shape (nm1+d_a_rows, nm2+d_b_cols).
@@ -455,7 +562,10 @@ void kernel_gaussian_full_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_full_cu(
@@ -486,7 +596,10 @@ void kernel_gaussian_full_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric full kernel: shape (nm+D, nm+D).
@@ -510,7 +623,10 @@ void kernel_gaussian_full_symm_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_full_symm_cu(
@@ -533,7 +649,10 @@ void kernel_gaussian_full_symm_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Symmetric full kernel in RFP packed format (TRANSR='N', UPLO='U').
@@ -558,7 +677,10 @@ void kernel_gaussian_full_symm_rfp_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_full_symm_rfp_cu(
@@ -581,7 +703,10 @@ void kernel_gaussian_full_symm_rfp_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_hessian_matvec_cu(
@@ -613,7 +738,10 @@ void kernel_gaussian_hessian_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_hessian_matvec_cu(
@@ -645,7 +773,10 @@ void kernel_gaussian_hessian_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_jacobian_matvec_cu(
@@ -675,7 +806,10 @@ void kernel_gaussian_jacobian_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_jacobian_matvec_cu(
@@ -705,7 +839,10 @@ void kernel_gaussian_jacobian_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_jacobian_t_matvec_cu(
@@ -734,7 +871,10 @@ void kernel_gaussian_jacobian_t_matvec_cu(
     float cut_start,
     float cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_jacobian_t_matvec_cu(
@@ -763,7 +903,10 @@ void kernel_gaussian_jacobian_t_matvec_cu(
     double cut_start,
     double cut_distance,
     int fourier_order,
-    bool use_atm
+    bool use_atm,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_full_matvec_fused_cu(
@@ -798,7 +941,10 @@ void kernel_gaussian_full_matvec_fused_cu(
     float cut_distance,
     int fourier_order,
     bool use_atm,
-    bool compute_energy
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6,
+    bool compute_energy = true
 );
 
 void kernel_gaussian_full_matvec_fused_cu(
@@ -833,7 +979,10 @@ void kernel_gaussian_full_matvec_fused_cu(
     double cut_distance,
     int fourier_order,
     bool use_atm,
-    bool compute_energy
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6,
+    bool compute_energy = true
 );
 
 void kernel_gaussian_hessian_matvec_fused_cu(
@@ -876,7 +1025,10 @@ void kernel_gaussian_hessian_matvec_fused_cu(
     bool use_atm,
     int pmax,
     const int *d_z_to_idx,
-    const float *d_s_prefactor
+    const float *d_s_prefactor,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 void kernel_gaussian_hessian_matvec_fused_cu(
@@ -919,7 +1071,10 @@ void kernel_gaussian_hessian_matvec_fused_cu(
     bool use_atm,
     int pmax,
     const int *d_z_to_idx,
-    const double *d_s_prefactor
+    const double *d_s_prefactor,
+    bool use_alchemy = false,
+    double alchemy_period_width = 1.6,
+    double alchemy_group_width = 1.6
 );
 
 // Host-side three-body radial weight mode (0=product, 1=bond_norm_product, 2=bond_norm_exp).
