@@ -167,6 +167,17 @@ if(NOT DEFINED KF_BLAS_BACKEND)
   find_package(BLAS REQUIRED)
   set(KF_BLAS_BACKEND "OpenBLAS")
   set(KF_BLAS_LIBS BLAS::BLAS)
+  # conda-forge splits Fortran BLAS (libblas) from CBLAS (libcblas).
+  find_library(KF_CBLAS_LIBRARY NAMES cblas)
+  if(KF_CBLAS_LIBRARY)
+    list(APPEND KF_BLAS_LIBS ${KF_CBLAS_LIBRARY})
+    message(STATUS "CBLAS library: ${KF_CBLAS_LIBRARY}")
+  endif()
+  find_library(KF_LAPACK_LIBRARY NAMES lapack)
+  if(KF_LAPACK_LIBRARY)
+    list(APPEND KF_BLAS_LIBS ${KF_LAPACK_LIBRARY})
+    message(STATUS "LAPACK library: ${KF_LAPACK_LIBRARY}")
+  endif()
   message(STATUS "BLAS backend: OpenBLAS/generic BLAS")
 
   # Only enable openblas_get/set_num_threads when we know OpenBLAS is linked.

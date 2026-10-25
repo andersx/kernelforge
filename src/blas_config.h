@@ -118,6 +118,12 @@ inline void kf_dsfrk(
     // Both are 64-bit; cast to match MKL's declaration and suppress the type mismatch.
     const long long n_ll = n, k_ll = k, lda_ll = lda;
     dsfrk_(&transr, &uplo, &trans, &n_ll, &k_ll, &alpha, a, &lda_ll, &beta, c);
+#elif defined(__APPLE__)
+    // Accelerate's clapack.h takes non-const pointers.
+    double alpha_mut = alpha, beta_mut = beta;
+    dsfrk_(
+        &transr, &uplo, &trans, &n, &k, &alpha_mut, const_cast<double *>(a), &lda, &beta_mut, c
+    );
 #else
     dsfrk_(&transr, &uplo, &trans, &n, &k, &alpha, a, &lda, &beta, c);
 #endif
