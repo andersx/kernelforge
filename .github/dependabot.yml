@@ -23,7 +23,7 @@ updates:
       dev-dependencies:
         patterns:
           - "ruff"
-          - "mypy"
+          - "ty"
           - "pytest*"
           - "pre-commit"
         update-types:

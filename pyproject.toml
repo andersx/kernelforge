@@ -35,8 +35,8 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-xdist", "pytest-timeout"]
 dev = [
-    "ruff==0.17.1",
-    "ty==0.0.89",
+    "ruff==0.17.2",
+    "ty==0.0.91",
     "pre-commit>=3.6.0",
     "qmllib",
 ]
