@@ -44,6 +44,13 @@ There is no separate PyPI sdist for the companion; the recipe builds from the
 4. Reviewers may adjust `conda_build_config.yaml` CUDA versions to match the
    current conda-forge pytorch/CUDA matrix.
 
+The CUDA recipe:
+
+- skips non-Linux and `cuda_compiler_version == "None"`
+- builds with `KF_WITH_CUDA=ON` / `KF_CUDA_ONLY=ON` against conda-forge `pytorch`
+- sets `TORCH_CUDA_ARCH_LIST` from `CF_TORCH_CUDA_ARCH_LIST`
+- depends on `kernelforge` at the same version at runtime
+
 ## Version bumps
 
 When releasing on PyPI:
