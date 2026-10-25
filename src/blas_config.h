@@ -32,13 +32,14 @@
     #include <mkl.h>
 
 #else
-    // Generic BLAS (OpenBLAS, ATLAS, reference BLAS, etc.)
+    // Generic BLAS (OpenBLAS, ATLAS, reference BLAS / conda-forge netlib, etc.)
     // For OpenBLAS ILP64, OPENBLAS_USE64BITINT must be defined before cblas.h
     #if defined(KF_BLAS_ILP64) && !defined(OPENBLAS_USE64BITINT)
         #define OPENBLAS_USE64BITINT
     #endif
     #include <cblas.h>
 
+#if defined(KF_HAVE_OPENBLAS_THREADS)
 // Forward-declare OpenBLAS threading helpers.  These are declared in
 // OpenBLAS's own cblas.h, but CMake's BLAS::BLAS imported target does
 // not propagate include directories, so the wrong (or missing) cblas.h
@@ -48,6 +49,7 @@ extern "C" {
 int openblas_get_num_threads(void);
 void openblas_set_num_threads(int num_threads);
 }
+#endif
 
 // OpenBLAS does not export LAPACKE_dsfrk; declare the Fortran symbol directly.
 // (MKL and Accelerate already declare dsfrk_ in their own headers.)
@@ -78,17 +80,18 @@ void dsfrk_(
 //
 // On macOS (Accelerate): No threading control needed - Accelerate uses GCD.
 // On Linux with MKL: We DO need to control MKL threading when inside OMP parallel regions.
-// On Linux with OpenBLAS: We need to control OpenBLAS threading.
-//
-// Note: These functions are no-ops on macOS but functional on Linux for both MKL and OpenBLAS.
+// On Linux with OpenBLAS (KF_HAVE_OPENBLAS_THREADS): control OpenBLAS threading.
+// On generic/netlib BLAS: no-op (symbol is absent).
 inline int kf_blas_get_num_threads() {
 #if defined(__APPLE__)
     // Accelerate uses GCD; no manual threading control
     return 1;
 #elif defined(KF_USE_MKL)
     return mkl_get_max_threads();
-#else
+#elif defined(KF_HAVE_OPENBLAS_THREADS)
     return openblas_get_num_threads();
+#else
+    return 1;
 #endif
 }
 
@@ -97,8 +100,10 @@ inline void kf_blas_set_num_threads(int n) {
     (void)n;  // no-op: Accelerate handled automatically
 #elif defined(KF_USE_MKL)
     mkl_set_num_threads(n);
-#else
+#elif defined(KF_HAVE_OPENBLAS_THREADS)
     openblas_set_num_threads(n);
+#else
+    (void)n;
 #endif
 }
 

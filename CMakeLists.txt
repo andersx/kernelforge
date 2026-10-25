@@ -169,6 +169,14 @@ if(NOT DEFINED KF_BLAS_BACKEND)
   set(KF_BLAS_LIBS BLAS::BLAS)
   message(STATUS "BLAS backend: OpenBLAS/generic BLAS")
 
+  # Only enable openblas_get/set_num_threads when we know OpenBLAS is linked.
+  # conda-forge often provides netlib libblas, which lacks those symbols.
+  if(KF_BLAS_VENDOR STREQUAL "OpenBLAS")
+    add_compile_definitions(KF_HAVE_OPENBLAS_THREADS)
+  elseif(BLAS_LIBRARIES MATCHES "openblas" OR BLAS_LIBRARIES MATCHES "OpenBLAS")
+    add_compile_definitions(KF_HAVE_OPENBLAS_THREADS)
+  endif()
+
   if(KF_BLAS_ILP64)
     kf_find_openblas_includes()
     if(DEFINED KF_OPENBLAS_INCLUDES)
