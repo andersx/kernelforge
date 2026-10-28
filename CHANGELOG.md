@@ -21,6 +21,9 @@
 
 ### Packaging / tooling
 
+- Drop CPython **3.10**; require **3.11+** (aligned with torch 2.15 / CUDA wheels)
+- Remove unused conditional `typing-extensions` dependency
+- CUDA companion wheels extended to CPython **3.15** (with torch ≥ 2.15)
 - CUDA companion build C++20 fix; cibuildwheel / CI / pre-commit / ruff / ty pin sync
 
 ## 1.0.0
@@ -29,9 +32,9 @@ First stable release.
 
 ### Packaging
 
-- CPU wheels (`kernelforge`): Linux + macOS for CPython **3.10–3.15**
-- CUDA companion (`kernelforge-cuda`): Linux manylinux for CPython **3.11–3.14**
-- `kernelforge[cuda]` pulls the companion on Linux for Python 3.11–3.14
+- CPU wheels (`kernelforge`): Linux + macOS for CPython **3.11–3.15**
+- CUDA companion (`kernelforge-cuda`): Linux manylinux for CPython **3.11–3.15**
+- `kernelforge[cuda]` pulls the companion on Linux for Python 3.11–3.15
 
 ### Highlights since 0.3.x
 

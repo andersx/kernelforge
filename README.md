@@ -25,7 +25,7 @@ This installs pre-compiled wheels with optimized BLAS libraries:
 - **Linux**: OpenBLAS
 - **macOS**: Apple Accelerate framework
 
-**Requirements**: Python 3.10+
+**Requirements**: Python 3.11+
 
 ## Development Installation
 
@@ -69,10 +69,10 @@ CMAKE_ARGS="-DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang -DCMAKE_CXX_COMP
 PyPI ships a **CPU** ``kernelforge`` wheel plus a Linux companion
 ``kernelforge-cuda`` that drops ``cuda_*.so`` into ``site-packages/kernelforge/``.
 
-**From PyPI (Linux, CPython 3.11–3.14 for CUDA):**
+**From PyPI (Linux, CPython 3.11–3.15 for CUDA):**
 
 ```bash
-uv pip install kernelforge                 # CPU (3.10–3.15)
+uv pip install kernelforge                 # CPU (3.11–3.15)
 uv pip install 'kernelforge[cuda]'         # + torch + kernelforge-cuda
 ```
 
@@ -84,10 +84,8 @@ uv pip install kernelforge kernelforge-cuda
 
 Notes:
 
-- The ``kernelforge-cuda`` companion wheel is **CPython 3.11–3.14**
-  manylinux only. On 3.10/3.15, ``'kernelforge[cuda]'`` will not pull the
-  companion (see the ``python_version`` marker in ``pyproject.toml``); use a
-  local monorepo CUDA build instead.
+- The ``kernelforge-cuda`` companion wheel is **Linux manylinux** only
+  (CPython 3.11–3.15, same as CPU).
 - Default-index ``torch`` may be CPU-only. For GPU runs, install a CUDA build
   of PyTorch (e.g. from the PyTorch CUDA wheel index) and an NVIDIA driver
   compatible with that build.
