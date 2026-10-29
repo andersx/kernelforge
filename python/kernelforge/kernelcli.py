@@ -1,6 +1,6 @@
 """kernelcli — command-line interface for testing kernelforge ML potentials.
 
-Supports three datasets (rMD17, QM7b, small_mols_mini), KRR/RFF regressors,
+Supports four datasets (rMD17, QM7b, QM9, small_mols_mini), KRR/RFF regressors,
 three representations (FCHL19, FCHL18, invdist), and three training modes
 (energy_only, force_only, energy_and_force).  ``--cuda`` selects GPU models
 when built (invdist / FCHL19 / FCHL18).
@@ -12,6 +12,9 @@ Usage examples::
 
     kernelcli --dataset qm7b --regressor rff --mode energy_only \\
               --n-train 1000 --n-test 500 --sigma 10.0 --d-rff 2048
+
+    kernelcli --dataset qm9 --regressor krr --mode energy_only \\
+              --n-train 1000 --n-test 500 --split 1 --elements 1 6 7 8 9
 
     kernelcli --dataset small_mols_mini --regressor krr --representation fchl18 \\
               --mode energy_and_force --sigma 2.5 --l2 1e-4
@@ -48,7 +51,7 @@ from typing import Any, Literal, cast
 import numpy as np
 from numpy.typing import NDArray
 
-from kernelforge.cli import load_qm7b_raw_data
+from kernelforge.cli import load_qm7b_raw_data, load_qm9_raw_data
 from kernelforge.models import (
     CudaFCHL18KRRModel,
     CudaGlobalKRRModel,
@@ -115,7 +118,7 @@ _EXAMPLES_DIR = _resolve_examples_dir()
 SMALL_MOLS_TRAIN_NPZ = _EXAMPLES_DIR / "small_mols_mini_train.npz"
 SMALL_MOLS_TEST_NPZ = _EXAMPLES_DIR / "small_mols_mini_test.npz"
 
-VALID_DATASETS = ["qm7b", "small_mols_mini"] + [f"rmd17_{m}" for m in RMD17_MOLECULES]
+VALID_DATASETS = ["qm7b", "qm9", "small_mols_mini"] + [f"rmd17_{m}" for m in RMD17_MOLECULES]
 _DEFAULT_CUDA_LOCAL_SOLVER = "eigh"
 _DEFAULT_CUDA_LOCAL_PREPROCESSING = "diagonal_scale"
 _DEFAULT_SPECTRAL_RTOL = 0.0
@@ -282,6 +285,67 @@ def load_qm7b(
 
     tr_idx = idx[:n_tr]
     te_idx = idx[n_tr : n_tr + n_te]
+
+    R_tr_raw = data["R"][tr_idx]
+    R_te_raw = data["R"][te_idx]
+    z_tr_raw = data["z"][tr_idx]
+    z_te_raw = data["z"][te_idx]
+
+    coords_tr = [R_tr_raw[i].astype(np.float64) for i in range(n_tr)]
+    z_tr = [z_tr_raw[i].astype(np.int32) for i in range(n_tr)]
+    coords_te = [R_te_raw[i].astype(np.float64) for i in range(n_te)]
+    z_te = [z_te_raw[i].astype(np.int32) for i in range(n_te)]
+
+    E_tr = data["E"][tr_idx].astype(np.float64)
+    E_te = data["E"][te_idx].astype(np.float64)
+
+    return coords_tr, z_tr, E_tr, coords_te, z_te, E_te
+
+
+def load_qm9(
+    n_train: int | None,
+    n_test: int | None,
+    split: int,
+) -> tuple[
+    list[NDArray[np.float64]],
+    list[NDArray[np.int32]],
+    NDArray[np.float64],
+    list[NDArray[np.float64]],
+    list[NDArray[np.int32]],
+    NDArray[np.float64],
+]:
+    """Load characterized QM9 using an embedded 5-fold CV split. Forces are not available.
+
+    Parameters
+    ----------
+    n_train, n_test
+        Optional caps on the fold sizes (first *n* indices of each fold). Defaults
+        are 1000 / 500 when omitted.
+    split
+        Fold index in ``1..5`` (maps to ``train_idx[split-1]`` / ``test_idx[split-1]``).
+    """
+    data = load_qm9_raw_data()
+    fold = split - 1
+    n_folds = int(np.asarray(data["n_folds"]).reshape(-1)[0])
+    if fold < 0 or fold >= n_folds:
+        msg = f"split must be in 1..{n_folds}, got {split}."
+        raise ValueError(msg)
+
+    tr_idx = np.asarray(data["train_idx"][fold], dtype=np.int64)
+    te_idx = np.asarray(data["test_idx"][fold], dtype=np.int64)
+
+    n_tr = n_train if n_train is not None else 1000
+    n_te = n_test if n_test is not None else 500
+
+    if n_tr > len(tr_idx):
+        msg = f"n_train ({n_tr}) exceeds QM9 fold {split} train size ({len(tr_idx)})."
+        raise ValueError(msg)
+    if n_te > len(te_idx):
+        msg = f"n_test ({n_te}) exceeds QM9 fold {split} test size ({len(te_idx)})."
+        raise ValueError(msg)
+
+    tr_idx = tr_idx[:n_tr]
+    te_idx = te_idx[:n_te]
 
     R_tr_raw = data["R"][tr_idx]
     R_te_raw = data["R"][te_idx]
@@ -596,7 +660,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         choices=[1, 2, 3, 4, 5],
-        help="rMD17 pre-split index (1-5). Ignored for qm7b/small_mols_mini.",
+        help="Fold/split index (1-5) for rMD17 and QM9. Ignored for qm7b/small_mols_mini.",
     )
     p.add_argument(
         "--sigma",
@@ -962,14 +1026,15 @@ def _validate(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None
             "(CPU FCHL18 uses product weights only)."
         )
 
-    if args.representation == "invdist" and args.dataset in ("qm7b", "small_mols_mini"):
+    if args.representation == "invdist" and args.dataset in ("qm7b", "qm9", "small_mols_mini"):
         parser.error(
             f"--representation invdist requires all molecules to have the same atom count. "
             f"Dataset '{args.dataset}' has variable-size molecules. Use an rMD17 dataset."
         )
-    if args.dataset == "qm7b" and args.mode in ("force_only", "energy_and_force"):
+    if args.dataset in ("qm7b", "qm9") and args.mode in ("force_only", "energy_and_force"):
         parser.error(
-            f"QM7b dataset has no forces. Use --mode energy_only (got --mode {args.mode})."
+            f"{args.dataset.upper()} dataset has no forces. "
+            f"Use --mode energy_only (got --mode {args.mode})."
         )
     if args.dataset == "small_mols_mini" and args.mode == "force_only":
         parser.error(
@@ -1003,6 +1068,12 @@ def run(args: argparse.Namespace) -> None:
     elif args.dataset == "qm7b":
         coords_tr, z_tr, E_tr, coords_te, z_te, E_te = load_qm7b(
             args.n_train, args.n_test, args.seed
+        )
+        F_tr = None
+        F_te = None
+    elif args.dataset == "qm9":
+        coords_tr, z_tr, E_tr, coords_te, z_te, E_te = load_qm9(
+            args.n_train, args.n_test, args.split
         )
         F_tr = None
         F_te = None

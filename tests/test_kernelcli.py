@@ -62,6 +62,26 @@ class TestValidation:
         with pytest.raises(SystemExit):
             _validate(args, parser)
 
+    def test_qm9_force_only_error(self):
+        """QM9 + force_only should raise a parser error."""
+        parser = _build_parser()
+        args = parser.parse_args(["--dataset", "qm9", "--mode", "force_only"])
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+
+    def test_qm9_energy_and_force_error(self):
+        """QM9 + energy_and_force should raise a parser error."""
+        parser = _build_parser()
+        args = parser.parse_args(["--dataset", "qm9", "--mode", "energy_and_force"])
+        with pytest.raises(SystemExit):
+            _validate(args, parser)
+
+    def test_qm9_energy_only_passes(self):
+        """QM9 + energy_only should validate."""
+        parser = _build_parser()
+        args = parser.parse_args(["--dataset", "qm9", "--mode", "energy_only"])
+        _validate(args, parser)
+
     def test_small_mols_force_only_error(self):
         """small_mols_mini + force_only should raise a parser error."""
         parser = _build_parser()
