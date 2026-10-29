@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+### Packaging
+
+- Drop CPython **3.10**; require **3.11+** (aligned with torch 2.15 / CUDA wheels)
+- Remove unused conditional `typing-extensions` dependency
+- CUDA companion wheels extended to CPython **3.15** (with torch ≥ 2.15)
+- CPU and CUDA wheels both target CPython **3.11–3.15**
+- Conda-forge recipe fixes for CUDA `pin_compatible` / Azure builds
+
+### Datasets / CLI
+
+- QM9 characterized loader (`load_qm9_raw_data`) and `kernelcli --dataset qm9`
+
 ## 1.1.0
 
 ### FCHL18

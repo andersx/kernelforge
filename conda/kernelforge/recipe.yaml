@@ -20,8 +20,11 @@ source:
 build:
   number: 0
   # Native extensions; no Windows support yet (matches PyPI wheels).
+  # CPython range matches PyPI: 3.11–3.15.
   skip:
     - win
+    - match(python, "<3.11")
+    - match(python, ">=3.16")
   script:
     file: build
     env:
