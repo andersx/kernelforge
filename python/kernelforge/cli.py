@@ -116,6 +116,36 @@ def load_qm7b_raw_data() -> NDArray[Any]:
     return np.load(npz_path, allow_pickle=True)
 
 
+@cache
+def load_qm9_raw_data() -> NDArray[Any]:
+    """Load characterized QM9 data from GitHub release. Auto-downloads if needed.
+
+    Returns the NPZ with 130,831 molecules (uncharacterized excluded). Keys include
+    ``R``, ``z``, ``E`` (atomization energy, kcal/mol), ``U0``, ``features``,
+    ``train_idx`` / ``test_idx`` (5-fold CV), and metadata.
+    """
+    npz_path = CACHE_DIR / "qm9_characterized.npz"
+
+    if not npz_path.exists():
+        url = (
+            "https://github.com/andersx/kernelforge/releases/download/"
+            "dataset-qm9-v1.0/qm9_characterized.npz"
+        )
+        print("  [Downloading QM9 characterized dataset...]")
+
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"HTTP {response.status}: Failed to download from {url}")
+                npz_path.write_bytes(response.read())
+        except Exception as e:
+            print(f"  [Error downloading QM9: {e}]", file=sys.stderr)
+            raise
+
+    return np.load(npz_path, allow_pickle=True)
+
+
 def prepare_ethanol_fchl19(n_structures: int = 100) -> dict[str, Any]:
     """Prepare FCHL19 representations and gradients for ethanol."""
     data = load_ethanol_raw_data()
