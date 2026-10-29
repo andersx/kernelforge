@@ -3,6 +3,9 @@
 #
 # Builds the CUDA companion from the kernelforge sdist (no separate PyPI sdist)
 # via packaging/kernelforge-cuda, matching the PyPI companion layout.
+#
+# CUDA versions come from conda-forge-pinning (12.9, 13.4, …), not this recipe —
+# same pattern as torchvision / xformers / flash-attn.
 schema_version: 1
 
 context:
@@ -21,15 +24,21 @@ package:
 source:
   url: https://pypi.org/packages/source/k/kernelforge/kernelforge-${{ version }}.tar.gz
   sha256: ${{ sha256 }}
+  patches:
+    - patches/0001-conda-apple-cmake.patch
 
 build:
   number: ${{ build_number }}
   string: ${{ build_string_prefix }}_py${{ python | version_to_buildstring }}_h${{ hash }}_${{ build_number }}
   # Linux + CUDA only; CPython range matches PyPI companion wheels.
+  # Skip non-CUDA variants (flash-attn style). Do not hardcode 12.9/13.4 here —
+  # pinning/migrator supplies those. Azure staged-recipes still injects a 13.0
+  # label that is not in pinning; skip that orphan so 13.4 can build later.
   skip:
     - win
     - osx
     - cuda_compiler_version == "None"
+    - cuda_compiler_version == "13.0"
     - match(python, "<3.11")
     - match(python, ">=3.16")
   script:
@@ -38,15 +47,24 @@ build:
       CMAKE_GENERATOR: Ninja
       SETUPTOOLS_SCM_PRETEND_VERSION: ${{ version }}
       TORCH_DONT_CHECK_COMPILER_ABI: "1"
+      # Lean list (flash-attn style). sm_60+ required for double atomicAdd;
+      # keep short to avoid OOM on staged-recipes Azure agents.
+      TORCH_CUDA_ARCH_LIST: 8.0;8.6;9.0+PTX
+      # Serialise nvcc; parallel fatbins OOMed ~8GB Azure VMs.
+      CMAKE_BUILD_PARALLEL_LEVEL: "1"
+      MAX_JOBS: "1"
 
 requirements:
   build:
     - ${{ compiler('c') }}
     - ${{ compiler('cxx') }}
-    - ${{ compiler('cuda') }}
     - ${{ stdlib('c') }}
     - cmake
     - ninja
+    - if: cuda_compiler_version != "None"
+      then:
+        - ${{ compiler('cuda') }}
+        - cuda-version ==${{ cuda_compiler_version }}
     - if: build_platform != host_platform
       then:
         - python
@@ -54,6 +72,14 @@ requirements:
         - numpy
         - pytorch
         - pytorch * [build=${{ torch_proc_type }}*]
+        - if: cuda_compiler_version != "None"
+          then:
+            - cuda-driver-dev
+            - cuda-cudart-dev
+            - cuda-nvrtc-dev
+            - cuda-nvtx-dev
+            - cuda-nvml-dev
+            - libcublas-dev
   host:
     - python
     - pip
@@ -66,16 +92,22 @@ requirements:
     - libcblas
     - liblapack
     - libgomp
-    - cuda-version ==${{ cuda_compiler_version }}
-    - cuda-cudart-dev
-    - libcublas-dev
-    - libcusolver-dev
-    - libcusparse-dev
-    - libnvjitlink-dev
     - pytorch
     - pytorch * [build=${{ torch_proc_type }}*]
     - libtorch
     - libtorch * [build=${{ torch_proc_type }}*]
+    - if: cuda_compiler_version != "None"
+      then:
+        - cuda-version ==${{ cuda_compiler_version }}
+        - cuda-driver-dev
+        - cuda-cudart-dev
+        - cuda-nvrtc-dev
+        - cuda-nvtx-dev
+        - cuda-nvml-dev
+        - libcublas-dev
+        - libcusolver-dev
+        - libcusparse-dev
+        - libnvjitlink-dev
   run:
     - python
     - numpy >=2
@@ -83,7 +115,9 @@ requirements:
     # CPU package must be present so cuda_*.so land beside kernelforge/.
     - kernelforge ==${{ version }}
     - pytorch * [build=${{ torch_proc_type }}*]
-    - ${{ pin_compatible('cuda-version', max_pin='x', min_pin='x') }}
+    - if: cuda_compiler_version != "None"
+      then:
+        - ${{ pin_compatible('cuda-version', lower_bound='x', upper_bound='x') }}
 
 tests:
   - script:
