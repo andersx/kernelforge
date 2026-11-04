@@ -468,6 +468,55 @@ if(KF_WITH_CUDA)
 
       list(APPEND _KF_ALL_MODULES cuda_fchl18_kernel)
 
+      # ---- cuda_fchl18_direct (coords-only FP32 rect, no cutoff) ----
+      pybind11_add_module(cuda_fchl18_direct MODULE
+        src/cuda_fchl18_direct.cu
+        src/cuda_fchl18_direct_bindings.cpp)
+
+      target_include_directories(cuda_fchl18_direct BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
+
+      target_link_libraries(cuda_fchl18_direct PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}")
+
+      set_property(TARGET cuda_fchl18_direct PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_fchl18_direct PROPERTY CXX_STANDARD 20)
+      set_property(TARGET cuda_fchl18_direct PROPERTY POSITION_INDEPENDENT_CODE ON)
+      set_property(TARGET cuda_fchl18_direct PROPERTY CUDA_ARCHITECTURES OFF)
+
+      target_compile_options(cuda_fchl18_direct PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_fchl18_direct)
+
+      # ---- cuda_fchl18_direct_hess (coords-only FP32 Hessian, no cutoff) ----
+      pybind11_add_module(cuda_fchl18_direct_hess MODULE
+        src/cuda_fchl18_direct_hess.cu
+        src/cuda_fchl18_direct_hess_bindings.cpp)
+
+      target_include_directories(cuda_fchl18_direct_hess BEFORE PRIVATE
+        ${TORCH_INCLUDE_DIRS}
+        src)
+
+      target_link_libraries(cuda_fchl18_direct_hess PRIVATE
+        "${TORCH_LIBRARIES}"
+        "${_LIBTORCH_PYTHON}"
+        CUDA::cublas)
+
+      set_property(TARGET cuda_fchl18_direct_hess PROPERTY CUDA_STANDARD 20)
+      set_property(TARGET cuda_fchl18_direct_hess PROPERTY CXX_STANDARD 20)
+      set_property(TARGET cuda_fchl18_direct_hess PROPERTY POSITION_INDEPENDENT_CODE ON)
+      set_property(TARGET cuda_fchl18_direct_hess PROPERTY CUDA_ARCHITECTURES OFF)
+
+      target_compile_options(cuda_fchl18_direct_hess PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3 --use_fast_math>
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>)
+
+      list(APPEND _KF_ALL_MODULES cuda_fchl18_direct_hess)
+
       # ---- cuda_fchl18_repr ----
       pybind11_add_module(cuda_fchl18_repr MODULE
         src/cuda_fchl18_repr.cu
